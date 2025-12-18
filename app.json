@@ -1,0 +1,50 @@
+{
+  "expo": {
+    "name": "DYX-GCS-Mobile",
+    "slug": "dyx-gcs-mobile",
+    "version": "1.0.0",
+    "orientation": "landscape",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "dark",
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#0A1628"
+    },
+    "platforms": [
+      "ios",
+      "android",
+      "web"
+    ],
+    "android": {
+      "orientation": "landscape",
+      "package": "com.dyxgcs.mobile",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#0A1628"
+      },
+      "statusBar": {
+        "barStyle": "light-content",
+        "backgroundColor": "#0A1628",
+        "translucent": false,
+        "hidden": false
+      },
+      "navigationBar": {
+        "visible": "leanback",
+        "barStyle": "dark-content",
+        "backgroundColor": "#0A1628"
+      }
+    },
+    "ios": {
+      "orientation": "landscape"
+    },
+    "web": {
+      "orientation": "landscape"
+    },
+    "extra": {
+      "eas": {
+        "projectId": "5e4ca5bf-e5a2-402e-ae22-e7e102b59c66"
+      }
+    }
+  }
+}

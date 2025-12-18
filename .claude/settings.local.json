@@ -1,0 +1,30 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npx tsc:*)",
+      "Bash(npm install:*)",
+      "Bash(npm uninstall:*)",
+      "Bash(npm start)",
+      "Bash(npm audit:*)",
+      "Bash(adb devices:*)",
+      "Bash(npx expo run:android:*)",
+      "Bash(./gradlew assembleDebug:*)",
+      "Bash(java:*)",
+      "Bash(where:*)",
+      "Bash(dir:*)",
+      "Bash(echo:*)",
+      "Bash(curl:*)",
+      "Bash(eas build:*)",
+      "Bash(adb kill-server:*)",
+      "Bash(adb start-server:*)",
+      "Bash(npx expo start)",
+      "Bash(cat:*)",
+      "Bash(node:*)",
+      "Bash(powershell:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
