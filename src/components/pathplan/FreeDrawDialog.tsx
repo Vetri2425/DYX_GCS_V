@@ -172,7 +172,7 @@ export const FreeDrawDialog: React.FC<FreeDrawDialogProps> = ({
             </View>
 
             <View style={styles.section}>
-              <Text style={styles.label}>Waypoint Spacing: {waypointSpacing}m</Text>
+              <Text style={styles.label}>Mark Point Spacing: {waypointSpacing}m</Text>
               <View style={styles.dimensionRow}>
                 <TouchableOpacity
                   style={styles.dimBtn}
@@ -205,7 +205,7 @@ export const FreeDrawDialog: React.FC<FreeDrawDialogProps> = ({
                 <View style={styles.previewGrid}>
                   <Text style={styles.previewDim}>{drawingWidth}m × {drawingHeight}m</Text>
                   <Text style={styles.previewInfo}>
-                    ~{Math.ceil((drawingWidth / waypointSpacing) * (drawingHeight / waypointSpacing))} max waypoints
+                    ~{Math.ceil((drawingWidth / waypointSpacing) * (drawingHeight / waypointSpacing))} max points
                   </Text>
                 </View>
               </View>

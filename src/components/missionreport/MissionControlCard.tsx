@@ -184,14 +184,14 @@ const MissionControlCard: React.FC<MissionControlCardProps> = ({
       setIsNexting(true);
       const response = onNext ? await onNext() : await services.nextMission();
       if (response && response.success) {
-        showLocalToast('success', 'Moved to next waypoint');
+        showLocalToast('success', 'Moved to next marking point');
       } else {
-        showLocalToast('error', response?.message || 'Failed to move to next waypoint');
+        showLocalToast('error', response?.message || 'Failed to move to next marking point');
       }
       return response;
     } catch (error) {
       console.error('[MissionControlCard] Next Error:', error);
-      showLocalToast('error', 'Failed to move to next waypoint');
+      showLocalToast('error', 'Failed to move to next marking point');
       return { success: false, message: String(error) };
     } finally {
       setIsNexting(false);
@@ -203,14 +203,14 @@ const MissionControlCard: React.FC<MissionControlCardProps> = ({
     try {
       const response = onSkip ? await onSkip() : await services.skipMission();
       if (response && response.success) {
-        showLocalToast('success', 'Skipped waypoint');
+        showLocalToast('success', 'Skipped marking point');
       } else {
-        showLocalToast('error', response?.message || 'Failed to skip waypoint');
+        showLocalToast('error', response?.message || 'Failed to skip marking point');
       }
       return response;
     } catch (error) {
       console.error('[MissionControlCard] Skip waypoint failed:', error);
-      showLocalToast('error', 'Failed to skip waypoint');
+      showLocalToast('error', 'Failed to skip marking point');
       return { success: false, message: String(error) };
     } finally {
       setIsSkipping(false);
@@ -276,8 +276,10 @@ const MissionControlCard: React.FC<MissionControlCardProps> = ({
             style={[
               styles.controlButton,
               isPaused ? styles.resumeButton : styles.pauseButton,
+              (!isRunning || isPausing || isResuming) && styles.buttonDisabled,
             ]}
             onPress={isPaused ? handleResume : handlePause}
+            disabled={!isRunning || isPausing || isResuming}
           >
             <Text style={styles.buttonText}>
               {isPaused ? 'RESUME' : 'PAUSE'}
@@ -285,16 +287,25 @@ const MissionControlCard: React.FC<MissionControlCardProps> = ({
           </TouchableOpacity>
 
           <TouchableOpacity
-            style={[styles.controlButton, styles.nextButton]}
+            style={[
+              styles.controlButton,
+              styles.nextButton,
+              (!isRunning || isNexting) && styles.buttonDisabled,
+            ]}
             onPress={handleNext}
+            disabled={!isRunning || isNexting}
           >
             <Text style={styles.buttonText}>NEXT MARK</Text>
           </TouchableOpacity>
 
           <TouchableOpacity
-            style={[styles.controlButton, styles.skipButton]}
+            style={[
+              styles.controlButton,
+              styles.skipButton,
+              (!isRunning || isSkipping) && styles.buttonDisabled,
+            ]}
             onPress={handleSkip}
-            disabled={isSkipping}
+            disabled={!isRunning || isSkipping}
           >
             <Text style={styles.buttonText}>
               {isSkipping ? '⏳ Skipping...' : 'SKIP MARK'}
@@ -479,6 +490,9 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '700',
     letterSpacing: 0.5,
+  },
+  buttonDisabled: {
+    opacity: 0.5,
   },
   modeToggle: {
     flexDirection: 'row',

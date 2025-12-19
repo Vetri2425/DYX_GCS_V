@@ -61,7 +61,7 @@ export const CircleGeneratorDialog: React.FC<CircleGeneratorDialogProps> = ({
     const radiusM = parseFloat(radius);
 
     if (numPoints < 3) {
-      Alert.alert('Invalid Input', 'At least 3 waypoints required');
+      Alert.alert('Invalid Input', 'At least 3 marking points required');
       return;
     }
     if (radiusM <= 0) {

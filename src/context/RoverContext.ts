@@ -48,7 +48,7 @@ interface RoverProviderProps {
 export function RoverProvider({ children }: RoverProviderProps): React.ReactElement {
   const rover = useRoverTelemetry();
   const [missionWaypoints, setMissionWaypointsState] = useState<Waypoint[]>([]);
-  const [missionMode, setMissionModeState] = useState<string>('WP Mark');
+  const [missionMode, setMissionModeState] = useState<string>('DGPS Mark');
   const [ttsLanguage, setTTSLanguageState] = useState<string>('en');
 
   // Load TTS language from AsyncStorage on mount

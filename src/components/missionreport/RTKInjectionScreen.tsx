@@ -90,7 +90,7 @@ export const RTKInjectionScreen: React.FC<Props> = ({ visible, onClose, services
     };
 
     checkStatus();
-  }, [services, startMonitor, stopMonitor, visible]);
+  }, [services, startMonitor, stopMonitor, visible, rtkSource]);
 
   useEffect(() => {
     if (!visible) return;
@@ -104,6 +104,26 @@ export const RTKInjectionScreen: React.FC<Props> = ({ visible, onClose, services
       setLoraRunning(running);
     });
 
+    // Get initial LoRa status when component becomes visible
+    const initializeLoraStatus = async () => {
+      try {
+        const status = await services.getRTKStatus();
+        if (status.success && status.lora.running) {
+          setLoraRunning(true);
+          setLoraConnected(Boolean(status.lora.status?.is_connected));
+          if (status.lora.status) {
+            setLoraStatus((prev) => ({ ...prev, ...status.lora.status }));
+          }
+        } else {
+          setLoraRunning(false);
+          setLoraConnected(false);
+        }
+      } catch (err) {
+        console.error('[RTKInjection] Failed to get initial LoRa status:', err);
+      }
+    };
+
+    initializeLoraStatus();
     services.getLoraRTKStatus?.();
 
     return unsubscribe;

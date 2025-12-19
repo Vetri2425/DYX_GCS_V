@@ -7,6 +7,7 @@ import MissionReportExport from './MissionReportExport';
 interface Props {
   waypoints: Waypoint[];
   onExport: () => void;
+  onExportComplete?: () => void;
   statusMap: Record<number, {
     reached?: boolean;
     marked?: boolean;
@@ -22,7 +23,7 @@ interface Props {
   onReorder?: (fromIndex: number, direction: 'up' | 'down') => void; // reorder handler
 }
 
-export const WaypointsTable: React.FC<Props> = ({ waypoints, onExport, statusMap, missionMode, currentIndex, pinnedCount = 4, onReorder }) => {
+export const WaypointsTable: React.FC<Props> = ({ waypoints, onExport, onExportComplete, statusMap, missionMode, currentIndex, pinnedCount = 4, onReorder }) => {
   // Format ISO timestamp to readable time string
   const formatTimestamp = (timestamp?: string): string => {
     if (!timestamp) return '—';
@@ -69,12 +70,13 @@ export const WaypointsTable: React.FC<Props> = ({ waypoints, onExport, statusMap
       <View style={styles.cardPadding}>
         {/* Header Row */}
         <View style={styles.headerRow}>
-        <Text style={styles.title}>MISSION WAYPOINTS</Text>
+        <Text style={styles.title}>MISSION MARKING POINTS</Text>
         <MissionReportExport
           waypoints={waypoints}
           statusMap={statusMap}
           missionMode={missionMode}
           onExport={onExport}
+          onExportComplete={onExportComplete}
         />
       </View>
 
@@ -99,7 +101,7 @@ export const WaypointsTable: React.FC<Props> = ({ waypoints, onExport, statusMap
           {waypoints.map((wp, index) => {
             const { statusDisplay, statusColor, wpStatus } = getWaypointStatus(wp, index);
             // Fix: Compare waypoint sn with current waypoint number (currentIndex + 1 since currentIndex is 0-based)
-            const currentWaypointNumber = currentIndex !== null ? currentIndex + 1 : null;
+            const currentWaypointNumber = currentIndex !== null && currentIndex !== undefined ? currentIndex + 1 : null;
             const isCurrentWaypoint = currentWaypointNumber !== null && wp.sn === currentWaypointNumber;
             
             return (

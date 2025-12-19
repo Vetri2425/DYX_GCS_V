@@ -1,6 +1,5 @@
 import React from 'react';
 import { View, Text, StyleSheet } from 'react-native';
-import { MaterialIcons } from '@expo/vector-icons';
 import { colors } from '../../theme/colors';
 import { Waypoint } from './types';
 
@@ -142,7 +141,7 @@ export const MissionProgressCard: React.FC<Props> = ({
   };
 
   const distance = calculateDistance(currentWp, nextWp);
-  const distanceText = distance > 0 ? `${distance.toFixed(1)}m` : '—';
+  const distanceText = distance > 0 ? `${(distance * 100).toFixed(1)}cm` : '—';
 
   return (
     <View style={styles.card}>
@@ -160,55 +159,23 @@ export const MissionProgressCard: React.FC<Props> = ({
         <Text style={styles.distanceValue}>{distanceText}</Text>
       </View>
 
-      {/* Counters Row */}
+      {/* Counters Row - Numbers Only */}
       <View style={styles.counterRow}>
-        {isMissionCompleted ? (
-          // Show completion status when mission is completed
-          <React.Fragment key="completed">
-            <View style={[styles.counter, styles.markedCounter]}>
-              <Text style={styles.counterLabel}>Marked</Text>
-              <Text style={[styles.counterValue, { color: '#C084FC' }]}>{markedCount}</Text>
-            </View>
+        <View style={[styles.counter, styles.markedCounter]}>
+          <Text style={[styles.counterValue, { color: '#C084FC' }]}>{markedCount}</Text>
+        </View>
 
-            <View style={[styles.counter, styles.currentCounter]}>
-              <Text style={styles.counterLabel}>Current</Text>
-              <View style={styles.completedStatus}>
-                <MaterialIcons name="check-circle" size={16} color="#10B981" />
-                <Text style={[styles.counterValue, { color: '#10B981', fontSize: 16 }]}>0</Text>
-              </View>
-            </View>
+        <View style={[styles.counter, styles.currentCounter]}>
+          <Text style={[styles.counterValue, { color: '#67E8F9' }]}>
+            {currentWp ? currentWp.sn : '0'}
+          </Text>
+        </View>
 
-            <View style={[styles.counter, styles.nextCounter]}>
-              <Text style={styles.counterLabel}>Next</Text>
-              <View style={styles.completedStatus}>
-                <MaterialIcons name="check-circle" size={16} color="#10B981" />
-                <Text style={[styles.counterValue, { color: '#10B981', fontSize: 16 }]}>0</Text>
-              </View>
-            </View>
-          </React.Fragment>
-        ) : (
-          // Show normal progress counters during active mission
-          <React.Fragment key="active">
-            <View style={[styles.counter, styles.markedCounter]}>
-              <Text style={styles.counterLabel}>Marked</Text>
-              <Text style={[styles.counterValue, { color: '#C084FC' }]}>{markedCount}</Text>
-            </View>
-
-            <View style={[styles.counter, styles.currentCounter]}>
-              <Text style={styles.counterLabel}>Current</Text>
-              <Text style={[styles.counterValue, { color: '#67E8F9' }]}>
-                {currentWp ? currentWp.sn : '—'}
-              </Text>
-            </View>
-
-            <View style={[styles.counter, styles.nextCounter]}>
-              <Text style={styles.counterLabel}>Next</Text>
-              <Text style={[styles.counterValue, { color: '#6EE7B7' }]}>
-                {nextWp ? nextWp.sn : '—'}
-              </Text>
-            </View>
-          </React.Fragment>
-        )}
+        <View style={[styles.counter, styles.nextCounter]}>
+          <Text style={[styles.counterValue, { color: '#6EE7B7' }]}>
+            {nextWp ? nextWp.sn : '0'}
+          </Text>
+        </View>
       </View>
     </View>
   );
@@ -300,21 +267,6 @@ const styles = StyleSheet.create({
   counterValue: {
     fontSize: 16,
     fontWeight: 'bold',
-  },
-  completedCounter: {
-    backgroundColor: 'rgba(16, 185, 129, 0.15)',
-    borderWidth: 1,
-    borderColor: 'rgba(16, 185, 129, 0.4)',
-  },
-  skippedCounter: {
-    backgroundColor: 'rgba(245, 158, 11, 0.15)',
-    borderWidth: 1,
-    borderColor: 'rgba(245, 158, 11, 0.4)',
-  },
-  statusCounter: {
-    backgroundColor: 'rgba(16, 185, 129, 0.15)',
-    borderWidth: 1,
-    borderColor: 'rgba(16, 185, 129, 0.4)',
   },
   completedStatus: {
     flexDirection: 'row',

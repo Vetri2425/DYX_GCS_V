@@ -238,7 +238,7 @@ export const SurveyGridDialog: React.FC<SurveyGridDialogProps> = ({
                   <Text style={styles.statValue}>{numLanes}</Text>
                 </View>
                 <View style={styles.statRow}>
-                  <Text style={styles.statLabel}>Waypoints:</Text>
+                  <Text style={styles.statLabel}>Marking points:</Text>
                   <Text style={styles.statValue}>{numWaypoints}</Text>
                 </View>
                 <View style={styles.statRow}>

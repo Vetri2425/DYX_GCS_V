@@ -8,6 +8,7 @@
 
 // Try to read from environment first, fallback to defaults
 // Jetson backend defaults (override via env for other targets)
+// IMPORTANT: Replace with your actual backend server IP address
 const BACKEND_FROM_ENV = process.env.REACT_APP_ROS_HTTP_BASE || 'http://192.168.1.102:5001';
 const WS_FROM_ENV = process.env.REACT_APP_ROS_WS_URL || 'ws://192.168.1.102:5001/socket.io';
 

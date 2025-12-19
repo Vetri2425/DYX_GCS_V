@@ -320,7 +320,7 @@ export default function PathPlanScreen() {
 
     // Check if waypoint is already in the connection list
     if (manualPathConnections.includes(id)) {
-      Alert.alert('Already Connected', `Waypoint #${id} is already in your path.`);
+      Alert.alert('Already Connected', `Marking point #${id} is already in your path.`);
       return;
     }
 
@@ -371,7 +371,7 @@ export default function PathPlanScreen() {
 
   const handleAddWaypoints = (coords: { latitude: number; longitude: number }[]) => {
     if (coords.length === 0) {
-      Alert.alert('No Waypoints', 'No coordinates to add.');
+      Alert.alert('No Marking Points', 'No coordinates to add.');
       return;
     }
 
@@ -403,7 +403,7 @@ export default function PathPlanScreen() {
     updateWaypoints([...waypoints, ...newWaypoints]);
     setActiveDrawingTool(null); // Clear active tool after adding waypoints
     
-    Alert.alert('Waypoints Added', `✓ ${newWaypoints.length} waypoints added to mission`);
+    Alert.alert('Marking Points Added', `✓ ${newWaypoints.length} marking points added to mission`);
   };
 
   const handleTextAnnotation = (text: string, alignment: 'left' | 'center' | 'right', letterWidth: number, letterHeight: number, letterSpacing: number) => {
@@ -421,7 +421,7 @@ export default function PathPlanScreen() {
     });
 
     if (textCoords.length === 0) {
-      Alert.alert('No Waypoints', 'Unable to generate waypoints for the given text.');
+      Alert.alert('No Marking Points', 'Unable to generate marking points for the given text.');
       return;
     }
 
@@ -462,7 +462,7 @@ export default function PathPlanScreen() {
     }
     
     updateWaypoints([...waypoints, ...newWaypoints]);
-    Alert.alert('Text Path Created', `${newWaypoints.length} waypoints generated for "${text}"`);
+    Alert.alert('Text Path Created', `${newWaypoints.length} marking points generated for "${text}"`);
   };
 
   // Handle freehand drawing completion from DrawingCanvas
@@ -520,9 +520,9 @@ export default function PathPlanScreen() {
     if (newWaypoints.length > 0) {
       if (DEBUG_LOG) console.log('[PathPlan] Adding', newWaypoints.length, 'waypoints from drawing');
       updateWaypoints([...waypoints, ...newWaypoints]);
-      Alert.alert('Drawing Complete', `✓ ${newWaypoints.length} waypoints created from your drawing`);
+      Alert.alert('Drawing Complete', `✓ ${newWaypoints.length} marking points created from your drawing`);
     } else {
-      Alert.alert('No Waypoints', 'Drawing did not generate any waypoints. Try drawing a longer path.');
+      Alert.alert('No Marking Points', 'Drawing did not generate any marking points. Try drawing a longer path.');
     }
     
     setIsDrawingMode(false);
@@ -535,7 +535,7 @@ export default function PathPlanScreen() {
     setActiveDrawingTool('draw');
     Alert.alert(
       'Drawing Mode Active',
-      `Draw area: ${settings.drawingWidth}m × ${settings.drawingHeight}m\nWaypoint spacing: ${settings.waypointSpacing}m\n\nTouch and drag on the map to draw. Double-tap to finish.`
+      `Draw area: ${settings.drawingWidth}m × ${settings.drawingHeight}m\nMarking point spacing: ${settings.waypointSpacing}m\n\nTouch and drag on the map to draw. Double-tap to finish.`
     );
   };
 
@@ -1011,7 +1011,7 @@ export default function PathPlanScreen() {
       if (wps.length === 0) {
         Alert.alert(
           'No Mission',
-          'No waypoints available on controller.\n\nPlease upload a mission first or create waypoints manually.',
+          'No marking points available on controller.\n\nPlease upload a mission first or create marking points manually.',
           [{ text: 'OK' }]
         );
         return;
@@ -1070,7 +1070,7 @@ export default function PathPlanScreen() {
       const warningMsg = errors.length > 0 ? `\n\nWarning: ${errors.length} waypoints had errors and were skipped.` : '';
       Alert.alert(
         'Mission Loaded',
-        `Successfully loaded ${withDistances.length} waypoints from controller.${warningMsg}`,
+        `Successfully loaded ${withDistances.length} marking points from controller.${warningMsg}`,
         [{ text: 'OK' }]
       );
 
@@ -1107,8 +1107,8 @@ export default function PathPlanScreen() {
     try {
       if (waypoints.length === 0) {
         Alert.alert(
-          'No Waypoints',
-          'No waypoints to load to controller.\n\nPlease add waypoints first by clicking on the map, importing a file, or using drawing tools.',
+          'No Marking Points',
+          'No marking points to load to controller.\n\nPlease add marking points first by clicking on the map, importing a file, or using drawing tools.',
           [{ text: 'OK' }]
         );
         return;
@@ -1126,8 +1126,8 @@ export default function PathPlanScreen() {
 
       if (invalidWaypoints.length > 0) {
         Alert.alert(
-          'Invalid Waypoints',
-          `The following waypoints have invalid coordinates: ${invalidWaypoints.join(', ')}\n\nPlease fix or remove them before uploading.`,
+          'Invalid Marking Points',
+          `The following marking points have invalid coordinates: ${invalidWaypoints.join(', ')}\n\nPlease fix or remove them before uploading.`,
           [{ text: 'OK' }]
         );
         return;
@@ -1184,7 +1184,7 @@ export default function PathPlanScreen() {
 
         Alert.alert(
           'Upload Successful',
-          `Mission loaded successfully!\n\n${waypoints.length} waypoints sent to controller.`,
+          `Mission loaded successfully!\n\n${waypoints.length} marking points sent to controller.`,
           [{ text: 'OK' }]
         );
       } else {
@@ -1338,7 +1338,7 @@ export default function PathPlanScreen() {
       if (DEBUG_LOG) console.log('[PathPlan] Parsed waypoints:', parsed.length, parsed.slice(0, 3));
 
       if (!parsed || parsed.length === 0) {
-        Alert.alert('Import Failed', 'No valid waypoints were found in the file.');
+        Alert.alert('Import Failed', 'No valid marking points were found in the file.');
         return;
       }
 
@@ -1525,7 +1525,7 @@ export default function PathPlanScreen() {
                 // Update waypoints to ONLY show connected ones with recalculated distances
                 updateWaypoints(waypointsWithDistances);
                 setIsConnectingPath(false);
-                Alert.alert('✓ Path Created', `Path created with ${connectedIds.length} waypoints. Unconnected waypoints removed.`);
+                Alert.alert('✓ Path Created', `Path created with ${connectedIds.length} marking points. Unconnected marking points removed.`);
               }}
               onCancel={() => {
                 setIsConnectingPath(false);
@@ -1578,7 +1578,7 @@ export default function PathPlanScreen() {
 
                               const finalWaypoints = [...reorderedWaypoints, ...unconnectedWaypoints];
                               updateWaypoints(finalWaypoints);
-                              Alert.alert('✓ Path Saved', `Connected ${manualPathConnections.length} waypoints in custom order.`);
+                              Alert.alert('✓ Path Saved', `Connected ${manualPathConnections.length} marking points in custom order.`);
                             }
                           }}
                         ]
@@ -1602,7 +1602,7 @@ export default function PathPlanScreen() {
                       onPress={() => {
                         const lastId = manualPathConnections[manualPathConnections.length - 1];
                         setManualPathConnections(prev => prev.slice(0, -1));
-                        Alert.alert('Undo', `Removed waypoint #${lastId} from path.`);
+                        Alert.alert('Undo', `Removed marking point #${lastId} from path.`);
                       }}
                       style={{ paddingVertical: 4, paddingHorizontal: 10, backgroundColor: colors.blueBtn, borderRadius: 6 }}>
                       <Text style={{ color: colors.text, fontSize: 10, fontWeight: '700' }}>↶ Undo</Text>
@@ -1658,7 +1658,7 @@ export default function PathPlanScreen() {
                   <TouchableOpacity
                     onPress={() => {
                       if (manualPathConnections.length < 2) {
-                        Alert.alert('Not Enough Waypoints', 'Connect at least 2 waypoints to create a path.');
+                        Alert.alert('Not Enough Marking Points', 'Connect at least 2 marking points to create a path.');
                         return;
                       }
 
@@ -1674,7 +1674,7 @@ export default function PathPlanScreen() {
                       const finalWaypoints = [...reorderedWaypoints, ...unconnectedWaypoints];
                       updateWaypoints(finalWaypoints);
                       setIsConnectingPath(false);
-                      Alert.alert('✓ Path Created', `Successfully connected ${manualPathConnections.length} waypoints in custom order.`);
+                      Alert.alert('✓ Path Created', `Successfully connected ${manualPathConnections.length} marking points in custom order.`);
                     }}
                     disabled={manualPathConnections.length < 2}
                     style={{
@@ -1723,7 +1723,7 @@ export default function PathPlanScreen() {
         <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.6)', justifyContent: 'center', alignItems: 'center', padding: 16 }}>
           <View style={{ width: '100%', maxWidth: 900, backgroundColor: colors.panelBg, borderRadius: 12, padding: 16, borderWidth: 1, borderColor: colors.border, maxHeight: '90%' }}>
             <Text style={{ fontSize: 18, fontWeight: '700', color: colors.text, marginBottom: 8 }}>Import Preview</Text>
-            <Text style={{ color: colors.textSecondary, marginBottom: 12 }}>{uploadPreviewName} — {uploadPreviewWaypoints ? uploadPreviewWaypoints.length : 0} waypoints</Text>
+            <Text style={{ color: colors.textSecondary, marginBottom: 12 }}>{uploadPreviewName} — {uploadPreviewWaypoints ? uploadPreviewWaypoints.length : 0} marking points</Text>
 
             {/* Path Assignment Mode Selection */}
             <View style={{ marginBottom: 16, padding: 12, backgroundColor: colors.cardBg, borderRadius: 8, borderWidth: 1, borderColor: colors.border }}>
@@ -1805,7 +1805,7 @@ export default function PathPlanScreen() {
             )}
 
             {/* Waypoints Table */}
-            <Text style={{ color: colors.accent, fontSize: 12, fontWeight: '600', marginBottom: 6 }}>Waypoint Details:</Text>
+            <Text style={{ color: colors.accent, fontSize: 12, fontWeight: '600', marginBottom: 6 }}>Marking Point Details:</Text>
             <ScrollView style={{ maxHeight: 280, borderWidth: 1, borderColor: colors.border, borderRadius: 8, padding: 8, backgroundColor: colors.cardBg }}>
               <View style={{ flexDirection: 'row', paddingVertical: 6, borderBottomWidth: 1, borderBottomColor: colors.border }}>
                 <Text style={{ flex: 0.4, color: '#67E8F9', fontWeight: '700', fontSize: 11 }}>#</Text>
@@ -1865,7 +1865,7 @@ export default function PathPlanScreen() {
                           const sanitized = sanitizeWaypointsForUpload(uploadPreviewWaypoints);
                           if (DEBUG_LOG) console.log('[PathPlan] Applying imported waypoints (Proceed with warnings):', sanitized.length, sanitized.slice(0, 3));
                           updateWaypoints(sanitized);
-                          Alert.alert('✓ Import Complete', `Successfully imported ${sanitized.length} waypoints.`);
+                          Alert.alert('✓ Import Complete', `Successfully imported ${sanitized.length} marking points.`);
                           setShowUploadPreview(false);
                         }}
                       ]
@@ -1881,7 +1881,7 @@ export default function PathPlanScreen() {
                       setIsConnectingPath(true);
                       Alert.alert(
                         '✏️ Manual Path Mode',
-                        `${sanitized.length} waypoints imported. Click waypoints in order to create your custom path. Tap a waypoint to start, then tap others to connect them.`,
+                        `${sanitized.length} marking points imported. Click marking points in order to create your custom path. Tap a marking point to start, then tap others to connect them.`,
                         [{ text: 'Start Connecting' }]
                       );
                       setShowUploadPreview(false);
@@ -1890,7 +1890,7 @@ export default function PathPlanScreen() {
                       const sanitized = sanitizeWaypointsForUpload(uploadPreviewWaypoints);
                       if (DEBUG_LOG) console.log('[PathPlan] Applying imported waypoints (Proceed clean):', sanitized.length, sanitized.slice(0, 3));
                       updateWaypoints(sanitized);
-                      Alert.alert('✓ Import Complete', `Successfully imported ${sanitized.length} waypoints.`);
+                      Alert.alert('✓ Import Complete', `Successfully imported ${sanitized.length} marking points.`);
                       setShowUploadPreview(false);
                     }
                   }

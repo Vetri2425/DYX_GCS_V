@@ -13,6 +13,7 @@ import { useRover } from '../context/RoverContext';
 import { AutoAssignDialog } from '../components/missionreport/AutoAssignDialog';
 import { WaypointPreviewDialog } from '../components/missionreport/WaypointPreviewDialog';
 import { MissionCompletionDialog } from '../components/missionreport/MissionCompletionDialog';
+import { LogClearDialog } from '../components/missionreport/LogClearDialog';
 import { MissionStartConfirmationDialog } from '../components/missionreport/MissionStartConfirmationDialog';
 import { useScreenReadiness } from '../hooks/useComponentReadiness';
 import PersistentStorage from '../services/PersistentStorage';
@@ -89,6 +90,7 @@ export default function MissionReportScreen() {
   
   // Mission completion dialog state
   const [showCompletionDialog, setShowCompletionDialog] = useState(false);
+  const [showClearLogsDialog, setShowClearLogsDialog] = useState(false); // Post-export clear logs dialog
   const [missionStartTime, setMissionStartTime] = useState<Date | null>(null);
   const [missionEndTime, setMissionEndTime] = useState<Date | null>(null);
   const [isMissionActive, setIsMissionActive] = useState(false); // Track if mission is currently running
@@ -116,7 +118,14 @@ export default function MissionReportScreen() {
 
   // Ref to track notification timeout for cleanup
   const notificationTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  
+
+  // Use waypoints from shared context for persistence across screens
+  const waypoints = missionWaypoints;
+  const PINNED_COUNT = 4;
+
+  // Check if showing previous mission data
+  const isShowingPreviousMission = previousMissionData && !isMissionActive && Object.keys(statusMap).length === 0;
+
   // Refs to store latest values for mission event handler (prevents stale closures)
   const waypointsRef = useRef(waypoints);
   const statusMapRef = useRef(statusMap);
@@ -124,7 +133,7 @@ export default function MissionReportScreen() {
   const missionEndTimeRef = useRef(missionEndTime);
   const isMissionActiveRef = useRef(isMissionActive);
   const missionModeRef = useRef(missionMode);
-  
+
   // Keep refs in sync with state
   useEffect(() => {
     waypointsRef.current = waypoints;
@@ -247,10 +256,6 @@ export default function MissionReportScreen() {
     }
   };
 
-  // Use waypoints from shared context for persistence across screens
-  const waypoints = missionWaypoints;
-  const PINNED_COUNT = 4;
-
   // Debug waypoints setup
   React.useEffect(() => {
     missionLog('[MissionReportScreen] Waypoints updated:', {
@@ -269,6 +274,69 @@ export default function MissionReportScreen() {
       target_waypoint: currentWaypointNumber ? waypoints.find(wp => wp.sn === currentWaypointNumber) : null
     });
   }, [currentIndex, waypoints]);
+
+  // LIVE UPDATE FIX: Fetch fresh statusMap when component mounts or focus returns (handles tab switching)
+  // This ensures table shows live data instead of stale/memorized data
+  useEffect(() => {
+    console.log('[MissionReportScreen] 🔄 Component mounted/focused - verifying live data');
+    // StatusMap is updated via real-time socket events
+    // No explicit fetch needed - socket listener will update it
+    // This useEffect serves as a lifecycle marker for debugging
+  }, []);
+
+  // STALE STATUS CLEANUP: Clear old waypoint statuses that are no longer current
+  // When rover moves from point 5 to point 9, clear marks from points that won't be revisited
+  useEffect(() => {
+    if (!isMissionActive || waypoints.length === 0 || currentIndex === null) return;
+
+    // Only clean up old statuses during active missions
+    const currentWaypointSn = currentIndex + 1; // Convert 0-based index to 1-based SN
+    
+    // Create a new statusMap keeping only:
+    // 1. Current waypoint + next waypoint
+    // 2. All waypoints that were already marked as completed/skipped (don't remove mission history)
+    const newStatusMap = { ...statusMap };
+    let hasChanges = false;
+
+    Object.keys(statusMap).forEach(snStr => {
+      const sn = parseInt(snStr, 10);
+      const status = statusMap[sn];
+      
+      // Keep statuses that are completed or skipped (mission history)
+      if (status?.status === 'completed' || status?.status === 'skipped') {
+        return; // Keep this entry
+      }
+      
+      // For waypoints with reached/loading/pending/marked status:
+      // Only keep if they're current or next waypoint
+      if (sn !== currentWaypointSn && sn !== currentWaypointSn + 1) {
+        // This is an old reached/marked status that's no longer relevant
+        // Remove it to keep table clean during mission progress
+        if (status?.status === 'reached' || status?.status === 'marked') {
+          delete newStatusMap[sn];
+          hasChanges = true;
+          console.log(`[MissionReportScreen] 🗑️ Cleaned up stale "${status.status}" status for waypoint ${sn}`);
+        }
+      }
+    });
+
+    // Update statusMap only if we removed old statuses
+    if (hasChanges) {
+      setStatusMap(newStatusMap);
+    }
+  }, [currentIndex, isMissionActive, waypoints, statusMap]);
+
+  // IDLE STATE RESET: When mission ends, reset statusMap to show pending instead of keeping completed
+  // This ensures idle state shows clean "pending" or "-" status instead of old "completed/reached"
+  useEffect(() => {
+    if (isMissionActive) return; // Only reset when NOT active
+
+    // If statusMap has entries but mission is idle, it means mission just ended
+    if (Object.keys(statusMap).length > 0 && !isShowingPreviousMission) {
+      console.log('[MissionReportScreen] 🔄 Mission ended - resetting statusMap to pending state');
+      setStatusMap({});
+    }
+  }, [isMissionActive, isShowingPreviousMission, statusMap]);
 
   const handleReorder = (fromIndex: number, direction: 'up' | 'down') => {
     // Only allow reordering of indices >= PINNED_COUNT and keep them >= PINNED_COUNT
@@ -427,7 +495,7 @@ export default function MissionReportScreen() {
         preserveCurrentMission.current();
 
         // Show completion notification
-        showNotification('success', 'Mission Completed', 'All waypoints have been processed!');
+        showNotification('success', 'Mission Completed', 'All marking points have been processed!');
 
         // Show completion dialog after a brief delay to ensure UI updates
         const completionTimer = setTimeout(() => {
@@ -639,6 +707,7 @@ export default function MissionReportScreen() {
   const clearCurrentMissionData = () => {
     console.log('[MissionReportScreen] Clearing current mission data for new mission');
     setStatusMap({});
+    setPreviousMissionData(null); // AUTO-CLEAR: Also clear previous mission logs on new mission start
     setCurrentIndex(null);
     setMissionStartTime(null);
     setMissionEndTime(null);
@@ -686,7 +755,7 @@ export default function MissionReportScreen() {
       if (!waypoints || waypoints.length === 0) {
         const msg = 'No waypoints available. Upload or add waypoints before starting.';
         console.warn('[MissionReportScreen] Start blocked -', msg);
-        showNotification('error', 'No Waypoints', msg);
+        showNotification('error', 'No Marking Points', msg);
         return { success: false, message: msg };
       }
       
@@ -698,18 +767,14 @@ export default function MissionReportScreen() {
       if (invalidWaypoints.length > 0) {
         const msg = `${invalidWaypoints.length} waypoint(s) have invalid coordinates. Please fix before starting.`;
         console.error('[MissionReportScreen]', msg);
-        showNotification('error', 'Invalid Waypoints', msg);
+        showNotification('error', 'Invalid Marking Points', msg);
         return { success: false, message: msg };
       }
 
       // Clear previous mission data to start fresh
       clearCurrentMissionData();
 
-      // Set mode to AUTO first (best-effort)
-      await services.setMode('AUTO');
-      setMode('AUTO');
-
-      // Call explicit start endpoint
+      // Call explicit start endpoint (mission will start with current mode selected by user)
       const response = await services.startMission();
 
       // Log full response for debugging when start fails
@@ -814,15 +879,15 @@ export default function MissionReportScreen() {
         // Backend will emit mission_status; optimistic increment as fallback
         setCurrentIndex(prev => (prev === null ? 0 : Math.min(prev + 1, waypoints.length - 1)));
         console.log('[MissionReportScreen] Next waypoint requested successfully');
-        showNotification('success', 'Next Waypoint', 'Moved to next waypoint successfully');
+        showNotification('success', 'Next Marking Point', 'Moved to next marking point successfully');
       } else {
         console.error('[MissionReportScreen] Next failed:', response.message);
-        showNotification('error', 'Next Failed', response.message || 'Failed to move to next waypoint');
+        showNotification('error', 'Next Failed', response.message || 'Failed to move to next marking point');
       }
       return response;
     } catch (error) {
       console.error('[MissionReportScreen] Next Error:', error);
-      showNotification('error', 'Error', 'Failed to move to next waypoint');
+      showNotification('error', 'Error', 'Failed to move to next marking point');
       return { success: false, message: String(error) };
     }
   };
@@ -834,15 +899,15 @@ export default function MissionReportScreen() {
       if (response.success) {
         setCurrentIndex(prev => (prev === null ? 0 : Math.min(prev + 1, waypoints.length - 1)));
         console.log('[MissionReportScreen] Skip requested successfully');
-        showNotification('success', 'Waypoint Skipped', 'Skipped current waypoint successfully');
+        showNotification('success', 'Marking Point Skipped', 'Skipped current marking point successfully');
       } else {
         console.error('[MissionReportScreen] Skip failed:', response.message);
-        showNotification('error', 'Skip Failed', response.message || 'Failed to skip waypoint');
+        showNotification('error', 'Skip Failed', response.message || 'Failed to skip marking point');
       }
       return response;
     } catch (error) {
       console.error('[MissionReportScreen] Skip Error:', error);
-      showNotification('error', 'Error', 'Failed to skip waypoint');
+      showNotification('error', 'Error', 'Failed to skip marking point');
       return { success: false, message: String(error) };
     }
   };
@@ -851,11 +916,48 @@ export default function MissionReportScreen() {
     console.log('[MissionReportScreen] Export report triggered');
   };
 
+  // Handle export completion - prompt user to clear logs or keep for review
+  const handleExportComplete = () => {
+    console.log('[MissionReportScreen] 📤 Export completed - showing clear logs prompt');
+    // Show dialog asking if user wants to clear mission logs
+    setShowClearLogsDialog(true);
+  };
+
+  // User confirmed to clear logs after export
+  const handleClearLogsAfterExport = async () => {
+    try {
+      console.log('[MissionReportScreen] 🗑️ User confirmed - clearing mission logs after export');
+      // Clear all mission data
+      await PersistentStorage.clearMissionData();
+      
+      // Clear local state
+      setStatusMap({});
+      setPreviousMissionData(null);
+      setCurrentIndex(null);
+      setMissionStartTime(null);
+      setMissionEndTime(null);
+      setShowClearLogsDialog(false);
+      
+      showNotification('success', 'Logs Cleared', 'Mission logs cleared successfully');
+      console.log('[MissionReportScreen] ✅ Mission logs cleared after export');
+    } catch (error) {
+      console.error('[MissionReportScreen] ❌ Failed to clear logs:', error);
+      showNotification('error', 'Clear Failed', 'Failed to clear mission logs');
+    }
+  };
+
+  // User declined to clear logs - keep for review
+  const handleKeepLogsAfterExport = () => {
+    console.log('[MissionReportScreen] 📋 User declined - keeping mission logs for review');
+    setShowClearLogsDialog(false);
+    showNotification('info', 'Logs Kept', 'Mission logs preserved for review');
+  };
+
   // Clear all mission data (user-initiated)
   const handleClearMissionData = async () => {
     Alert.alert(
       'Clear Mission Data',
-      'This will clear all waypoints, progress, and mission logs. This cannot be undone. Continue?',
+      'This will clear all marking points, progress, and mission logs. This cannot be undone. Continue?',
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -872,7 +974,7 @@ export default function MissionReportScreen() {
               setMissionStartTime(null);
               setMissionEndTime(null);
               setIsMissionActive(false);
-              setMissionMode('WP Mark');
+              setMissionMode('DGPS Mark');
               setCurrentIndex(null);
               
               showNotification('success', 'Mission Data Cleared', 'All mission data has been cleared from storage');
@@ -920,7 +1022,7 @@ export default function MissionReportScreen() {
     console.log('[MissionReportScreen] 🧪 Testing mission events with waypoints:', waypoints.length);
     
     if (waypoints.length === 0) {
-      showNotification('error', 'No Waypoints', 'Please load waypoints first to test mission events');
+      showNotification('error', 'No Marking Points', 'Please load marking points first to test mission events');
       return;
     }
 
@@ -1014,7 +1116,7 @@ export default function MissionReportScreen() {
           console.log('[MissionReportScreen] 📂 Restored mission mode:', savedMode);
         } else {
           // Ensure mode is set to default if no saved mode
-          setMissionMode('WP Mark');
+          setMissionMode('DGPS Mark');
         }
 
         // Restore UI state
@@ -1251,7 +1353,7 @@ export default function MissionReportScreen() {
         preserveCurrentMission.current();
 
         // Show completion notification
-        showNotification('success', 'Mission Completed', 'All waypoints have been processed!');
+        showNotification('success', 'Mission Completed', 'All marking points have been processed!');
 
         // Show completion dialog
         const dialogTimer = setTimeout(() => {
@@ -1434,13 +1536,10 @@ export default function MissionReportScreen() {
   }, [onMissionEvent]);
 
   // Mission mode is now managed by RoverContext and synced with Mission Ops Panel
-  // Initial mode is set to 'WP Mark' by default in context
+  // Initial mode is set to 'DGPS Mark' by default in context
 
   // Mission waypoints come from context (uploaded via PathPlan tab)
   // No need to fetch from backend as PathPlan handles upload and syncs to context
-
-  // Check if showing previous mission data
-  const isShowingPreviousMission = previousMissionData && !isMissionActive && Object.keys(statusMap).length === 0;
 
   return (
     <SafeAreaView style={styles.container}>
@@ -1530,6 +1629,7 @@ export default function MissionReportScreen() {
         <WaypointsTable
           waypoints={getDisplayMissionData().waypoints}
           onExport={handleExport}
+          onExportComplete={handleExportComplete}
           statusMap={getDisplayMissionData().statusMap}
           missionMode={getDisplayMissionData().missionMode}
           currentIndex={currentIndex}
@@ -1583,6 +1683,13 @@ export default function MissionReportScreen() {
           handleExport();
         }}
         missionStats={getMissionStats()}
+      />
+
+      {/* Clear Logs After Export Dialog */}
+      <LogClearDialog
+        visible={showClearLogsDialog}
+        onConfirm={handleClearLogsAfterExport}
+        onCancel={handleKeepLogsAfterExport}
       />
 
       {/* Mission Start Confirmation Dialog */}

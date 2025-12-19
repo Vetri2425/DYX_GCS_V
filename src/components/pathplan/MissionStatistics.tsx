@@ -44,7 +44,7 @@ export const MissionStatistics: React.FC<Props> = ({ waypoints }) => {
                 >
                     <View style={styles.cardContent}>
                         <View>
-                            <Text style={styles.cardLabel}>TOTAL WAYPOINTS</Text>
+                            <Text style={styles.cardLabel}>TOTAL MARKING POINTS</Text>
                             <Text style={styles.cardValue}>{totalWaypoints}</Text>
                         </View>
                         <Text style={styles.cardIcon}>📍</Text>
@@ -140,7 +140,7 @@ export const MissionStatistics: React.FC<Props> = ({ waypoints }) => {
                                 </Text>
                             </View>
                             <Text style={styles.statusSubtext}>
-                                {totalWaypoints > 0 ? 'Mission valid' : 'Add waypoints to begin'}
+                                {totalWaypoints > 0 ? 'Mission valid' : 'Add marking points to begin'}
                             </Text>
                         </View>
                         <Text style={styles.cardIcon}>{totalWaypoints > 0 ? '✅' : '⚪'}</Text>

@@ -209,7 +209,7 @@ export const MissionMap: React.FC<Props> = ({
   </div>
 
   <div class="position-overlay">
-    <div class="position-title">Rover Position</div>
+    <div class="position-title">Robot Position</div>
     <div class="position-coord" id="rover-lat">Lat: 0.0000000</div>
     <div class="position-coord" id="rover-lon">Lon: 0.0000000</div>
   </div>

@@ -4,19 +4,19 @@ import { colors } from '../../theme/colors';
 import { TTSToggleButton } from './TTSToggleButton';
 
 interface Props {
-  activeTab: 'Dashboard' | 'Path Plan' | 'Mission Report' | 'Analytics';
-  onTabChange: (tab: 'Dashboard' | 'Path Plan' | 'Mission Report' | 'Analytics') => void;
+  activeTab: 'Dashboard' | 'Marking Plan' | 'Mission Progress' | 'Analytics';
+  onTabChange: (tab: 'Dashboard' | 'Marking Plan' | 'Mission Progress' | 'Analytics') => void;
   missionMode?: string;
 }
 
 export const AppHeader: React.FC<Props> = ({
   activeTab,
   onTabChange,
-  missionMode = 'WP Mark',
+  missionMode = 'DGPS Mark',
 }) => {
   const getModeIcon = (mode: string): string => {
     switch (mode.toLowerCase()) {
-      case 'wp mark':
+      case 'dgps mark':
         return '📍';
       case 'interval spray':
         return '💧';
@@ -44,7 +44,7 @@ export const AppHeader: React.FC<Props> = ({
         </View>
         <View>
           <Text style={styles.title}>DYX Autonomous</Text>
-          <Text style={styles.subtitle}>Way To Mark</Text>
+          <Text style={styles.subtitle}>Way To Mark Robot </Text>
         </View>
       </View>
 
@@ -62,22 +62,22 @@ export const AppHeader: React.FC<Props> = ({
           </TouchableOpacity>
 
           <TouchableOpacity
-            style={[styles.tab, activeTab === 'Path Plan' && styles.tabActive]}
-            onPress={() => onTabChange('Path Plan')}
+            style={[styles.tab, activeTab === 'Marking Plan' && styles.tabActive]}
+            onPress={() => onTabChange('Marking Plan')}
             activeOpacity={0.7}
           >
-            <Text style={[styles.tabText, activeTab === 'Path Plan' && styles.tabTextActive]}>
-              Path Plan
+            <Text style={[styles.tabText, activeTab === 'Marking Plan' && styles.tabTextActive]}>
+              Marking Plan
             </Text>
           </TouchableOpacity>
 
           <TouchableOpacity
-            style={[styles.tab, activeTab === 'Mission Report' && styles.tabActive]}
-            onPress={() => onTabChange('Mission Report')}
+            style={[styles.tab, activeTab === 'Mission Progress' && styles.tabActive]}
+            onPress={() => onTabChange('Mission Progress')}
             activeOpacity={0.7}
           >
-            <Text style={[styles.tabText, activeTab === 'Mission Report' && styles.tabTextActive]}>
-              Mission Report
+            <Text style={[styles.tabText, activeTab === 'Mission Progress' && styles.tabTextActive]}>
+              Mission Progress
             </Text>
           </TouchableOpacity>
 

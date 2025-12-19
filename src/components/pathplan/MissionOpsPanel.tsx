@@ -178,10 +178,10 @@ const MissionOpsPanel: React.FC<Props> = ({
 
     const handleLoadMission = () => {
         if (waypoints.length === 0) {
-            Alert.alert('No Data', 'No waypoints to load');
+            Alert.alert('No Data', 'No marking points to load');
             return;
         }
-        Alert.alert('Load Mission', `Load mission with ${waypoints.length} waypoints to controller?`, [
+        Alert.alert('Load Mission', `Load mission with ${waypoints.length} marking points to controller?`, [
             { text: 'Cancel', style: 'cancel' },
             { text: 'Load', onPress: () => onLoadMission?.() },
         ]);
@@ -191,7 +191,7 @@ const MissionOpsPanel: React.FC<Props> = ({
 
     // Handle exit from manual control mode
     const handleExitManualMode = () => {
-        setMissionMode('WP Mark');
+        setMissionMode('DGPS Mark');
     };
 
     const handleModeSelect = (mode: string) => {
@@ -296,8 +296,8 @@ const MissionOpsPanel: React.FC<Props> = ({
                                 if (onUpdateWaypoints) {
                                     // Show confirmation alert
                                     Alert.alert(
-                                        'Delete All Waypoints',
-                                        `Are you sure you want to delete all ${waypoints.length} waypoints? This action cannot be undone.`,
+                                        'Delete All Marking Points',
+                                        `Are you sure you want to delete all ${waypoints.length} marking points? This action cannot be undone.`,
                                         [
                                             {
                                                 text: 'Cancel',
@@ -329,7 +329,7 @@ const MissionOpsPanel: React.FC<Props> = ({
                         <Text style={styles.modalTitle}>Select Export Format</Text>
 
                         <TouchableOpacity style={styles.formatBtn} onPress={() => confirmExport('qgc')}>
-                            <Text style={styles.formatText}>QGC Waypoints (.waypoints)</Text>
+                            <Text style={styles.formatText}>QGC Marking Points (.waypoints)</Text>
                         </TouchableOpacity>
                         <TouchableOpacity style={styles.formatBtn} onPress={() => confirmExport('json')}>
                             <Text style={styles.formatText}>JSON (.json)</Text>

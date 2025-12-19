@@ -58,7 +58,7 @@ export const EditWaypointDialog: React.FC<EditWaypointDialogProps> = ({
             <View style={styles.overlay}>
                 <View style={styles.dialog}>
                     <View style={styles.header}>
-                        <Text style={styles.title}>Edit Waypoint #{waypoint.id}</Text>
+                        <Text style={styles.title}>Edit Marking Point #{waypoint.id}</Text>
                         <TouchableOpacity onPress={onClose}>
                             <Text style={styles.closeBtn}>✕</Text>
                         </TouchableOpacity>

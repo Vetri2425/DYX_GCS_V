@@ -97,7 +97,7 @@ export const DrawingToolsPanel: React.FC<DrawingToolsPanelProps> = ({
       {activeDrawingTool && (
         <View style={styles.instructions}>
           <Text style={styles.instructionText}>
-            {activeDrawingTool === 'line' && '📍 Click to place waypoints. Double-tap to finish.'}
+            {activeDrawingTool === 'line' && '📍 Click to place points. Double-tap to finish.'}
             {activeDrawingTool === 'draw' && '✏️ Click and drag to draw freehand path.'}
             {activeDrawingTool === 'rectangle' && '📍 Click first corner, then drag to second corner.'}
             {activeDrawingTool === 'circle' && '📍 Click center, then drag to set radius.'}

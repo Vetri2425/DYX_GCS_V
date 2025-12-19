@@ -3,11 +3,11 @@ import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import VoiceSettingsModal from './VoiceSettingsModal';
 import { colors } from '../../theme/colors';
 
-export function HeaderBar({ missionMode = 'WP Mark' }: { missionMode?: string }) {
+export function HeaderBar({ missionMode = 'DGPS Mark' }: { missionMode?: string }) {
   const [showVoiceModal, setShowVoiceModal] = useState(false);
   const getModeIcon = (mode: string): string => {
     switch (mode.toLowerCase()) {
-      case 'wp mark':
+      case 'dgps mark':
         return '📍';
       case 'interval spray':
         return '💧';

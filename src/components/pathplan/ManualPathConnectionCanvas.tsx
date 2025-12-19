@@ -95,7 +95,7 @@ export const ManualPathConnectionCanvas: React.FC<Props> = ({
 
   const handleFinish = () => {
     if (connectedWaypoints.length < 2) {
-      alert('Please connect at least 2 waypoints by tapping them');
+      alert('Please connect at least 2 marking points by tapping them');
       return;
     }
 
@@ -212,10 +212,10 @@ export const ManualPathConnectionCanvas: React.FC<Props> = ({
           <View style={{ flex: 1 }}>
             <Text style={styles.title}>✏️ Manual Path Connection</Text>
             <Text style={styles.subtitle}>
-              {connectionMode === 'tap' ? 'Tap waypoints in order to connect them' : 'Drag through waypoints to connect them'}
+              {connectionMode === 'tap' ? 'Tap marking points in order to connect them' : 'Drag through marking points to connect them'}
             </Text>
             <Text style={styles.info}>
-              Connected: {connectedWaypoints.length} / {waypoints.length} waypoints
+              Connected: {connectedWaypoints.length} / {waypoints.length} marking points
             </Text>
           </View>
 
@@ -408,8 +408,8 @@ export const ManualPathConnectionCanvas: React.FC<Props> = ({
       <View style={styles.instructionBox}>
         <Text style={styles.instructionText}>
           {connectionMode === 'tap'
-            ? '💡 Tap waypoints in order to connect them'
-            : '💡 Touch a waypoint, drag to next waypoint. Line will connect when you touch it.'}
+            ? '💡 Tap marking points in order to connect them'
+            : '💡 Touch a marking point, drag to next marking point. Line will connect when you touch it.'}
         </Text>
       </View>
 

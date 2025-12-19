@@ -186,7 +186,7 @@ export const PathPlanMap: React.FC<Props> = ({
   </div>
   
   <div class="position-overlay">
-    <div class="position-title">Rover Position</div>
+    <div class="position-title">Robot Position</div>
     <div class="position-coord" id="rover-lat">Lat: ${roverPosition.lat.toFixed(7)}</div>
     <div class="position-coord" id="rover-lon">Lon: ${roverPosition.lon.toFixed(7)}</div>
   </div>
@@ -611,7 +611,7 @@ export const PathPlanMap: React.FC<Props> = ({
                             zIndexOffset: 1000,
                         }).addTo(map);
 
-                        roverMarker.bindPopup(\`<strong>Rover</strong><br>Heading: ${heading !== null ? heading.toFixed(1) + '°' : 'N/A'}<br>Lat: ${roverPosition.lat.toFixed(7)}<br>Lon: ${roverPosition.lon.toFixed(7)}\`);
+                        roverMarker.bindPopup(\`<strong>Robot</strong><br>Heading: ${heading !== null ? heading.toFixed(1) + '°' : 'N/A'}<br>Lat: ${roverPosition.lat.toFixed(7)}<br>Lon: ${roverPosition.lon.toFixed(7)}\`);
 
                         // Update roverData for future updates
                         roverData.hasPosition = true;

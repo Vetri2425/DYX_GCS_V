@@ -3,8 +3,8 @@ import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import { colors } from '../../theme/colors';
 
 interface Props {
-  activeTab: 'Dashboard' | 'Path Plan' | 'Mission Report';
-  onTabChange: (tab: 'Dashboard' | 'Path Plan' | 'Mission Report') => void;
+  activeTab: 'Dashboard' | 'Marking Plan' | 'Mission Progress';
+  onTabChange: (tab: 'Dashboard' | 'Marking Plan' | 'Mission Progress') => void;
   connectionStatus: 'connected' | 'connecting' | 'disconnected';
   onReconnect: () => void;
   onFullscreen: () => void;
@@ -56,20 +56,20 @@ export const AppHeader: React.FC<Props> = ({
           </TouchableOpacity>
 
           <TouchableOpacity
-            style={[styles.tab, activeTab === 'Path Plan' && styles.tabActive]}
-            onPress={() => onTabChange('Path Plan')}
+            style={[styles.tab, activeTab === 'Marking Plan' && styles.tabActive]}
+            onPress={() => onTabChange('Marking Plan')}
           >
-            <Text style={[styles.tabText, activeTab === 'Path Plan' && styles.tabTextActive]}>
-              Path Plan
+            <Text style={[styles.tabText, activeTab === 'Marking Plan' && styles.tabTextActive]}>
+              Marking Plan
             </Text>
           </TouchableOpacity>
 
           <TouchableOpacity
-            style={[styles.tab, activeTab === 'Mission Report' && styles.tabActive]}
-            onPress={() => onTabChange('Mission Report')}
+            style={[styles.tab, activeTab === 'Mission Progress' && styles.tabActive]}
+            onPress={() => onTabChange('Mission Progress')}
           >
-            <Text style={[styles.tabText, activeTab === 'Mission Report' && styles.tabTextActive]}>
-              Mission Report
+            <Text style={[styles.tabText, activeTab === 'Mission Progress' && styles.tabTextActive]}>
+              Mission Progress
             </Text>
           </TouchableOpacity>
         </View>

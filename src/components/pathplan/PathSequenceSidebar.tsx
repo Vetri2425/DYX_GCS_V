@@ -222,7 +222,7 @@ export const PathSequenceSidebar: React.FC<Props> = ({
                 ))}
                 {waypoints.length === 0 && (
                     <View style={styles.emptyState}>
-                        <Text style={styles.emptyText}>No waypoints yet</Text>
+                        <Text style={styles.emptyText}>No marking points yet</Text>
                         <Text style={styles.emptyHint}>Tap on map to add</Text>
                     </View>
                 )}
@@ -230,14 +230,14 @@ export const PathSequenceSidebar: React.FC<Props> = ({
 
             {/* Footer Stats */}
             <View style={styles.footer}>
-                <Text style={styles.footerText}>Total: {waypoints.length} waypoints</Text>
+                <Text style={styles.footerText}>Total: {waypoints.length} marking points</Text>
             </View>
 
             {/* Full Screen Modal for Waypoint Table */}
             <Modal visible={isFullScreenTable} animationType="slide" transparent={false}>
                 <View style={{ flex: 1, backgroundColor: colors.panelBg }}>
                     <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 24, backgroundColor: colors.cardBg }}>
-                        <Text style={{ fontSize: 28, fontWeight: 'bold', color: colors.text }}>Waypoint Table</Text>
+                        <Text style={{ fontSize: 28, fontWeight: 'bold', color: colors.text }}>Marking Points Table</Text>
                         <View style={{ flexDirection: 'row', gap: 12 }}>
                             <TouchableOpacity 
                                 onPress={() => {
@@ -245,8 +245,8 @@ export const PathSequenceSidebar: React.FC<Props> = ({
                                     if (onUpdateWaypoints) {
                                         // Show confirmation alert
                                         Alert.alert(
-                                            'Delete All Waypoints',
-                                            `Are you sure you want to delete all ${waypoints.length} waypoints? This action cannot be undone.`,
+                                            'Delete All Marking Points',
+                                            `Are you sure you want to delete all ${waypoints.length} marking points? This action cannot be undone.`,
                                             [
                                                 {
                                                     text: 'Cancel',
@@ -315,7 +315,7 @@ export const PathSequenceSidebar: React.FC<Props> = ({
                             ))}
                             {waypoints.length === 0 && (
                                 <View style={styles.emptyState}>
-                                    <Text style={styles.emptyText}>No waypoints yet</Text>
+                                    <Text style={styles.emptyText}>No marking points yet</Text>
                                     <Text style={styles.emptyHint}>Tap on map to add</Text>
                                 </View>
                             )}

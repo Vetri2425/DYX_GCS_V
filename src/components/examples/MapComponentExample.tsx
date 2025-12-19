@@ -95,7 +95,7 @@ export function MapComponentExample({ waypoints, roverPosition }: MapComponentPr
               latitude: roverPosition.lat, 
               longitude: roverPosition.lng 
             }}
-            title="Rover"
+            title="Robot"
             pinColor="blue"
           />
         )}

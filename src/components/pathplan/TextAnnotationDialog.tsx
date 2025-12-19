@@ -212,7 +212,7 @@ export const TextAnnotationDialog: React.FC<TextAnnotationDialogProps> = ({
             {/* Info */}
             <View style={styles.infoBox}>
               <Text style={styles.infoText}>
-                💡 Text will be converted to waypoint path on the map
+                💡 Text will be converted to marking points path on the map
               </Text>
             </View>
           </ScrollView>

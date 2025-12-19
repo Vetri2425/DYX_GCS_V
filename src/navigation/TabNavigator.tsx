@@ -12,10 +12,10 @@ import { useRover } from '../context/RoverContext';
 
 export default function TabNavigator() {
   const { missionMode } = useRover();
-  const [activeTab, setActiveTab] = useState<'Dashboard' | 'Path Plan' | 'Mission Report' | 'Analytics'>('Mission Report');
-  const [mountedTabs, setMountedTabs] = useState<Set<string>>(new Set(['Mission Report']));
+  const [activeTab, setActiveTab] = useState<'Dashboard' | 'Marking Plan' | 'Mission Progress' | 'Analytics'>('Mission Progress');
+  const [mountedTabs, setMountedTabs] = useState<Set<string>>(new Set(['Mission Progress']));
   const [isLoadingTab, setIsLoadingTab] = useState(true);
-  const previousTabRef = useRef<string>('Mission Report');
+  const previousTabRef = useRef<string>('Mission Progress');
   const mountedRef = useRef(true);
   const unmountTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -24,13 +24,13 @@ export default function TabNavigator() {
     const loadLastActiveTab = async () => {
       try {
         const lastTab = await PersistentStorage.loadActiveTab();
-        if (lastTab && (lastTab === 'Dashboard' || lastTab === 'Path Plan' || lastTab === 'Mission Report' || lastTab === 'Analytics')) {
+        if (lastTab && (lastTab === 'Dashboard' || lastTab === 'Marking Plan' || lastTab === 'Mission Progress' || lastTab === 'Analytics')) {
           console.log('[TabNavigator] 📂 Restoring last active tab:', lastTab);
-          setActiveTab(lastTab as 'Dashboard' | 'Path Plan' | 'Mission Report' | 'Analytics');
+          setActiveTab(lastTab as 'Dashboard' | 'Marking Plan' | 'Mission Progress' | 'Analytics');
           setMountedTabs(new Set([lastTab]));
           previousTabRef.current = lastTab;
         } else {
-          console.log('[TabNavigator] No saved tab found, defaulting to Mission Report');
+          console.log('[TabNavigator] No saved tab found, defaulting to Mission Progress');
         }
       } catch (error) {
         console.error('[TabNavigator] Failed to load last active tab:', error);
@@ -43,7 +43,7 @@ export default function TabNavigator() {
   }, []);
 
   // Handle tab changes with cleanup delay to prevent memory spikes
-  const handleTabChange = useCallback((newTab: 'Dashboard' | 'Path Plan' | 'Mission Report' | 'Analytics') => {
+  const handleTabChange = useCallback((newTab: 'Dashboard' | 'Marking Plan' | 'Mission Progress' | 'Analytics') => {
     if (!mountedRef.current) {
       console.warn('[TabNavigator] Component unmounted, ignoring tab change');
       return;
@@ -113,16 +113,16 @@ export default function TabNavigator() {
             </ErrorBoundary>
           </View>
         )}
-        {mountedTabs.has('Path Plan') && (
-          <View style={{ flex: 1, display: activeTab === 'Path Plan' ? 'flex' : 'none' }}>
-            <ErrorBoundary componentName="Path Plan Screen">
+        {mountedTabs.has('Marking Plan') && (
+          <View style={{ flex: 1, display: activeTab === 'Marking Plan' ? 'flex' : 'none' }}>
+            <ErrorBoundary componentName="Marking Plan Screen">
               <PathPlanScreen />
             </ErrorBoundary>
           </View>
         )}
-        {mountedTabs.has('Mission Report') && (
-          <View style={{ flex: 1, display: activeTab === 'Mission Report' ? 'flex' : 'none' }}>
-            <ErrorBoundary componentName="Mission Report Screen">
+        {mountedTabs.has('Mission Progress') && (
+          <View style={{ flex: 1, display: activeTab === 'Mission Progress' ? 'flex' : 'none' }}>
+            <ErrorBoundary componentName="Mission Progress Screen">
               <MissionReportScreen />
             </ErrorBoundary>
           </View>

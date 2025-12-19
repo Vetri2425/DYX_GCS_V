@@ -10,7 +10,7 @@ interface ModeSelectionDialogProps {
 }
 
 const AVAILABLE_MODES = [
-  { id: 'WP Mark', label: 'WP Mark', description: 'Waypoint marking mission', icon: '📍' },
+  { id: 'DGPS Mark', label: 'DGPS Mark', description: 'Mark points mission', icon: '📍' },
   { id: 'Interval Spray', label: 'Interval Spray', description: 'Time-based spray intervals', icon: '💧' },
   { id: 'Survey', label: 'Survey', description: 'Area survey mission', icon: '🗺️' },
   { id: 'Manual Control', label: 'Manual Control', description: 'Direct rover control', icon: '🎮' },

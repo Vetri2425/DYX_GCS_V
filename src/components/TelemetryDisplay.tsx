@@ -77,7 +77,7 @@ const TelemetryDisplay: React.FC = () => {
 
       {/* Vehicle State */}
       <View style={styles.section}>
-        <Text style={styles.sectionTitle}>VEHICLE STATE</Text>
+        <Text style={styles.sectionTitle}>ROBOT STATE</Text>
         <View style={styles.row}>
           <Text style={styles.label}>Status:</Text>
           <Text style={[styles.value, { color: statusInfo.armColor }]}>{statusInfo.armStatus}</Text>

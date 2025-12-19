@@ -381,7 +381,7 @@ export const VehicleStatusCard: React.FC<Props> = ({ status, telemetry, isConnec
         <View style={styles.iconContainer}>
           <Text style={styles.icon}>🚁</Text>
         </View>
-        <Text style={styles.title}>Vehicle Status</Text>
+        <Text style={styles.title}>Robot Status</Text>
         <View style={[styles.statusDot, { backgroundColor: connectionStatusColor }]} />
       </View>
 

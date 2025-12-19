@@ -55,7 +55,7 @@ export default function DashboardScreen() {
 
         {/* Vehicle Status Card */}
         <View style={styles.card}>
-          <Text style={styles.cardTitle}>🤖 VEHICLE STATUS</Text>
+          <Text style={styles.cardTitle}>🤖 ROBOT STATUS</Text>
           <View style={styles.divider} />
           
           <View style={styles.row}>

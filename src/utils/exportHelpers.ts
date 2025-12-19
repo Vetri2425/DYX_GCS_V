@@ -529,7 +529,7 @@ export const generatePDFHTML = (
 <body>
   <div class="container">
     <div class="header">
-      <h1>WAY TO MARK — MISSION REPORT</h1>
+      <h1>WAY TO MARK   — MISSION REPORT</h1>
       <p>Generated: ${dateStr} | Mode: ${missionMode?.toUpperCase() ?? 'UNKNOWN'}</p>
     </div>
 

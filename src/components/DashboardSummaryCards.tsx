@@ -9,7 +9,7 @@ const summaryData = [
   { title: 'Total Distance Covered', value: '1,250 km', icon: 'straighten', subtext: 'Updated now' },
   { title: 'Marking Points Processed', value: '8,500', icon: 'location-on', subtext: 'Updated now' },
   { title: 'Spray Time', value: '12:45', icon: 'timer', subtext: 'Updated now' },
-  { title: 'Rover Utilization %', value: '87%', icon: 'battery-full', subtext: 'Updated now' },
+  { title: 'Robot Utilization %', value: '87%', icon: 'battery-full', subtext: 'Updated now' },
   { title: 'Success Rate %', value: '95%', icon: 'trending-up', subtext: 'Updated now' },
 ];
 

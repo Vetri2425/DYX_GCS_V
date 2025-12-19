@@ -45,6 +45,7 @@ export type MissionReportExportProps = {
   >;
   missionMode?: string | null;
   onExport: () => void;
+  onExportComplete?: () => void;
 };
 
 const MissionReportExport: React.FC<MissionReportExportProps> = ({
@@ -52,6 +53,7 @@ const MissionReportExport: React.FC<MissionReportExportProps> = ({
   statusMap = {},
   missionMode,
   onExport,
+  onExportComplete,
 }) => {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [exportFormat, setExportFormat] = useState<'excel' | 'pdf'>('excel');
@@ -264,6 +266,7 @@ const MissionReportExport: React.FC<MissionReportExportProps> = ({
           if (saved) {
             console.log('[Export] Save dialog opened successfully');
             onExport();
+            onExportComplete?.();
             setIsModalOpen(false);
           } else {
             // User cancelled - just close modal quietly
@@ -319,6 +322,7 @@ const MissionReportExport: React.FC<MissionReportExportProps> = ({
           }
 
           onExport();
+          onExportComplete?.();
           setIsModalOpen(false);
         } catch (shareError) {
           console.error('[Export] Share error:', shareError);
