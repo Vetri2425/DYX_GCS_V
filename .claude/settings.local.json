@@ -22,7 +22,15 @@
       "Bash(node:*)",
       "Bash(powershell:*)",
       "Bash(git add:*)",
-      "Bash(git commit:*)"
+      "Bash(git commit:*)",
+      "Bash(npx expo start:*)",
+      "Bash(timeout:*)",
+      "Bash(netstat:*)",
+      "Bash(findstr:*)",
+      "Bash(taskkill /F /PID 47088)",
+      "Bash(taskkill //F //PID 47088)",
+      "Bash(adb logcat:*)",
+      "Bash(adb shell \"netstat -an | grep 5001\")"
     ],
     "deny": [],
     "ask": []

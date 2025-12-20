@@ -1,34 +1,93 @@
 /**
  * Backend Configuration for React Native Mobile App
- * 
+ *
  * Environment variables:
  * - VITE_ROS_HTTP_BASE: Backend HTTP base URL (e.g., http://192.168.1.102:5001)
  * - VITE_ROS_WS_URL: WebSocket URL (e.g., ws://192.168.1.102:5001/ws/telemetry)
+ *
+ * Dynamic URL Configuration:
+ * - Backend URL can be set at runtime via setBackendURL()
+ * - Saved URL is loaded from AsyncStorage on app start
+ * - Falls back to environment variables or defaults
  */
 
-// Try to read from environment first, fallback to defaults
-// Jetson backend defaults (override via env for other targets)
-// IMPORTANT: Replace with your actual backend server IP address
-const BACKEND_FROM_ENV = process.env.REACT_APP_ROS_HTTP_BASE || 'http://192.168.1.102:5001';
-const WS_FROM_ENV = process.env.REACT_APP_ROS_WS_URL || 'ws://192.168.1.102:5001/socket.io';
+import { getSavedBackendURL } from './utils/backendStorage';
+
+// Default fallback values (supports multiple env variable names)
+// FIXED: Use proper fallback - only ONE hardcoded URL here
+// The App.tsx probeWithAttempts() will handle trying multiple IPs
+const DEFAULT_BACKEND_URL =
+  process.env.REACT_APP_ROS_HTTP_BASE ||
+  process.env.EXPO_PUBLIC_ROS_HTTP_BASE ||
+  process.env.VITE_ROS_HTTP_BASE ||
+  'http://192.168.1.102:5001';
+
+const DEFAULT_WS_URL =
+  process.env.REACT_APP_ROS_WS_URL ||
+  process.env.EXPO_PUBLIC_ROS_WS_URL ||
+  process.env.VITE_ROS_WS_URL ||
+  'ws://192.168.1.102:5001/socket.io';
+
+// Dynamic backend URL (can be changed at runtime)
+let dynamicBackendURL: string | null = null;
+let dynamicWsURL: string | null = null;
+
+/**
+ * Initialize backend URL from storage
+ * Should be called on app startup
+ */
+export async function initializeBackendURL(): Promise<void> {
+  const savedURL = await getSavedBackendURL();
+  if (savedURL) {
+    dynamicBackendURL = savedURL;
+    dynamicWsURL = savedURL.replace('http://', 'ws://').replace('https://', 'wss://') + '/socket.io';
+  }
+}
+
+/**
+ * Set backend URL dynamically (runtime configuration)
+ * @param url - The backend URL (e.g., "http://192.168.1.100:5001")
+ */
+export function setBackendURL(url: string): void {
+  dynamicBackendURL = url;
+  dynamicWsURL = url.replace('http://', 'ws://').replace('https://', 'wss://') + '/socket.io';
+}
+
+/**
+ * Get the current backend URL
+ * Priority: Dynamic URL > Environment > Default
+ */
+export function getBackendURL(): string {
+  return dynamicBackendURL || DEFAULT_BACKEND_URL;
+}
+
+/**
+ * Get the current WebSocket URL
+ * Priority: Dynamic URL > Environment > Default
+ */
+export function getWsURL(): string {
+  return dynamicWsURL || DEFAULT_WS_URL;
+}
 
 /**
  * The full URL for the backend API (Socket.IO and HTTP endpoints)
- * Change this default IP if needed, or set environment variables
+ * @deprecated Use getBackendURL() instead for dynamic URL support
  */
-export const BACKEND_URL = BACKEND_FROM_ENV;
+export const BACKEND_URL = DEFAULT_BACKEND_URL;
 
 /**
  * WebSocket URL for real-time telemetry
+ * @deprecated Use getWsURL() instead for dynamic URL support
  */
-export const WS_URL = WS_FROM_ENV;
+export const WS_URL = DEFAULT_WS_URL;
 
 /**
  * Socket.IO configuration options
+ * For React Native, we use polling first as WebSocket can be unreliable on mobile
  */
 export const SOCKET_CONFIG = {
-  // Use websocket as primary transport, fallback to polling
-  transports: ['websocket', 'polling'],
+  // Use polling as primary transport (more reliable on mobile), WebSocket as fallback
+  transports: ['polling', 'websocket'],
   // Reconnect settings
   reconnection: true,
   reconnectionAttempts: Infinity,
@@ -38,6 +97,8 @@ export const SOCKET_CONFIG = {
   timeout: 20000,
   // Don't auto-connect, we'll control it
   autoConnect: false,
+  // Polling-specific options
+  path: '/socket.io/',
 };
 
 /**

@@ -9,7 +9,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import io from 'socket.io-client';
 import type { Socket, ManagerOptions, SocketOptions } from 'socket.io-client';
 import {
-  BACKEND_URL,
+  getBackendURL,
   SOCKET_CONFIG,
   API_ENDPOINTS,
   SOCKET_EVENTS,
@@ -32,10 +32,12 @@ import {
 import { LoraRTKStatus } from '../types/rtk';
 
 // Default constants
-const DEFAULT_HTTP_BASE = BACKEND_URL.replace(/\/$/, '');
 const THROTTLE_MS = 50; // ~20 Hz - Faster updates for better responsiveness
 const MAX_BACKOFF_MS = 8000;
 const INITIAL_BACKOFF_MS = 1000;
+
+// Helper to get current backend URL (dynamic)
+const getHttpBase = () => getBackendURL().replace(/\/$/, '');
 
 // Toggle verbose telemetry logging (kept off to reduce console noise)
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -132,7 +134,7 @@ async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
 
 // Helper: POST to service endpoint
 async function postService(path: string, body?: Record<string, unknown>): Promise<ServiceResponse> {
-  return fetchJson<ServiceResponse>(`${DEFAULT_HTTP_BASE}${path}`, {
+  return fetchJson<ServiceResponse>(`${getHttpBase()}${path}`, {
     method: 'POST',
     body: body ? JSON.stringify(body) : undefined,
   });
@@ -140,7 +142,7 @@ async function postService(path: string, body?: Record<string, unknown>): Promis
 
 // Helper: GET from service endpoint
 async function getService<T extends ServiceResponse = ServiceResponse>(path: string): Promise<T> {
-  return fetchJson<T>(`${DEFAULT_HTTP_BASE}${path}`);
+  return fetchJson<T>(`${getHttpBase()}${path}`);
 }
 
 // Map RTK status to fix type number
@@ -794,14 +796,17 @@ export function useRoverTelemetry(): UseRoverTelemetryResult {
       }
 
       try {
-        console.log('[SOCKET] Connecting to:', DEFAULT_HTTP_BASE);
-        
-        const socket = io(DEFAULT_HTTP_BASE, SOCKET_CONFIG as Partial<ManagerOptions & SocketOptions>);
+        const backendUrl = getHttpBase();
+        console.log('[SOCKET] Connecting to:', backendUrl);
+        console.log('[SOCKET] Config:', SOCKET_CONFIG);
+
+        const socket = io(backendUrl, SOCKET_CONFIG as Partial<ManagerOptions & SocketOptions>);
         socketRef.current = socket;
 
         socket.on('connect', () => {
           console.log('[SOCKET] ✅ Connected - ID:', socket.id);
-          console.log('[SOCKET] Backend URL:', DEFAULT_HTTP_BASE);
+          console.log('[SOCKET] Backend URL:', backendUrl);
+          console.log('[SOCKET] Transport:', socket.io.engine?.transport?.name || 'unknown');
           clearReconnectTimer();
           backoffRef.current = INITIAL_BACKOFF_MS;
           setConnectionState('connected');
@@ -814,6 +819,11 @@ export function useRoverTelemetry(): UseRoverTelemetryResult {
 
         socket.on('connect_error', (error: any) => {
           console.error('[SOCKET] Connection error:', error.message || error);
+          console.error('[SOCKET] Error details:', {
+            code: error.code,
+            type: error.type,
+            data: error.data,
+          });
           resetTelemetry();
           setConnectionState('error');
           scheduleReconnect();

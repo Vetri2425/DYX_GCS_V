@@ -17,34 +17,40 @@
       "web"
     ],
     "android": {
-      "orientation": "landscape",
       "package": "com.dyxgcs.mobile",
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#0A1628"
-      },
-      "statusBar": {
-        "barStyle": "light-content",
-        "backgroundColor": "#0A1628",
-        "translucent": false,
-        "hidden": false
-      },
-      "navigationBar": {
-        "visible": "leanback",
-        "barStyle": "dark-content",
-        "backgroundColor": "#0A1628"
       }
     },
-    "ios": {
-      "orientation": "landscape"
-    },
+    "ios": {},
     "web": {
       "orientation": "landscape"
+    },
+    "androidStatusBar": {
+      "barStyle": "light-content",
+      "backgroundColor": "#0A1628",
+      "translucent": false,
+      "hidden": false
+    },
+    "androidNavigationBar": {
+      "visible": "leanback",
+      "barStyle": "dark-content",
+      "backgroundColor": "#0A1628"
     },
     "extra": {
       "eas": {
         "projectId": "5e4ca5bf-e5a2-402e-ae22-e7e102b59c66"
       }
+    },
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "updates": {
+      "enabled": true,
+      "checkOnLaunch": "always",
+      "fallbackToCacheTimeout": 0,
+      "url": "https://u.expo.dev/5e4ca5bf-e5a2-402e-ae22-e7e102b59c66"
     }
   }
 }
