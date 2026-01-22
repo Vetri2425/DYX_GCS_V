@@ -76,6 +76,7 @@ export interface RoverTelemetry {
   attitude?: {
     yaw_deg: number;
   };
+  gps_failsafe?: GpsFailsafeStatus;
 }
 
 // Telemetry envelope from backend
@@ -130,3 +131,18 @@ export interface MissionEventData {
 }
 
 export type ConnectionState = 'connecting' | 'connected' | 'disconnected' | 'error';
+// GPS Failsafe types
+export type GpsFailsafeMode = 'disable' | 'strict' | 'relax';
+
+export interface GpsFailsafeStatus {
+  mode: GpsFailsafeMode;
+  triggered: boolean;
+  accuracy_error_mm: number;
+  servo_suppressed: boolean;
+}
+
+export interface GpsFailsafeEvent {
+  accuracy_error_mm: number;
+  threshold_mm: number;
+  timestamp: number;
+}

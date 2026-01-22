@@ -29,6 +29,8 @@ const STORAGE_KEYS = {
   MISSION_REPORT_UI_STATE: '@mission_report/ui_state',
   PATHPLAN_UI_STATE: '@pathplan/ui_state',
   DASHBOARD_UI_STATE: '@dashboard/ui_state',
+  // Skip audit history
+  MISSION_SKIP_AUDIT: '@mission/skip_audit',
 } as const;
 
 export interface MissionMetadata {
@@ -227,6 +229,62 @@ class PersistentStorageService {
       return true;
     } catch (error) {
       console.error('[Storage] ❌ Failed to save mission end time:', error);
+      return false;
+    }
+  }
+
+  /**
+   * Save a skip audit record (append-only)
+   */
+  async saveSkipAuditRecord(record: any): Promise<boolean> {
+    try {
+      const existing = await AsyncStorage.getItem(STORAGE_KEYS.MISSION_SKIP_AUDIT);
+      const arr = existing ? JSON.parse(existing) as any[] : [];
+      arr.push(record);
+      await AsyncStorage.setItem(STORAGE_KEYS.MISSION_SKIP_AUDIT, JSON.stringify(arr));
+      await this.updateLastSaveTimestamp();
+      console.log('[Storage] ✅ Saved skip audit record', record?.id);
+      return true;
+    } catch (error) {
+      console.error('[Storage] ❌ Failed to save skip audit record:', error);
+      return false;
+    }
+  }
+
+  /**
+   * Load skip audit history
+   */
+  async loadSkipAudit(): Promise<any[] | null> {
+    try {
+      const data = await AsyncStorage.getItem(STORAGE_KEYS.MISSION_SKIP_AUDIT);
+      if (!data) return null;
+      const arr = JSON.parse(data) as any[];
+      console.log('[Storage] 📂 Loaded skip audit history with', arr.length, 'records');
+      return arr;
+    } catch (error) {
+      console.error('[Storage] ❌ Failed to load skip audit history:', error);
+      return null;
+    }
+  }
+
+  /**
+   * Mark an existing skip audit record as undone
+   */
+  async markSkipAuditUndone(recordId: string): Promise<boolean> {
+    try {
+      const existing = await AsyncStorage.getItem(STORAGE_KEYS.MISSION_SKIP_AUDIT);
+      if (!existing) return false;
+      const arr = JSON.parse(existing) as any[];
+      const idx = arr.findIndex(r => r && r.id === recordId);
+      if (idx === -1) return false;
+      arr[idx].undone = true;
+      arr[idx].undoneAt = new Date().toISOString();
+      await AsyncStorage.setItem(STORAGE_KEYS.MISSION_SKIP_AUDIT, JSON.stringify(arr));
+      await this.updateLastSaveTimestamp();
+      console.log('[Storage] ✅ Marked skip audit undone', recordId);
+      return true;
+    } catch (error) {
+      console.error('[Storage] ❌ Failed to mark skip audit undone:', error);
       return false;
     }
   }

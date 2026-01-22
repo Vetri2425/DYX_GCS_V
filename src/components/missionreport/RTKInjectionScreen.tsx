@@ -57,8 +57,9 @@ export const RTKInjectionScreen: React.FC<Props> = ({ visible, onClose, services
         if (status.success) {
           const bytes = status.ntrip.total_bytes ?? 0;
           setNtripBytes(bytes);
+          // Always sync running state from backend
+          setIsNtripRunning(Boolean(status.ntrip.running));
           if (!status.ntrip.running) {
-            setIsNtripRunning(false);
             stopMonitor();
           }
         }
@@ -167,19 +168,26 @@ export const RTKInjectionScreen: React.FC<Props> = ({ visible, onClose, services
         setFeedback(response.message ?? 'RTK stream started successfully.');
         setIsNtripRunning(true);
         setActiveProfileId(profile.id);
+        
+        // Immediately start monitoring to sync state from backend
+        startMonitor();
+        
         setTimeout(async () => {
           try {
             const status = await services.getRTKStatus();
             if (status.success && status.ntrip.running) {
-              startMonitor();
+              // Stream confirmed running - monitor already started
+              console.log('[RTKInjection] Stream verified running with', status.ntrip.total_bytes, 'bytes');
             } else {
+              // Stream failed to start
               setError('Stream started but backend reported not running.');
               setIsNtripRunning(false);
               setActiveProfileId(null);
+              stopMonitor();
             }
           } catch (err) {
             console.warn('[RTKInjection] Status verification failed:', err);
-            startMonitor();
+            // Monitor already running, keep it going
           }
         }, 1000);
       } else {
@@ -314,6 +322,7 @@ export const RTKInjectionScreen: React.FC<Props> = ({ visible, onClose, services
           onEditProfile={handleEditProfile}
           isConnecting={isSubmitting}
           activeProfileId={activeProfileId}
+          isStreamRunning={isNtripRunning}
         />
       ) : (
         <NTRIPProfileEditor

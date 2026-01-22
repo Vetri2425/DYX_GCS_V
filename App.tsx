@@ -34,8 +34,8 @@ async function testBackendConnection(url: string, timeout: number = 10000): Prom
   while (Date.now() - start < timeout) {
     const attemptStart = Date.now();
     try {
-      console.log(`[testBackendConnection] Attempting GET ${url}/api/status with ${perAttemptTimeout}ms timeout`);
-      const response = await axios.get(`${url}/api/status`, {
+      console.log(`[testBackendConnection] Attempting GET ${url}/api/tts/status with ${perAttemptTimeout}ms timeout`);
+      const response = await axios.get(`${url}/api/tts/status`, {
         timeout: perAttemptTimeout,
         validateStatus: () => true,
       });
@@ -110,12 +110,12 @@ function AppContent() {
     // Initialize dynamic backend URL from storage if present, else use .env/default
     await initializeBackendURL();
 
-    // Test 192.168.1.102 with 10 second timeout
-    setConnectionStatus('Testing primary backend 192.168.1.102 (10s timeout)...');
-    console.log('Testing primary backend: 192.168.1.102 (10s timeout)...');
+    // Test 192.168.1.102 with 5 second timeout
+    setConnectionStatus('Testing primary backend 192.168.1.102 (5s timeout)...');
+    console.log('Testing primary backend: 192.168.1.102 (5s timeout)...');
     const primaryURL = 'http://192.168.1.102:5001';
-    const perAttemptMs = 10000; // 10s per attempt
-    const attemptsPerHost = 3;   // 3 attempts per host -> 30s
+    const perAttemptMs = 5000; // 5s per attempt
+    const attemptsPerHost = 1;   // 1 attempt per host -> 5s
 
     // Primary host
     const primaryOk = await probeWithAttempts(
@@ -136,8 +136,8 @@ function AppContent() {
 
     // Fallback host
     const fallbackURL = 'http://192.168.1.212:5001';
-    setConnectionStatus('Primary unreachable. Testing fallback backend (3×10s)...');
-    console.log('Primary unreachable, testing fallback backend (3×10s): 192.168.1.212');
+    setConnectionStatus('Primary unreachable. Testing fallback backend (1×5s)...');
+    console.log('Primary unreachable, testing fallback backend (1×5s): 192.168.1.212');
     const fallbackOk = await probeWithAttempts(
       fallbackURL,
       attemptsPerHost,
@@ -155,8 +155,8 @@ function AppContent() {
     }
 
     // Both unreachable
-    console.warn('❌ No backend reachable after 3×10s on both hosts');
-    setConnectionStatus('❌ No backend reachable after 1 minute');
+    console.warn('❌ No backend reachable after 1×5s on both hosts');
+    setConnectionStatus('❌ No backend reachable after 10 seconds');
     setBackendUnreachable(true);
     setRetrying(false);
   };
@@ -199,6 +199,7 @@ function AppContent() {
         // Set it as the backend URL
         setBackendURL(url);
         setBackendConfigured(true);
+        setBackendUnreachable(false); // Clear unreachable flag to allow app to load
         setShowManualIPEntry(false);
         setManualIP('');
         setManualPort('5001');

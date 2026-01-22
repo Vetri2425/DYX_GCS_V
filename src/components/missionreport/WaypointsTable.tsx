@@ -3,6 +3,7 @@ import { View, Text, StyleSheet, ScrollView } from 'react-native';
 import { colors } from '../../theme/colors';
 import { Waypoint } from './types';
 import MissionReportExport from './MissionReportExport';
+import { formatAccuracyDisplay, getAccuracyLevel } from '../../utils/accuracyCalculation';
 
 interface Props {
   waypoints: Waypoint[];
@@ -16,6 +17,13 @@ interface Props {
     pile?: string | number;
     rowNo?: string | number;
     remark?: string;
+    // Accuracy fields
+    hrms?: number;
+    vrms?: number;
+    lat_achieved?: number;
+    lon_achieved?: number;
+    accuracy_level?: string;
+    position_error_mm?: number;
   }>;
   missionMode: string | null;
   currentIndex?: number | null; // Currently active waypoint index
@@ -28,14 +36,36 @@ export const WaypointsTable: React.FC<Props> = ({ waypoints, onExport, onExportC
   const formatTimestamp = (timestamp?: string): string => {
     if (!timestamp) return '—';
     try {
-      // Handle ISO format timestamps
-      const date = new Date(timestamp);
+      // CRITICAL FIX: Backend sends IST time but marks it as UTC with 'Z'
+      // We need to strip the 'Z' and parse as local time
+      // Example: "2026-01-20T15:26:17.056849Z" should be treated as local IST (15:26), not UTC
+      
+      const timestampLocal = timestamp.replace('Z', ''); // Remove UTC marker
+      const date = new Date(timestampLocal);
+      
       if (isNaN(date.getTime())) return '—';
-      // Format: HH:MM:SS
-      return date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
-    } catch {
+      
+      // Get local time components
+      const hours = date.getHours().toString().padStart(2, '0');
+      const minutes = date.getMinutes().toString().padStart(2, '0');
+      const seconds = date.getSeconds().toString().padStart(2, '0');
+      
+      return `${hours}:${minutes}:${seconds}`;
+    } catch (error) {
+      console.error('[WaypointsTable] Error formatting timestamp:', error);
       return '—';
     }
+  };
+
+  // Get accuracy display text and color
+  const getAccuracyDisplay = (wpStatus: any) => {
+    if (!wpStatus?.position_error_mm) {
+      return { text: '', color: undefined };
+    }
+    
+    const accuracy = getAccuracyLevel(wpStatus.position_error_mm);
+    const text = formatAccuracyDisplay(wpStatus.position_error_mm, accuracy);
+    return { text, color: accuracy.color };
   };
 
   // Calculate display status and color based on statusMap
@@ -104,24 +134,35 @@ export const WaypointsTable: React.FC<Props> = ({ waypoints, onExport, onExportC
             const currentWaypointNumber = currentIndex !== null && currentIndex !== undefined ? currentIndex + 1 : null;
             const isCurrentWaypoint = currentWaypointNumber !== null && wp.sn === currentWaypointNumber;
             
+            const isSkipped = wpStatus?.status === 'skipped';
             return (
               <View key={`wp-${index}-${wp.sn}-${wp.lat}-${wp.lon}`} style={[
                 styles.tableRow, 
                 index % 2 === 0 && styles.tableRowAlt,
-                isCurrentWaypoint && styles.currentWaypointRow
+                isCurrentWaypoint && styles.currentWaypointRow,
+                isSkipped && styles.skippedRow
               ]}>
-                <Text style={[styles.cell, styles.colSN, styles.cellYellow, isCurrentWaypoint && styles.currentWaypointText]}>{wp.sn}</Text>
-                <Text style={[styles.cell, styles.colBlock, styles.cellYellow, isCurrentWaypoint && styles.currentWaypointText]}>{wp.block}</Text>
-                <Text style={[styles.cell, styles.colRow, isCurrentWaypoint && styles.currentWaypointText]}>{wp.row}</Text>
-                <Text style={[styles.cell, styles.colPile, isCurrentWaypoint && styles.currentWaypointText]}>{wp.pile}</Text>
-                <Text style={[styles.cell, styles.colLat, isCurrentWaypoint && styles.currentWaypointText]}>{wp.lat.toFixed(7)}</Text>
-                <Text style={[styles.cell, styles.colLon, isCurrentWaypoint && styles.currentWaypointText]}>{wp.lon.toFixed(7)}</Text>
-                <Text style={[styles.cell, styles.colAlt, isCurrentWaypoint && styles.currentWaypointText]}>{wp.alt.toFixed(2)}</Text>
-                <Text style={[styles.cell, styles.colStatus, { color: statusColor }, isCurrentWaypoint && styles.currentWaypointText]}>
-                  {statusDisplay} {isCurrentWaypoint ? '◄' : ''}
+                <Text style={[styles.cell, styles.colSN, styles.cellYellow, isCurrentWaypoint && styles.currentWaypointText, isSkipped && styles.skippedText]}>{wp.sn}</Text>
+                <Text style={[styles.cell, styles.colBlock, styles.cellYellow, isCurrentWaypoint && styles.currentWaypointText, isSkipped && styles.skippedText]}>{wp.block}</Text>
+                <Text style={[styles.cell, styles.colRow, isCurrentWaypoint && styles.currentWaypointText, isSkipped && styles.skippedText]}>{wp.row}</Text>
+                <Text style={[styles.cell, styles.colPile, isCurrentWaypoint && styles.currentWaypointText, isSkipped && styles.skippedText]}>{wp.pile}</Text>
+                <Text style={[styles.cell, styles.colLat, isCurrentWaypoint && styles.currentWaypointText, isSkipped && styles.skippedText]}>{wp.lat.toFixed(7)}</Text>
+                <Text style={[styles.cell, styles.colLon, isCurrentWaypoint && styles.currentWaypointText, isSkipped && styles.skippedText]}>{wp.lon.toFixed(7)}</Text>
+                <Text style={[styles.cell, styles.colAlt, isCurrentWaypoint && styles.currentWaypointText, isSkipped && styles.skippedText]}>{wp.alt.toFixed(2)}</Text>
+                <View style={[styles.cell, styles.colStatus, isCurrentWaypoint && styles.currentWaypointText, isSkipped && styles.skippedStatusCell]}>
+                  <Text style={[{ color: statusColor }, isSkipped && styles.skippedText]}>{statusDisplay} {isCurrentWaypoint ? '◄' : ''}</Text>
+                  {isSkipped && <View style={styles.skippedBadge}><Text style={styles.skippedBadgeText}>SKIPPED</Text></View>}
+                </View>
+                <Text style={[styles.cell, styles.colTime, isCurrentWaypoint && styles.currentWaypointText, isSkipped && styles.skippedText]}>{formatTimestamp(wpStatus?.timestamp)}</Text>
+                <Text style={[
+                  styles.cell, 
+                  styles.colRemark, 
+                  isCurrentWaypoint && styles.currentWaypointText, 
+                  isSkipped && styles.skippedText,
+                  getAccuracyDisplay(wpStatus).color && { color: getAccuracyDisplay(wpStatus).color }
+                ]}>
+                  {getAccuracyDisplay(wpStatus).text || wpStatus?.remark || (wpStatus?.status === 'skipped' ? 'Skipped' : wpStatus?.status === 'completed' ? 'Completed' : 'Pending')}
                 </Text>
-                <Text style={[styles.cell, styles.colTime, isCurrentWaypoint && styles.currentWaypointText]}>{formatTimestamp(wpStatus?.timestamp)}</Text>
-                <Text style={[styles.cell, styles.colRemark, isCurrentWaypoint && styles.currentWaypointText]}>{wpStatus?.remark ?? '—'}</Text>
               </View>
             );
           })}
@@ -215,6 +256,31 @@ const styles = StyleSheet.create({
   currentWaypointText: {
     color: '#22D3EE',
     fontWeight: '600',
+  },
+  skippedRow: {
+    opacity: 0.55,
+    backgroundColor: 'rgba(255,255,255,0.02)'
+  },
+  skippedText: {
+    textDecorationLine: 'line-through',
+    color: '#94A3B8'
+  },
+  skippedBadge: {
+    marginLeft: 8,
+    backgroundColor: '#334155',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 6,
+    alignSelf: 'center'
+  },
+  skippedBadgeText: {
+    color: '#CBD5E1',
+    fontSize: 10,
+    fontWeight: '700'
+  },
+  skippedStatusCell: {
+    flexDirection: 'row',
+    alignItems: 'center'
   },
   // Column widths (flexible to fit container)
   colSN: { flex: 0.7, textAlign: 'center' },

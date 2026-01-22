@@ -11,7 +11,7 @@ import useRoverTelemetry, {
   UseRoverTelemetryResult,
   RoverServices
 } from '../hooks/useRoverTelemetry';
-import { RoverTelemetry } from '../types/telemetry';
+import { RoverTelemetry, GpsFailsafeMode, GpsFailsafeStatus, GpsFailsafeEvent } from '../types/telemetry';
 import { Waypoint } from '../components/missionreport/types';
 import PersistentStorage from '../services/PersistentStorage';
 
@@ -25,6 +25,12 @@ export interface RoverContextValue extends UseRoverTelemetryResult {
   setMissionMode: (mode: string) => void;
   ttsLanguage: string;
   setTTSLanguage: (language: string) => void;
+  gpsFailsafeMode: GpsFailsafeMode;
+  setGpsFailsafeMode: (mode: GpsFailsafeMode) => void;
+  gpsFailsafeStatus: GpsFailsafeStatus | null;
+  onFailsafeAcknowledge: () => void;
+  onFailsafeResume: () => void;
+  onFailsafeRestart: () => void;
 }
 
 const RoverContext = createContext<RoverContextValue | null>(null);
@@ -50,6 +56,8 @@ export function RoverProvider({ children }: RoverProviderProps): React.ReactElem
   const [missionWaypoints, setMissionWaypointsState] = useState<Waypoint[]>([]);
   const [missionMode, setMissionModeState] = useState<string>('DGPS Mark');
   const [ttsLanguage, setTTSLanguageState] = useState<string>('en');
+  const [gpsFailsafeMode, setGpsFailsafeModeState] = useState<GpsFailsafeMode>('disable');
+  const [gpsFailsafeStatus, setGpsFailsafeStatus] = useState<GpsFailsafeStatus | null>(null);
 
   // Load TTS language from AsyncStorage on mount
   useEffect(() => {
@@ -67,6 +75,14 @@ export function RoverProvider({ children }: RoverProviderProps): React.ReactElem
     loadTTSLanguage();
   }, []);
 
+  // Update GPS failsafe status from telemetry
+  useEffect(() => {
+    if (rover.telemetry.gps_failsafe) {
+      console.log('[RoverContext] 🛡️ GPS Failsafe status updated:', rover.telemetry.gps_failsafe);
+      setGpsFailsafeStatus(rover.telemetry.gps_failsafe);
+    }
+  }, [rover.telemetry.gps_failsafe]);
+
   const setMissionWaypoints = useCallback((waypoints: Waypoint[]) => {
     // Avoid redundant updates that can trigger render/effect loops
     setMissionWaypointsState(prev => {
@@ -75,7 +91,7 @@ export function RoverProvider({ children }: RoverProviderProps): React.ReactElem
           const n = waypoints[i];
           const pDistance = (p as any).distance ?? 0;
           const nDistance = (n as any).distance ?? 0;
-          return p.lat === n.lat && p.lng === n.lng && p.alt === n.alt && p.sn === n.sn && p.status === n.status && Number(pDistance) === Number(nDistance);
+          return p.lat === n.lat && p.lon === n.lon && p.alt === n.alt && p.sn === n.sn && p.status === n.status && Number(pDistance) === Number(nDistance);
         });
       if (shallowSame) {
         return prev;
@@ -113,6 +129,59 @@ export function RoverProvider({ children }: RoverProviderProps): React.ReactElem
     }
   }, []);
 
+  const setGpsFailsafeMode = useCallback((mode: GpsFailsafeMode) => {
+    console.log('[RoverContext] Setting GPS failsafe mode:', mode);
+    setGpsFailsafeModeState(mode);
+    
+    // Emit to backend
+    if (rover.socket) {
+      rover.socket.emit('set_gps_failsafe_mode', { mode });
+    }
+  }, [rover.socket]);
+
+  const onFailsafeAcknowledge = useCallback(() => {
+    console.log('[RoverContext] Acknowledging GPS failsafe');
+    if (rover.socket) {
+      rover.socket.emit('failsafe_acknowledge');
+    }
+  }, [rover.socket]);
+
+  const onFailsafeResume = useCallback(() => {
+    console.log('[RoverContext] Resuming mission after failsafe');
+    if (rover.socket) {
+      rover.socket.emit('failsafe_resume_mission');
+    }
+  }, [rover.socket]);
+
+  const onFailsafeRestart = useCallback(() => {
+    console.log('[RoverContext] Restarting mission after failsafe');
+    if (rover.socket) {
+      rover.socket.emit('failsafe_restart_mission');
+    }
+  }, [rover.socket]);
+
+  // Listen for GPS failsafe events
+  useEffect(() => {
+    if (!rover.socket) return;
+
+    const handleServoSuppressed = (event: GpsFailsafeEvent) => {
+      console.log('[RoverContext] 🚫 Servo suppressed event:', event);
+    };
+
+    const handleFailsafeModeChanged = (data: { mode: GpsFailsafeMode }) => {
+      console.log('[RoverContext] ⚙️ Failsafe mode changed from backend:', data.mode);
+      setGpsFailsafeModeState(data.mode);
+    };
+
+    rover.socket.on('servo_suppressed', handleServoSuppressed);
+    rover.socket.on('failsafe_mode_changed', handleFailsafeModeChanged);
+
+    return () => {
+      rover.socket?.off('servo_suppressed', handleServoSuppressed);
+      rover.socket?.off('failsafe_mode_changed', handleFailsafeModeChanged);
+    };
+  }, [rover.socket]);
+
   // ✅ CRITICAL FIX: Memoize stable values separately to prevent infinite loops
   // while still allowing telemetry updates to propagate instantly to consumers.
   //
@@ -138,6 +207,12 @@ export function RoverProvider({ children }: RoverProviderProps): React.ReactElem
     setMissionMode,                       // ✅ Stable callback
     ttsLanguage,                          // ✅ Only changes on language updates
     setTTSLanguage,                       // ✅ Stable callback
+    gpsFailsafeMode,                      // ✅ GPS failsafe mode
+    setGpsFailsafeMode,                   // ✅ Stable callback
+    gpsFailsafeStatus,                    // ✅ GPS failsafe status
+    onFailsafeAcknowledge,                // ✅ Stable callback
+    onFailsafeResume,                     // ✅ Stable callback
+    onFailsafeRestart,                    // ✅ Stable callback
   }), [
     rover.telemetry,        // Changes frequently for live updates
     rover.roverPosition,    // Changes frequently for live updates
@@ -153,6 +228,12 @@ export function RoverProvider({ children }: RoverProviderProps): React.ReactElem
     setMissionMode,         // Stable
     ttsLanguage,            // Changes on language updates
     setTTSLanguage,         // Stable
+    gpsFailsafeMode,        // GPS failsafe mode
+    setGpsFailsafeMode,     // Stable
+    gpsFailsafeStatus,      // GPS failsafe status
+    onFailsafeAcknowledge,  // Stable
+    onFailsafeResume,       // Stable
+    onFailsafeRestart,      // Stable
   ]);
 
   return React.createElement(

@@ -1,10 +1,14 @@
 import React, { useState } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import VoiceSettingsModal from './VoiceSettingsModal';
+import { FailsafeModeSelector } from '../pathplan/FailsafeModeSelector';
 import { colors } from '../../theme/colors';
+import { useRover } from '../../context/RoverContext';
 
 export function HeaderBar({ missionMode = 'DGPS Mark' }: { missionMode?: string }) {
   const [showVoiceModal, setShowVoiceModal] = useState(false);
+  const { gpsFailsafeMode, setGpsFailsafeMode, telemetry } = useRover();
+  const [showFailsafeModeSelector, setShowFailsafeModeSelector] = useState(false);
   const getModeIcon = (mode: string): string => {
     switch (mode.toLowerCase()) {
       case 'dgps mark':
@@ -68,8 +72,23 @@ export function HeaderBar({ missionMode = 'DGPS Mark' }: { missionMode?: string 
           <Text style={styles.voiceIcon}>🔊</Text>
           <Text style={styles.voiceText}>Voice</Text>
         </TouchableOpacity>
+        <TouchableOpacity
+          onPress={() => setShowFailsafeModeSelector(true)}
+          style={styles.gearButton}
+          accessibilityLabel="Open GPS failsafe settings"
+          accessibilityRole="button"
+        >
+          <Text style={styles.gearIcon}>⚙️</Text>
+        </TouchableOpacity>
         <Text style={styles.expandIcon}>⛶</Text>
         <VoiceSettingsModal visible={showVoiceModal} onClose={() => setShowVoiceModal(false)} />
+        <FailsafeModeSelector
+          visible={showFailsafeModeSelector}
+          currentMode={gpsFailsafeMode}
+          onModeChange={setGpsFailsafeMode}
+          onClose={() => setShowFailsafeModeSelector(false)}
+          disabled={telemetry.mission.status !== 'IDLE'}
+        />
       </View>
     </View>
   );
@@ -159,6 +178,20 @@ const styles = StyleSheet.create({
     color: '#ffffff',
     fontSize: 14,
     fontWeight: '700'
+  },
+  gearButton: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#1a75d2',
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    borderWidth: 2,
+    borderColor: '#059669',
+  },
+  gearIcon: {
+    fontSize: 18,
+    color: '#ffffff'
   },
   modeBox: {
     flexDirection: 'row',

@@ -15,6 +15,9 @@ import { FreeDrawDialog, DrawSettings } from '../components/pathplan/FreeDrawDia
 import { DrawingCanvas } from '../components/pathplan/DrawingCanvas';
 import { ManualPathConnectionCanvas } from '../components/pathplan/ManualPathConnectionCanvas';
 import { ManualControlPanel } from '../components/pathplan/ManualControlPanel';
+import { FailsafeModeSelector } from '../components/pathplan/FailsafeModeSelector';
+import { FailsafeStrictPopup } from '../components/pathplan/FailsafeStrictPopup';
+import { FailsafeRelaxNotification } from '../components/pathplan/FailsafeRelaxNotification';
 import { haversineDistance } from '../utils/missionCalculator';
 import { textToWaypointPath } from '../utils/textToPath';
 import * as DocumentPicker from 'expo-document-picker';
@@ -36,7 +39,20 @@ import {
 const DEBUG_LOG = true;
 
 export default function PathPlanScreen() {
-  const { telemetry, roverPosition, missionWaypoints, setMissionWaypoints } = useRover();
+  const {
+    telemetry,
+    roverPosition,
+    missionWaypoints,
+    setMissionWaypoints,
+    gpsFailsafeMode,
+    setGpsFailsafeMode,
+    gpsFailsafeStatus,
+    onFailsafeAcknowledge,
+    onFailsafeResume,
+    onFailsafeRestart,
+    services,
+    socket,
+  } = useRover();
 
   // Component mounted flag to prevent state updates after unmount
   const mountedRef = useRef(true);
@@ -136,6 +152,12 @@ export default function PathPlanScreen() {
   }, [setMissionWaypoints]);
   const [selectedWaypoint, setSelectedWaypoint] = useState<number | null>(null);
 
+  // GPS Failsafe state
+  const [showFailsafeModeSelector, setShowFailsafeModeSelector] = useState(false);
+  const [showStrictPopup, setShowStrictPopup] = useState(false);
+  const [showRelaxNotification, setShowRelaxNotification] = useState(false);
+  const [failsafeEvent, setFailsafeEvent] = useState<{ accuracy: number; threshold: number } | null>(null);
+
   // Sync waypoints to context only when explicitly needed (e.g., on upload)
   // Removed automatic sync to prevent infinite loop
   const [missionName, setMissionName] = useState('DRAWN MISSION - 4:15:34');
@@ -211,6 +233,46 @@ export default function PathPlanScreen() {
 
     loadPersistedState();
   }, []);
+
+  // Listen for GPS Failsafe servo_suppressed events
+  useEffect(() => {
+    if (!socket) return;
+
+    const handleServoSuppressed = (event: any) => {
+      console.log('[PathPlanScreen] 🚫 Servo suppressed event received:', JSON.stringify(event, null, 2));
+      console.log('[PathPlanScreen] 📋 Event details:', {
+        mode: gpsFailsafeMode,
+        accuracy_error: event.accuracy_error_mm,
+        threshold: event.threshold_mm,
+        mission_paused: event.mission_paused,
+        waypoint_id: event.waypoint_id,
+        timestamp: event.timestamp
+      });
+      
+      setFailsafeEvent({
+        accuracy: event.accuracy_error_mm,
+        threshold: event.threshold_mm,
+      });
+
+      console.log('[PathPlanScreen] GPS Failsafe mode:', gpsFailsafeMode);
+      if (gpsFailsafeMode === 'strict') {
+        console.log('[PathPlanScreen] ⚠️ STRICT MODE: Showing failsafe popup');
+        console.log('[PathPlanScreen] ⚠️ Mission should be PAUSED by backend');
+        setShowStrictPopup(true);
+      } else if (gpsFailsafeMode === 'relax') {
+        console.log('[PathPlanScreen] ℹ️ RELAX MODE: Showing failsafe notification');
+        console.log('[PathPlanScreen] ℹ️ Mission continues with spray suppressed');
+        setShowRelaxNotification(true);
+      }
+    };
+
+    socket.on('servo_suppressed', handleServoSuppressed);
+    console.log('[PathPlanScreen] 👂 Listening for servo_suppressed events');
+    return () => {
+      socket.off('servo_suppressed', handleServoSuppressed);
+      console.log('[PathPlanScreen] 🔇 Stopped listening for servo_suppressed events');
+    };
+  }, [socket, gpsFailsafeMode]);
 
   // Consolidated auto-save using refs to prevent multiple useEffect triggers
   // This prevents infinite loops from cascading state updates
@@ -837,8 +899,6 @@ export default function PathPlanScreen() {
     });
   };
 
-  const { services } = useRover();
-
   // Helper function to get MIME type for each export format
   const getMimeType = (format: string): string => {
     switch (format) {
@@ -1179,6 +1239,22 @@ export default function PathPlanScreen() {
           setMissionWaypoints(contextWaypoints);
         } catch (contextError) {
           console.error('[PathPlan] Failed to update context:', contextError);
+          // Non-fatal error - mission was uploaded successfully
+        }
+
+        // BUGFIX: Clear mission runtime state when loading a new mission
+        // This prevents the Mission Progress tab from showing stale "mission active" state
+        // that was persisted from a previous mission session
+        try {
+          await Promise.all([
+            PersistentStorage.saveMissionActive(false),        // Reset mission active flag
+            PersistentStorage.saveStatusMap({}),               // Clear old waypoint statuses
+            PersistentStorage.saveMissionStartTime(null),      // Clear old start time
+            PersistentStorage.saveMissionEndTime(null),        // Clear old end time
+          ]);
+          console.log('[PathPlan] ✅ Cleared mission runtime state for new mission upload');
+        } catch (storageError) {
+          console.error('[PathPlan] ⚠️ Failed to clear mission runtime state:', storageError);
           // Non-fatal error - mission was uploaded successfully
         }
 
@@ -1997,6 +2073,47 @@ export default function PathPlanScreen() {
           <ManualControlPanel onExitManualMode={handleCloseManualControl} />
         </View>
       </Modal>
+
+      {/* GPS Failsafe Mode Selector */}
+      <FailsafeModeSelector
+        visible={showFailsafeModeSelector}
+        currentMode={gpsFailsafeMode}
+        onModeChange={setGpsFailsafeMode}
+        onClose={() => setShowFailsafeModeSelector(false)}
+        disabled={telemetry.mission.status !== 'IDLE'}
+      />
+
+      {/* GPS Failsafe Strict Mode Popup */}
+      {showStrictPopup && failsafeEvent && (
+        <FailsafeStrictPopup
+          visible={showStrictPopup}
+          accuracyError={failsafeEvent.accuracy}
+          threshold={failsafeEvent.threshold}
+          onAcknowledge={onFailsafeAcknowledge}
+          onResume={() => {
+            onFailsafeResume();
+            setShowStrictPopup(false);
+          }}
+          onRestart={() => {
+            onFailsafeRestart();
+            setShowStrictPopup(false);
+          }}
+          onStop={() => {
+            services.stopMission();
+            setShowStrictPopup(false);
+          }}
+        />
+      )}
+
+      {/* GPS Failsafe Relax Mode Notification */}
+      {showRelaxNotification && failsafeEvent && (
+        <FailsafeRelaxNotification
+          visible={showRelaxNotification}
+          accuracyError={failsafeEvent.accuracy}
+          threshold={failsafeEvent.threshold}
+          onDismiss={() => setShowRelaxNotification(false)}
+        />
+      )}
 
     </SafeAreaView>
   );

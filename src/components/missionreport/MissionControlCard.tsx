@@ -1,9 +1,10 @@
 import React from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Modal, ActivityIndicator } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, Modal, ActivityIndicator, TextInput } from 'react-native';
 import { colors } from '../../theme/colors';
 import { useRover } from '../../context/RoverContext';
 import { Waypoint } from './types';
 import { Toast } from '../shared/Toast';
+import { validateBulkSkip } from '../../utils/bulkSkipValidator';
 import { useActionGuard, useComponentLifecycle } from '../../hooks/useComponentReadiness';
 
 export type MissionControlCardProps = {
@@ -15,6 +16,7 @@ export type MissionControlCardProps = {
   onResume?: () => Promise<any>;
   onNext?: () => Promise<any>;
   onSkip?: () => Promise<any>;
+  onBulkSkip?: () => Promise<any>;
   onLoadMission?: () => Promise<void>;
   onRestart?: () => void;
   mode: 'AUTO' | 'MANUAL';
@@ -35,7 +37,7 @@ const MissionControlCard: React.FC<MissionControlCardProps> = ({
   onSetMode,
   isMissionActive = false,
 }) => {
-  const { services } = useRover();
+  const { services, telemetry } = useRover();
   const [isLoadingMission, setIsLoadingMission] = React.useState(false);
   const [isTogglingMode, setIsTogglingMode] = React.useState(false);
   const [isStarting, setIsStarting] = React.useState(false);
@@ -45,6 +47,12 @@ const MissionControlCard: React.FC<MissionControlCardProps> = ({
   const [isResuming, setIsResuming] = React.useState(false);
   const [isNexting, setIsNexting] = React.useState(false);
   const [isSkipping, setIsSkipping] = React.useState(false);
+  const [isBulkMode, setIsBulkMode] = React.useState(false);
+  const [showBulkModal, setShowBulkModal] = React.useState(false);
+  const [bulkFrom, setBulkFrom] = React.useState<string>('');
+  const [bulkTo, setBulkTo] = React.useState<string>('');
+  const [bulkError, setBulkError] = React.useState<string | null>(null);
+  const [isBulkSubmitting, setIsBulkSubmitting] = React.useState(false);
   const [isRunning, setIsRunning] = React.useState(false);
   const [confirmAction, setConfirmAction] = React.useState<null | {
     action: string;
@@ -298,19 +306,45 @@ const MissionControlCard: React.FC<MissionControlCardProps> = ({
             <Text style={styles.buttonText}>NEXT MARK</Text>
           </TouchableOpacity>
 
-          <TouchableOpacity
-            style={[
-              styles.controlButton,
-              styles.skipButton,
-              (!isRunning || isSkipping) && styles.buttonDisabled,
-            ]}
-            onPress={handleSkip}
-            disabled={!isRunning || isSkipping}
-          >
-            <Text style={styles.buttonText}>
-              {isSkipping ? '⏳ Skipping...' : 'SKIP MARK'}
-            </Text>
-          </TouchableOpacity>
+          <View style={styles.skipRow}>
+            <TouchableOpacity
+              style={[
+                styles.controlButton,
+                styles.skipButton,
+                (!isRunning || isSkipping) && styles.buttonDisabled,
+                { flex: 1, position: 'relative' },
+              ]}
+              onPress={async () => {
+                if (isBulkMode) {
+                  // open the bulk input modal pre-filled from telemetry
+                  const current = telemetry?.mission?.current_wp ?? 1;
+                  const total = telemetry?.mission?.total_wp ?? 1;
+                  setBulkFrom(String(Math.max(1, current)));
+                  setBulkTo(String(Math.max(1, Math.min(total - 1, current + 1))));
+                  setBulkError(null);
+                  setShowBulkModal(true);
+                } else {
+                  handleSkip();
+                }
+              }}
+              disabled={!isRunning || isSkipping}
+            >
+              <Text style={styles.buttonText}>
+                {isSkipping ? '⏳ Skipping...' : (isBulkMode ? 'BULK SKIP' : 'SKIP MARK')}
+              </Text>
+
+              {/* Inline toggle in top-right corner of the skip button */}
+              <TouchableOpacity
+                style={[styles.bulkToggleInside, isBulkMode ? styles.bulkToggleActive : {}]}
+                onPress={() => setIsBulkMode((v) => !v)}
+                accessibilityLabel="Toggle bulk skip"
+              >
+                <Text style={[styles.bulkToggleText, isBulkMode ? styles.bulkToggleTextActive : {}]}>
+                  {isBulkMode ? 'B' : 'b'}
+                </Text>
+              </TouchableOpacity>
+            </TouchableOpacity>
+          </View>
 
           {/* Mode Toggle */}
           <View style={styles.modeToggle}>
@@ -403,6 +437,97 @@ const MissionControlCard: React.FC<MissionControlCardProps> = ({
           </View>
         </Modal>
 
+        {/* Bulk Skip Modal */}
+        <Modal transparent visible={showBulkModal} animationType="fade">
+          <View style={styles.modalOverlay}>
+            <View style={styles.bulkModalCard}>
+              <Text style={styles.confirmTitle}>Bulk Skip Waypoints</Text>
+              <Text style={styles.confirmText}>Enter waypoint range to skip (mission must be PAUSED).</Text>
+
+              <View style={{ width: '100%', marginTop: 12 }}>
+                <Text style={styles.inputLabel}>From</Text>
+                <TextInput
+                  value={bulkFrom}
+                  onChangeText={(t) => setBulkFrom(t.replace(/[^0-9]/g, ''))}
+                  keyboardType="number-pad"
+                  style={styles.inputField}
+                  placeholder="e.g., 6"
+                />
+
+                <Text style={[styles.inputLabel, { marginTop: 8 }]}>To</Text>
+                <TextInput
+                  value={bulkTo}
+                  onChangeText={(t) => setBulkTo(t.replace(/[^0-9]/g, ''))}
+                  keyboardType="number-pad"
+                  style={styles.inputField}
+                  placeholder="e.g., 7"
+                />
+
+                {bulkError ? <Text style={styles.errorText}>{bulkError}</Text> : null}
+              </View>
+
+              <View style={[styles.confirmButtons, { marginTop: 14 }]}> 
+                <TouchableOpacity style={[styles.confirmButton, styles.cancelBtn]} onPress={() => setShowBulkModal(false)} disabled={isBulkSubmitting}>
+                  <Text style={styles.confirmButtonText}>Cancel</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={[styles.confirmButton, styles.confirmBtn]}
+                  onPress={() => {
+                    setBulkError(null);
+                    const from = parseInt(bulkFrom, 10);
+                    const to = parseInt(bulkTo, 10);
+                    const current = telemetry?.mission?.current_wp ?? 0;
+                    const total = telemetry?.mission?.total_wp ?? 0;
+
+                    const validationError = validateBulkSkip({ from, to, current, total });
+                    if (validationError) {
+                      setBulkError(validationError);
+                      return;
+                    }
+
+                    // Ensure mission is paused on client before sending bulk skip
+                    const missionStatus = (telemetry?.mission?.status || '').toString().toUpperCase();
+                    if (missionStatus !== 'PAUSED') {
+                      setBulkError('Mission must be PAUSED to perform bulk skip');
+                      return;
+                    }
+
+                    // Prepare confirmed action to execute the bulk skip when user confirms
+                    const performBulkSkip = async () => {
+                      setIsBulkSubmitting(true);
+                      try {
+                        let response;
+                        if (onBulkSkip) {
+                          response = await onBulkSkip();
+                        } else {
+                          response = await services.bulkSkipRange(from, to);
+                        }
+                        if (response && response.success) {
+                          showLocalToast('success', `Skipped ${from}-${to}`);
+                          setShowBulkModal(false);
+                        } else {
+                          setBulkError(response?.message || 'Bulk skip failed');
+                        }
+                      } catch (err) {
+                        console.error('[MissionControlCard] bulk skip error', err);
+                        setBulkError((err as any)?.message || 'Bulk skip error');
+                      } finally {
+                        setIsBulkSubmitting(false);
+                      }
+                    };
+
+                    setConfirmAction({ action: `Confirm Skip ${from} → ${to}`, onConfirm: performBulkSkip });
+                  }}
+                  disabled={isBulkSubmitting}
+                >
+                  <Text style={[styles.confirmButtonText, { fontWeight: '700' }]}>{isBulkSubmitting ? 'Skipping...' : 'Confirm Skip'}</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </View>
+        </Modal>
+
         {/* Confirmation Modal - modern styled dialog */}
         <Modal transparent visible={!!confirmAction} animationType="fade">
           <View style={styles.confirmOverlay}>
@@ -461,6 +586,11 @@ const styles = StyleSheet.create({
   buttonsContainer: {
     gap: 12,
   },
+  skipRow: {
+    flexDirection: 'row',
+    gap: 8,
+    alignItems: 'center',
+  },
   controlButton: {
     paddingVertical: 24,
     borderRadius: 10,
@@ -484,6 +614,42 @@ const styles = StyleSheet.create({
   },
   skipButton: {
     backgroundColor: '#0891B2',
+    position: 'relative',
+  },
+  bulkToggle: {
+    width: 48,
+    height: 48,
+    borderRadius: 8,
+    backgroundColor: '#0f172a',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  bulkToggleActive: {
+    backgroundColor: '#F59E0B',
+    borderColor: '#F59E0B',
+  },
+  bulkToggleText: {
+    color: colors.textSecondary,
+    fontSize: 18,
+    fontWeight: '700',
+  },
+  bulkToggleTextActive: {
+    color: '#000',
+  },
+  bulkToggleInside: {
+    position: 'absolute',
+    top: 8,
+    right: 8,
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#0f172a',
+    borderWidth: 1,
+    borderColor: colors.border,
   },
   buttonText: {
     color: '#FFFFFF',
@@ -538,6 +704,35 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     borderWidth: 1,
     borderColor: colors.border,
+  },
+  bulkModalCard: {
+    backgroundColor: colors.secondary,
+    borderRadius: 12,
+    padding: 18,
+    maxWidth: 420,
+    width: '86%',
+    alignItems: 'stretch',
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  inputLabel: {
+    color: colors.textSecondary,
+    fontSize: 12,
+    marginBottom: 6,
+  },
+  inputField: {
+    backgroundColor: '#fff',
+    padding: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: colors.border,
+    color: '#000',
+  },
+  errorText: {
+    color: '#b91c1c',
+    marginTop: 8,
+    fontSize: 13,
+    textAlign: 'center',
   },
   modalTitle: {
     fontSize: 16,

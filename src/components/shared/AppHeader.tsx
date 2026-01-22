@@ -1,7 +1,9 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Image } from 'react-native';
 import { colors } from '../../theme/colors';
 import { TTSToggleButton } from './TTSToggleButton';
+import { FailsafeModeSelector } from '../pathplan/FailsafeModeSelector';
+import { useRover } from '../../context/RoverContext';
 
 interface Props {
   activeTab: 'Dashboard' | 'Marking Plan' | 'Mission Progress' | 'Analytics';
@@ -14,6 +16,30 @@ export const AppHeader: React.FC<Props> = ({
   onTabChange,
   missionMode = 'DGPS Mark',
 }) => {
+  const [showFailsafeModeSelector, setShowFailsafeModeSelector] = useState(false);
+  const { gpsFailsafeMode, setGpsFailsafeMode, telemetry } = useRover();
+  
+  // Determine if mission is active
+  // Mission is considered inactive if:
+  // 1. Status is IDLE/STANDBY/empty
+  // 2. OR mission is completed (current_wp >= total_wp AND total_wp > 0)
+  const missionStatus = (telemetry.mission.status || 'IDLE').toUpperCase();
+  const isMissionCompleted = telemetry.mission.total_wp > 0 && 
+                             telemetry.mission.current_wp >= telemetry.mission.total_wp &&
+                             telemetry.mission.progress_pct >= 100;
+  const isMissionActive = !['IDLE', 'STANDBY', ''].includes(missionStatus) && !isMissionCompleted;
+  
+  // Log mission status changes only (for debugging)
+  React.useEffect(() => {
+    // Only log on significant changes to avoid console spam
+    if (isMissionActive || isMissionCompleted) {
+      console.log('[AppHeader] Mission:', missionStatus, 
+                  '| WP:', telemetry.mission.current_wp + '/' + telemetry.mission.total_wp,
+                  '| Completed:', isMissionCompleted ? 'Yes' : 'No',
+                  '| Failsafe locked:', isMissionActive ? 'Yes' : 'No');
+    }
+  }, [isMissionActive, isMissionCompleted]);
+  
   const getModeIcon = (mode: string): string => {
     switch (mode.toLowerCase()) {
       case 'dgps mark':
@@ -96,6 +122,15 @@ export const AppHeader: React.FC<Props> = ({
       {/* Right: Mission Mode and TTS Control */}
       <View style={styles.rightSection}>
         <TTSToggleButton />
+        <TouchableOpacity
+          onPress={() => setShowFailsafeModeSelector(true)}
+          style={styles.gearButton}
+          accessibilityLabel="Open GPS failsafe settings"
+          accessibilityRole="button"
+          activeOpacity={0.7}
+        >
+          <Text style={styles.gearIcon}>⚙️</Text>
+        </TouchableOpacity>
         <View style={styles.modeBox}>
           <Text style={styles.modeIcon}>{getModeIcon(missionMode)}</Text>
           <View>
@@ -104,6 +139,13 @@ export const AppHeader: React.FC<Props> = ({
           </View>
         </View>
       </View>
+      <FailsafeModeSelector
+        visible={showFailsafeModeSelector}
+        currentMode={gpsFailsafeMode}
+        onModeChange={setGpsFailsafeMode}
+        onClose={() => setShowFailsafeModeSelector(false)}
+        disabled={isMissionActive}
+      />
     </View>
   );
 };
@@ -213,5 +255,21 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: '700',
     marginTop: 1,
+  },
+  gearButton: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#1a75d2',
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    borderWidth: 2,
+    borderColor: '#059669',
+    minWidth: 44,
+    minHeight: 44,
+  },
+  gearIcon: {
+    fontSize: 20,
+    color: '#ffffff',
   },
 });

@@ -1,6 +1,8 @@
 import React from 'react';
 import { View, StyleSheet, Modal, Text, TouchableOpacity, ScrollView } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
+import MissionReportExport from './MissionReportExport';
+import { Waypoint } from './types';
 
 interface MissionCompletionDialogProps {
   visible: boolean;
@@ -14,13 +16,27 @@ interface MissionCompletionDialogProps {
     startTime: string;
     endTime: string;
   };
+  waypoints: Waypoint[];
+  statusMap: Record<number, {
+    reached?: boolean;
+    marked?: boolean;
+    status?: 'completed' | 'loading' | 'skipped' | 'reached' | 'marked' | 'pending';
+    timestamp?: string;
+    pile?: string | number;
+    rowNo?: string | number;
+    remark?: string;
+  }>;
+  missionMode: string | null;
 }
 
 export const MissionCompletionDialog: React.FC<MissionCompletionDialogProps> = ({
   visible,
   onDismiss,
   onExport,
-  missionStats
+  missionStats,
+  waypoints,
+  statusMap,
+  missionMode
 }) => {
   const { totalWaypoints, completedWaypoints, skippedWaypoints, missionDuration, startTime, endTime } = missionStats;
 
@@ -103,10 +119,13 @@ export const MissionCompletionDialog: React.FC<MissionCompletionDialogProps> = (
               <MaterialIcons name="check" size={20} color="#fff" style={styles.okIcon} />
               <Text style={styles.okButtonText}>OK</Text>
             </TouchableOpacity>
-            <TouchableOpacity style={styles.exportButton} onPress={onExport}>
-              <MaterialIcons name="file-download" size={20} color="#fff" style={styles.exportIcon} />
-              <Text style={styles.exportButtonText}>Export Report</Text>
-            </TouchableOpacity>
+            <MissionReportExport
+              waypoints={waypoints}
+              statusMap={statusMap}
+              missionMode={missionMode}
+              onExport={onExport}
+              onExportComplete={() => {}} // Can be used if needed
+            />
           </View>
         </View>
       </View>

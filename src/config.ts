@@ -121,6 +121,7 @@ export const API_ENDPOINTS = {
   MISSION_PAUSE: '/api/mission/pause',
   MISSION_RESUME: '/api/mission/resume',
   MISSION_SET_CURRENT: '/api/mission/set_current',
+  MISSION_COMMAND: '/api/mission/command',
   
   // RTK - New endpoints per documentation
   RTK_NTRIP_START: '/api/rtk/ntrip_start',

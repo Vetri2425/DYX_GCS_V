@@ -41,6 +41,13 @@ export type MissionReportExportProps = {
       pile?: string | number;
       rowNo?: string | number;
       remark?: string;
+      // Accuracy fields
+      hrms?: number;
+      vrms?: number;
+      lat_achieved?: number;
+      lon_achieved?: number;
+      accuracy_level?: string;
+      position_error_mm?: number;
     }
   >;
   missionMode?: string | null;
@@ -63,7 +70,7 @@ const MissionReportExport: React.FC<MissionReportExportProps> = ({
   // Calculate mission statistics
   const totalPoints = waypoints.length;
   const completedPoints = Object.values(statusMap).filter(
-    s => s.status === 'completed' || s.marked,
+    s => s.status === 'completed', // Only count actually completed waypoints, not skipped ones
   ).length;
   const pendingPoints = Object.values(statusMap).filter(
     s => !s.status || s.status === 'pending',
@@ -143,6 +150,11 @@ const MissionReportExport: React.FC<MissionReportExportProps> = ({
           statusDisplay = 'Skipped';
         }
 
+        // Format accuracy display if available
+        const accuracyDisplay = wpStatus?.position_error_mm 
+          ? `${wpStatus.accuracy_level ? wpStatus.accuracy_level.charAt(0).toUpperCase() + wpStatus.accuracy_level.slice(1) : 'Unknown'} - ${(wpStatus.position_error_mm < 10 ? wpStatus.position_error_mm.toFixed(1) : Math.round(wpStatus.position_error_mm))}mm`
+          : '-';
+
         return {
           'S/N': idx + 1,
           ROW: String(row),
@@ -153,6 +165,7 @@ const MissionReportExport: React.FC<MissionReportExportProps> = ({
           Altitude: parseFloat(waypoint.alt.toFixed(2)),
           Status: statusDisplay,
           Timestamp: wpStatus?.timestamp ?? '-',
+          Accuracy: accuracyDisplay,
           Remark: wpStatus?.remark ?? '-',
         };
       });

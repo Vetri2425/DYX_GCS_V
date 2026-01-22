@@ -458,6 +458,27 @@ const toTelemetryEnvelopeFromBridge = (data: any): TelemetryEnvelope | null => {
     touched = true;
   }
 
+  // GPS Failsafe data parsing
+  if (data.gps_failsafe && typeof data.gps_failsafe === 'object') {
+    (envelope as any).gps_failsafe = {
+      mode: data.gps_failsafe.mode || 'disable',
+      triggered: Boolean(data.gps_failsafe.triggered),
+      accuracy_error_mm: typeof data.gps_failsafe.accuracy_error_mm === 'number' ? data.gps_failsafe.accuracy_error_mm : 0,
+      servo_suppressed: Boolean(data.gps_failsafe.servo_suppressed),
+    };
+    touched = true;
+    console.log('[useRoverTelemetry] 🛡️ GPS Failsafe data parsed:', (envelope as any).gps_failsafe);
+  }
+
+  // Log if GPS failsafe related fields exist but weren't captured
+  if (data.gps_failsafe_mode || data.gps_failsafe_triggered || data.gps_failsafe_servo_suppressed) {
+    console.log('[useRoverTelemetry] ⚠️ GPS Failsafe fields found in root:', {
+      mode: data.gps_failsafe_mode,
+      triggered: data.gps_failsafe_triggered,
+      servo_suppressed: data.gps_failsafe_servo_suppressed,
+    });
+  }
+
   return touched ? (envelope as TelemetryEnvelope) : null;
 };
 
@@ -481,6 +502,7 @@ export interface RoverServices {
   stopMission: () => Promise<ServiceResponse>;
   nextMission: () => Promise<ServiceResponse>;
   skipMission: () => Promise<ServiceResponse>;
+  bulkSkipRange: (skipFrom: number, skipTo: number) => Promise<ServiceResponse>;
   // Legacy RTK methods (deprecated)
   injectRTK: (ntripUrl: string) => Promise<ServiceResponse>;
   stopRTK: () => Promise<ServiceResponse>;
@@ -1102,6 +1124,24 @@ export function useRoverTelemetry(): UseRoverTelemetryResult {
           }
         }
       },
+        // Bulk skip range of waypoints (requires mission to be PAUSED per backend rules)
+        // Body: { command: 'bulk_skip', skip_from: number, skip_to: number }
+        // Returns ServiceResponse from backend with details
+        // Example: { success: true, next_waypoint: 8, skipped_count: 2 }
+        // Caller should handle UI confirmation and validation before calling
+        bulkSkipRange: async (skipFrom: number, skipTo: number) => {
+          try {
+            return await postService(API_ENDPOINTS.MISSION_COMMAND, {
+              command: 'bulk_skip',
+              skip_from: skipFrom,
+              skip_to: skipTo,
+            });
+          } catch (err) {
+            console.error('[bulkSkipRange] error calling bulk skip', err);
+            throw err;
+          }
+        },
+        
       pauseMission: () => postService(API_ENDPOINTS.MISSION_PAUSE),
       resumeMission: () => postService(API_ENDPOINTS.MISSION_RESUME),
       injectRTK: async (ntripUrl: string) => {

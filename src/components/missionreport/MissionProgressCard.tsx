@@ -17,6 +17,7 @@ interface Props {
     remark?: string;
   }>;
   isMissionActive?: boolean;
+  roverPosition?: { lat: number; lng: number } | null;
 }
 
 // Layout constants for quick adjustments
@@ -32,11 +33,13 @@ export const MissionProgressCard: React.FC<Props> = ({
   markedCount: providedMarkedCount,
   statusMap = {},
   isMissionActive = false,
+  roverPosition,
 }) => {
   const totalWaypoints = waypoints.length;
 
   // Use provided markedCount (from real-time statusMap) or default to 0
-  const markedCount = providedMarkedCount ?? 0;
+  // Show 0 when mission is not active
+  const markedCount = isMissionActive ? (providedMarkedCount ?? 0) : 0;
 
   // Check if mission is completed
   const isMissionCompleted = waypoints.length > 0 && waypoints.every(wp => {
@@ -56,23 +59,26 @@ export const MissionProgressCard: React.FC<Props> = ({
   }).length;
 
   const nextIndex = (currentIndex ?? -1) + 1;
-  const currentWp = currentIndex !== null && currentIndex >= 0 ? waypoints[currentIndex] : null;
-  const nextWp = nextIndex < totalWaypoints ? waypoints[nextIndex] : null;
+  const currentWp = isMissionActive && currentIndex !== null && currentIndex >= 0 ? waypoints[currentIndex] : null;
+  const nextWp = isMissionActive && nextIndex < totalWaypoints ? waypoints[nextIndex] : null;
 
-  // Calculate distance between current and next waypoint using Vincenty formula
+  // Calculate distance between two points using Vincenty formula
   // (More accurate than Haversine - accurate to within 0.5mm vs ~0.5% error)
-  const calculateDistance = (wp1: Waypoint | null, wp2: Waypoint | null): number => {
-    if (!wp1 || !wp2) return 0;
+  const calculateDistance = (point1: { lat: number; lon?: number; lng?: number } | null, point2: { lat: number; lon?: number; lng?: number } | null): number => {
+    if (!point1 || !point2) return 0;
+
+    const lon1 = point1.lon ?? point1.lng ?? 0;
+    const lon2 = point2.lon ?? point2.lng ?? 0;
 
     // WGS-84 ellipsoid parameters
     const a = 6378137.0; // semi-major axis in meters
     const b = 6356752.314245; // semi-minor axis in meters
     const f = 1 / 298.257223563; // flattening
 
-    const lat1 = (wp1.lat * Math.PI) / 180;
-    const lat2 = (wp2.lat * Math.PI) / 180;
-    const lon1 = (wp1.lon * Math.PI) / 180;
-    const lon2 = (wp2.lon * Math.PI) / 180;
+    const lat1 = (point1.lat * Math.PI) / 180;
+    const lat2 = (point2.lat * Math.PI) / 180;
+    const lon1Rad = (lon1 * Math.PI) / 180;
+    const lon2Rad = (lon2 * Math.PI) / 180;
 
     const L = lon2 - lon1;
     const U1 = Math.atan((1 - f) * Math.tan(lat1));
@@ -140,7 +146,10 @@ export const MissionProgressCard: React.FC<Props> = ({
     return Number.isFinite(distance) && distance >= 0 ? distance : 0;
   };
 
-  const distance = calculateDistance(currentWp, nextWp);
+  // Calculate live distance: from rover position to next waypoint if mission active
+  const distance = isMissionActive && roverPosition && nextWp
+    ? calculateDistance(roverPosition, nextWp)
+    : calculateDistance(currentWp, nextWp);
   const distanceText = distance > 0 ? `${(distance * 100).toFixed(1)}cm` : '—';
 
   return (

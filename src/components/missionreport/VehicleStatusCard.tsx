@@ -133,8 +133,9 @@ export const VehicleStatusCard: React.FC<Props> = ({ status, telemetry, isConnec
           setTotalBytes(bytes);
           lastBytesRef.current = bytes;
           lastTsRef.current = now;
+          // Always sync running state from backend
+          setIsStreamRunning(Boolean(rtk_status.running));
           if (!rtk_status.running) {
-            setIsStreamRunning(false);
             stopMonitor();
           }
         }
@@ -144,7 +145,47 @@ export const VehicleStatusCard: React.FC<Props> = ({ status, telemetry, isConnec
     }, 250);
   }, [services, stopMonitor]);
 
+  // Check RTK status on component mount
+  useEffect(() => {
+    if (services) {
+      const checkInitialStatus = async () => {
+        try {
+          const rtk_status = await services.getRTKStatus();
+          if (rtk_status.success) {
+            setIsStreamRunning(rtk_status.running || false);
+            setTotalBytes(rtk_status.total_bytes || 0);
+            if (rtk_status.running) {
+              startMonitor();
+            }
+          }
+        } catch (err) {
+          console.error('Failed to get initial RTK status:', err);
+        }
+      };
+      checkInitialStatus();
+    }
+  }, [services, startMonitor]);
+
   // Check RTK status on modal open
+  useEffect(() => {
+    if (showRTKModal && services) {
+      const checkStatus = async () => {
+        try {
+          const rtk_status = await services.getRTKStatus();
+          if (rtk_status.success) {
+            setIsStreamRunning(rtk_status.running || false);
+            setTotalBytes(rtk_status.total_bytes || 0);
+            if (rtk_status.running) {
+              startMonitor();
+            }
+          }
+        } catch (err) {
+          console.error('Failed to get RTK status:', err);
+        }
+      };
+      checkStatus();
+    }
+  }, [showRTKModal, services, startMonitor]);
   useEffect(() => {
     if (showRTKModal && services) {
       const checkStatus = async () => {
@@ -229,6 +270,9 @@ export const VehicleStatusCard: React.FC<Props> = ({ status, telemetry, isConnec
         setIsStreamRunning(true);
         setActiveProfileId(profile.id);
         
+        // Immediately start monitoring to sync state from backend
+        startMonitor();
+        
         // Wait a moment then verify actual connection status
         setTimeout(async () => {
           try {
@@ -237,20 +281,19 @@ export const VehicleStatusCard: React.FC<Props> = ({ status, telemetry, isConnec
             if (status.success) {
               if (status.running) {
                 console.log('[RTK] Connection verified - stream is running');
-                startMonitor();
                 Alert.alert('Success', `Connected to ${profile.name}`);
               } else {
                 console.error('[RTK] Stream failed to connect - backend reported not running');
                 setError('Stream started but connection failed. Check credentials and network.');
                 setIsStreamRunning(false);
                 setActiveProfileId(null);
+                stopMonitor();
                 Alert.alert('Connection Failed', 'Stream started but backend connection failed.\n\nCheck:\n• NTRIP credentials\n• Network connectivity\n• Caster availability');
               }
             }
           } catch (err) {
             console.warn('[RTK] Failed to verify connection status:', err);
-            // Still try to start monitor in case status check failed but stream is OK
-            startMonitor();
+            // Monitor already running, keep it going
           }
         }, 1000); // Wait 1 second for backend to establish connection
       } else {
@@ -513,6 +556,7 @@ export const VehicleStatusCard: React.FC<Props> = ({ status, telemetry, isConnec
                 onEditProfile={handleEditProfile}
                 isConnecting={isSubmitting}
                 activeProfileId={activeProfileId}
+                isStreamRunning={isStreamRunning}
               />
             ) : (
               <NTRIPProfileEditor

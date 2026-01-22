@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
+import { TouchableOpacity } from 'react-native';
 import { View, StyleSheet, ScrollView, SafeAreaView, StatusBar, Text, Alert } from 'react-native';
 import { colors } from '../theme/colors';
 import { Toast } from '../components/shared/Toast';
@@ -17,6 +18,7 @@ import { LogClearDialog } from '../components/missionreport/LogClearDialog';
 import { MissionStartConfirmationDialog } from '../components/missionreport/MissionStartConfirmationDialog';
 import { useScreenReadiness } from '../hooks/useComponentReadiness';
 import PersistentStorage from '../services/PersistentStorage';
+import { calculateAccuracy, formatAccuracyDisplay } from '../utils/accuracyCalculation';
 
 // Layout constants — change these to adjust the overall layout quickly
 const LEFT_PANEL_WIDTH = '21%';
@@ -36,6 +38,13 @@ type WpStatus = {
   pile?: string | number;
   rowNo?: string | number;
   remark?: string;
+  // Accuracy tracking fields
+  hrms?: number;           // Horizontal accuracy (meters)
+  vrms?: number;           // Vertical accuracy (meters)
+  lat_achieved?: number;   // Actual rover lat when reached
+  lon_achieved?: number;   // Actual rover lon when reached
+  accuracy_level?: string; // 'excellent' | 'good' | 'fair' | 'poor'
+  position_error_mm?: number; // Distance error in mm
 };
 
 export default function MissionReportScreen() {
@@ -97,6 +106,21 @@ export default function MissionReportScreen() {
   
   // Mission start confirmation dialog state
   const [showStartConfirmationDialog, setShowStartConfirmationDialog] = useState(false);
+
+  // Skip audit / undo support
+  type SkipAuditRecord = {
+    id: string;
+    skipFrom: number;
+    skipTo: number;
+    timestamp: string;
+    previousStatuses: Record<number, WpStatus | null>;
+    undone?: boolean;
+    undoneAt?: string | null;
+  };
+
+  const [skipHistory, setSkipHistory] = useState<SkipAuditRecord[]>([]);
+  const [undoPrompt, setUndoPrompt] = useState<{ visible: boolean; id?: string | null }>({ visible: false, id: null });
+  const undoTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   
   // Full screen map state
   const [isMapFullscreen, setIsMapFullscreen] = useState(false);
@@ -133,6 +157,7 @@ export default function MissionReportScreen() {
   const missionEndTimeRef = useRef(missionEndTime);
   const isMissionActiveRef = useRef(isMissionActive);
   const missionModeRef = useRef(missionMode);
+  const telemetryRef = useRef(telemetry);
 
   // Keep refs in sync with state
   useEffect(() => {
@@ -158,6 +183,10 @@ export default function MissionReportScreen() {
   useEffect(() => {
     missionModeRef.current = missionMode;
   }, [missionMode]);
+
+  useEffect(() => {
+    telemetryRef.current = telemetry;
+  }, [telemetry]);
 
   const showNotification = (type: 'success' | 'error' | 'info', title: string, message?: string, duration = 3000) => {
     // Clear any existing notification timeout to prevent memory leaks
@@ -237,12 +266,34 @@ export default function MissionReportScreen() {
 
     try {
       console.log('[MissionReportScreen] Uploading mission to controller...');
-      
+
       // Load waypoints to mission controller
       const response = await services.loadMissionToController(waypoints as any);
-      
+
       if (response.success) {
         console.log('[MissionReportScreen] Mission uploaded successfully');
+
+        // BUGFIX: Clear mission runtime state when loading a new mission
+        // This prevents stale "mission active" state from showing incorrect button state
+        try {
+          await Promise.all([
+            PersistentStorage.saveMissionActive(false),        // Reset mission active flag
+            PersistentStorage.saveStatusMap({}),               // Clear old waypoint statuses
+            PersistentStorage.saveMissionStartTime(null),      // Clear old start time
+            PersistentStorage.saveMissionEndTime(null),        // Clear old end time
+          ]);
+          // Also update local state to match
+          setIsMissionActive(false);
+          setStatusMap({});
+          setMissionStartTime(null);
+          setMissionEndTime(null);
+          setCurrentIndex(null);
+          console.log('[MissionReportScreen] ✅ Cleared mission runtime state for new mission upload');
+        } catch (storageError) {
+          console.error('[MissionReportScreen] ⚠️ Failed to clear mission runtime state:', storageError);
+          // Non-fatal error - mission was uploaded successfully
+        }
+
         showNotification('success', 'Success', 'Mission uploaded successfully!');
       } else {
         console.error('[MissionReportScreen] Upload failed:', response.message);
@@ -326,17 +377,16 @@ export default function MissionReportScreen() {
     }
   }, [currentIndex, isMissionActive, waypoints, statusMap]);
 
-  // IDLE STATE RESET: When mission ends, reset statusMap to show pending instead of keeping completed
-  // This ensures idle state shows clean "pending" or "-" status instead of old "completed/reached"
+  // PRESERVE STATUS ON MISSION COMPLETION: Keep statusMap after mission ends for export and review
+  // Previously this was clearing statusMap, but that prevented proper export of skipped waypoints
+  // The statusMap should only be cleared when a new mission is started or user manually clears data
   useEffect(() => {
-    if (isMissionActive) return; // Only reset when NOT active
-
-    // If statusMap has entries but mission is idle, it means mission just ended
-    if (Object.keys(statusMap).length > 0 && !isShowingPreviousMission) {
-      console.log('[MissionReportScreen] 🔄 Mission ended - resetting statusMap to pending state');
-      setStatusMap({});
-    }
-  }, [isMissionActive, isShowingPreviousMission, statusMap]);
+    // This effect is intentionally disabled - statusMap is preserved after mission completion
+    // It will be cleared when:
+    // 1. New mission is started (handleStartMission clears it)
+    // 2. User manually clears mission data
+    // 3. Mission is uploaded (PathPlanScreen clears it)
+  }, []);
 
   const handleReorder = (fromIndex: number, direction: 'up' | 'down') => {
     // Only allow reordering of indices >= PINNED_COUNT and keep them >= PINNED_COUNT
@@ -707,7 +757,6 @@ export default function MissionReportScreen() {
   const clearCurrentMissionData = () => {
     console.log('[MissionReportScreen] Clearing current mission data for new mission');
     setStatusMap({});
-    setPreviousMissionData(null); // AUTO-CLEAR: Also clear previous mission logs on new mission start
     setCurrentIndex(null);
     setMissionStartTime(null);
     setMissionEndTime(null);
@@ -897,6 +946,19 @@ export default function MissionReportScreen() {
       console.log('[MissionReportScreen] Requesting backend to skip current waypoint');
       const response = await services.skipMission();
       if (response.success) {
+        // Update statusMap to mark the current waypoint as skipped with remark
+        if (currentIndex !== null && currentIndex >= 0 && waypoints[currentIndex]) {
+          const skippedWp = waypoints[currentIndex];
+          setStatusMap(prev => ({
+            ...prev,
+            [skippedWp.sn]: {
+              ...(prev[skippedWp.sn] || {}),
+              status: 'skipped',
+              timestamp: new Date().toISOString(),
+              remark: 'Skipped',
+            },
+          }));
+        }
         setCurrentIndex(prev => (prev === null ? 0 : Math.min(prev + 1, waypoints.length - 1)));
         console.log('[MissionReportScreen] Skip requested successfully');
         showNotification('success', 'Marking Point Skipped', 'Skipped current marking point successfully');
@@ -1200,6 +1262,99 @@ export default function MissionReportScreen() {
       if (!mountedRef.current) return;
       
       const eventType = event.type || event.event || 'unknown';
+
+      // WORKAROUND: Check if this is a spray suppressed message from SERVER_ACTIVITY
+      // Backend logs "Mission: Spray suppressed: accuracy XXmm > YYmm" but doesn't send proper events
+      // Match only the full "Mission: Spray suppressed" pattern to avoid duplicates
+      if (event.message && typeof event.message === 'string' && event.message.includes('Mission: Spray suppressed')) {
+        console.log('[MissionReportScreen] 🚫 Detected spray suppression message:', event.message);
+        // Mark the most recent waypoint as skipped
+        const currentWpIndex = Object.keys(statusMapRef.current).length;
+        if (currentWpIndex > 0 && currentWpIndex <= waypointsRef.current.length) {
+          const wpId = waypointsRef.current[currentWpIndex - 1]?.sn;
+          if (wpId && statusMapRef.current[wpId]) {
+            console.log(`[MissionReportScreen] ⏭️ Marking waypoint ${wpId} as SKIPPED (spray suppressed)`);
+            setStatusMap(prev => ({
+              ...prev,
+              [wpId]: {
+                ...prev[wpId],
+                status: 'skipped',
+                remark: 'Skipped - GPS accuracy too low',
+              },
+            }));
+          }
+        }
+      }
+
+      // Handle bulk skip events (backend emits event_type: 'bulk_skip')
+      if (eventType === 'bulk_skip' || event.event_type === 'bulk_skip' || (event.data && event.data.event_type === 'bulk_skip')) {
+        try {
+          const skipFrom = event.skip_from ?? event.data?.skip_from ?? event.skipped_from ?? event.data?.skipped_from;
+          const skipTo = event.skip_to ?? event.data?.skip_to ?? event.skipped_to ?? event.data?.skipped_to;
+          const nextWp = event.next_waypoint ?? event.data?.next_waypoint ?? event.next_waypoint_id ?? null;
+          console.log('[MissionReportScreen] ⏭️ Bulk skip event received', { skipFrom, skipTo, nextWp });
+
+          if (typeof skipFrom === 'number' && typeof skipTo === 'number' && skipTo >= skipFrom) {
+            const timestamp = event.timestamp ? (typeof event.timestamp === 'string' ? event.timestamp : new Date(event.timestamp).toISOString()) : new Date().toISOString();
+            // Capture previous statuses for audit/undo
+            const prevStatuses: Record<number, WpStatus | null> = {};
+            waypointsRef.current.forEach(wp => {
+              if (wp.sn >= skipFrom && wp.sn <= skipTo) {
+                prevStatuses[wp.sn] = statusMapRef.current[wp.sn] ?? null;
+              }
+            });
+
+            const recordId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+            const auditRecord: any = {
+              id: recordId,
+              skipFrom,
+              skipTo,
+              timestamp,
+              previousStatuses: prevStatuses,
+            };
+
+            // Persist audit record (best-effort)
+            PersistentStorage.saveSkipAuditRecord(auditRecord).catch(err => console.warn('[MissionReportScreen] Failed to save skip audit', err));
+
+            // Store in local history for quick undo
+            setSkipHistory(prev => [auditRecord as any].concat(prev));
+
+            // Show undo prompt for a short window
+            if (undoTimerRef.current) {
+              clearTimeout(undoTimerRef.current);
+            }
+            setUndoPrompt({ visible: true, id: recordId });
+            undoTimerRef.current = setTimeout(() => {
+              setUndoPrompt({ visible: false, id: null });
+              undoTimerRef.current = null;
+            }, 8000);
+
+            // Mark each waypoint in the range as skipped (by sn)
+            setStatusMap(prev => {
+              const copy = { ...prev };
+              waypointsRef.current.forEach(wp => {
+                if (wp.sn >= skipFrom && wp.sn <= skipTo) {
+                  copy[wp.sn] = {
+                    ...(copy[wp.sn] || {}),
+                    status: 'skipped',
+                    timestamp,
+                    remark: 'Skipped (bulk)',
+                  } as WpStatus;
+                }
+              });
+              return copy;
+            });
+
+            // Advance current index to next waypoint if provided
+            if (typeof nextWp === 'number' && nextWp > 0) {
+              const newIndex = Math.max(0, nextWp - 1);
+              setCurrentIndex(newIndex);
+            }
+          }
+        } catch (err) {
+          console.error('[MissionReportScreen] Error processing bulk_skip event', err);
+        }
+      }
       
       // DEBUG: Log ALL mission events to diagnose the issue
       // console.log(`[MissionReportScreen] 🔔 ALL Mission Events [${eventType}]`, {
@@ -1231,6 +1386,28 @@ export default function MissionReportScreen() {
         const targetWaypoint = waypointsRef.current.find(wp => wp.sn === wpId);
         const statusKey = targetWaypoint ? targetWaypoint.sn : wpId;
         
+        // Capture rover's current position and accuracy from telemetry
+        const roverLat = telemetryRef.current.global?.lat;
+        const roverLon = telemetryRef.current.global?.lon;
+        const hrms = telemetryRef.current.hrms;
+        const vrms = telemetryRef.current.vrms;
+        
+        // Calculate accuracy if we have position data and target waypoint
+        let accuracyData: { accuracy_level?: string; position_error_mm?: number } = {};
+        if (targetWaypoint && roverLat != null && roverLon != null && roverLat !== 0 && roverLon !== 0) {
+          const { errorMm, accuracy } = calculateAccuracy(
+            targetWaypoint.lat,
+            targetWaypoint.lon,
+            roverLat,
+            roverLon
+          );
+          accuracyData = {
+            accuracy_level: accuracy.level,
+            position_error_mm: errorMm,
+          };
+          console.log(`[MissionReportScreen] 📊 Accuracy calculated for WP ${statusKey}: ${errorMm.toFixed(1)}mm (${accuracy.label})`);
+        }
+        
         const prevEntry = statusMapRef.current[statusKey];
         const nextEntry = {
           ...(prevEntry || {}),
@@ -1239,13 +1416,19 @@ export default function MissionReportScreen() {
           timestamp,
           pile: event.pile ?? prevEntry?.pile,
           rowNo: event.rowNo ?? event.row_no ?? prevEntry?.rowNo,
+          hrms: hrms ?? prevEntry?.hrms,
+          vrms: vrms ?? prevEntry?.vrms,
+          lat_achieved: roverLat ?? prevEntry?.lat_achieved,
+          lon_achieved: roverLon ?? prevEntry?.lon_achieved,
+          ...accuracyData,
         } as WpStatus;
 
         const changed = !prevEntry ||
           prevEntry.status !== nextEntry.status ||
           prevEntry.reached !== nextEntry.reached ||
           prevEntry.pile !== nextEntry.pile ||
-          prevEntry.rowNo !== nextEntry.rowNo;
+          prevEntry.rowNo !== nextEntry.rowNo ||
+          prevEntry.accuracy_level !== nextEntry.accuracy_level;
 
         if (changed) {
           setStatusMap(prev => ({
@@ -1268,7 +1451,16 @@ export default function MissionReportScreen() {
           : new Date().toISOString();
         const markingStatus = event.marking_status ?? event.markingStatus ?? event.status ?? event.data?.marking_status ?? 'completed';
         
+        // DEBUG: Log the full event to see what backend is sending
+        console.log('[MissionReportScreen] 📦 Full waypoint event:', JSON.stringify(event, null, 2));
         console.log(`[MissionReportScreen] ✅ Processing waypoint_marked/completed: wpId=${wpId}, status=${markingStatus}`);
+        console.log('[MissionReportScreen] 🔍 Event fields:', {
+          marking_status: event.marking_status,
+          markingStatus: event.markingStatus,
+          status: event.status,
+          servo_suppressed: event.servo_suppressed,
+          gps_failsafe: event.gps_failsafe,
+        });
         
         // Find the corresponding waypoint by waypoint_id to get the correct sn
         const targetWaypoint = waypointsRef.current.find(wp => wp.sn === wpId);
@@ -1282,7 +1474,7 @@ export default function MissionReportScreen() {
           timestamp,
           pile: event.pile ?? prevEntry?.pile,
           rowNo: event.rowNo ?? event.row_no ?? prevEntry?.rowNo,
-          remark: event.remark ?? prevEntry?.remark ?? '—',
+          remark: event.remark ?? (markingStatus === 'skipped' ? 'Skipped' : prevEntry?.remark),
         } as WpStatus;
 
         const changed = !prevEntry ||
@@ -1369,6 +1561,14 @@ export default function MissionReportScreen() {
 
       // Handle mission status updates (high frequency - no notifications)
       if (eventType === 'mission_status') {
+        // Check if mission was paused (by GPS failsafe or manual action)
+        if (event.mission_state === 'paused' || event.mission_state === 'PAUSED') {
+          console.log('[MissionReportScreen] 🔴 MISSION STATE CHANGED TO PAUSED');
+          console.log('[MissionReportScreen] 📋 Pause reason:', event.pause_reason || event.reason || 'Unknown');
+          console.log('[MissionReportScreen] 📋 GPS Failsafe mode:', gpsFailsafeMode);
+          console.log('[MissionReportScreen] 📋 Full pause event:', JSON.stringify(event));
+        }
+        
         let statusUpdated = false;
 
         if (event.current_waypoint != null) {
@@ -1469,8 +1669,24 @@ export default function MissionReportScreen() {
         // setTrailPoints([]); // Clear trail on new mission start
       }
 
-      if (eventType === 'mission_paused') {
+      if (eventType === 'mission_paused' || event.mission_state === 'paused' || 
+          (event.data && event.data.mission_state === 'paused')) {
         console.log('[MissionReportScreen] ⏸️ Mission paused');
+        console.log('[MissionReportScreen] 📋 Pause event details:', {
+          eventType,
+          mission_state: event.mission_state,
+          gps_failsafe_triggered: event.gps_failsafe_triggered,
+          reason: event.reason,
+          current_waypoint: event.current_waypoint,
+          accuracy_error: event.accuracy_error_mm,
+          full_event: JSON.stringify(event)
+        });
+        // Show notification to user
+        showNotification(
+          'warning',
+          'Mission Paused',
+          event.reason || 'Mission paused by system'
+        );
       }
 
       if (eventType === 'mission_resumed') {
@@ -1589,6 +1805,7 @@ export default function MissionReportScreen() {
                 markedCount={markedCount}
                 statusMap={getDisplayMissionData().statusMap}
                 isMissionActive={isMissionActive}
+                roverPosition={roverPosition}
               />
             </View>
             <View style={styles.centerPanel}>
@@ -1645,6 +1862,53 @@ export default function MissionReportScreen() {
         message={notification.message}
       />
 
+      {/* Undo prompt for recent bulk-skip */}
+      {undoPrompt.visible && (
+        <View style={styles.undoBanner}>
+          <Text style={styles.undoText}>Bulk skip performed — </Text>
+          <TouchableOpacity
+            style={styles.undoButton}
+            onPress={async () => {
+              const id = undoPrompt.id;
+              if (!id) return;
+              // Find record
+              const rec = skipHistory.find(r => r.id === id);
+              if (!rec) return;
+
+              // Restore previous statuses
+              setStatusMap(prev => {
+                const copy = { ...prev };
+                Object.keys(rec.previousStatuses).forEach(k => {
+                  const sn = parseInt(k, 10);
+                  const prevEntry = rec.previousStatuses[sn];
+                  if (!prevEntry) {
+                    delete copy[sn];
+                  } else {
+                    copy[sn] = prevEntry;
+                  }
+                });
+                return copy;
+              });
+
+              // Mark audit record undone in persistent storage
+              await PersistentStorage.markSkipAuditUndone(id).catch(err => console.warn('[MissionReportScreen] Failed to mark audit undone', err));
+
+              // Remove prompt and record
+              setSkipHistory(prev => prev.filter(r => r.id !== id));
+              setUndoPrompt({ visible: false, id: null });
+              if (undoTimerRef.current) {
+                clearTimeout(undoTimerRef.current);
+                undoTimerRef.current = null;
+              }
+
+              showNotification('info', 'Undo', 'Bulk skip undone locally');
+            }}
+          >
+            <Text style={styles.undoButtonText}>Undo</Text>
+          </TouchableOpacity>
+        </View>
+      )}
+
         <RTKInjectionScreen
           visible={showRTKInjection}
           onClose={closeRTKInjection}
@@ -1677,12 +1941,11 @@ export default function MissionReportScreen() {
           console.log('[MissionReportScreen] 📋 Closing mission completion dialog');
           setShowCompletionDialog(false);
         }}
-        onExport={() => {
-          console.log('[MissionReportScreen] 📤 Exporting mission report from completion dialog');
-          setShowCompletionDialog(false);
-          handleExport();
-        }}
+        onExport={handleExport}
         missionStats={getMissionStats()}
+        waypoints={waypoints}
+        statusMap={statusMap}
+        missionMode={missionMode}
       />
 
       {/* Clear Logs After Export Dialog */}
@@ -1783,5 +2046,35 @@ const styles = StyleSheet.create({
   fullscreenMap: {
     flex: 1,
     backgroundColor: '#0A1628',
+  },
+  undoBanner: {
+    position: 'absolute',
+    left: 20,
+    right: 20,
+    bottom: 110,
+    backgroundColor: '#072334',
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    borderRadius: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.06)'
+  },
+  undoText: {
+    color: '#E6F7FF',
+    fontSize: 13,
+  },
+  undoButton: {
+    marginLeft: 10,
+    backgroundColor: '#0ea5a5',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 6,
+  },
+  undoButtonText: {
+    color: '#001219',
+    fontWeight: '700'
   },
 });

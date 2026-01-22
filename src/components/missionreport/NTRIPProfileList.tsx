@@ -23,6 +23,7 @@ interface Props {
   onEditProfile: (profile: NTRIPProfile) => void;
   isConnecting?: boolean;
   activeProfileId?: string | null;
+  isStreamRunning?: boolean;
 }
 
 export const NTRIPProfileList: React.FC<Props> = ({
@@ -31,6 +32,7 @@ export const NTRIPProfileList: React.FC<Props> = ({
   onEditProfile,
   isConnecting = false,
   activeProfileId = null,
+  isStreamRunning = false,
 }) => {
   const [profiles, setProfiles] = useState<NTRIPProfile[]>([]);
   const [loading, setLoading] = useState(true);
@@ -140,7 +142,7 @@ export const NTRIPProfileList: React.FC<Props> = ({
                   style={[
                     styles.connectButton,
                     (isConnecting || deletingId === profile.id) && styles.buttonDisabled,
-                    activeProfileId === profile.id && styles.connectButtonActive,
+                    isStreamRunning && activeProfileId === profile.id && styles.connectButtonActive,
                   ]}
                   onPress={() => onSelectProfile(profile)}
                   disabled={isConnecting || deletingId === profile.id}
@@ -149,7 +151,7 @@ export const NTRIPProfileList: React.FC<Props> = ({
                     <ActivityIndicator size="small" color="#fff" />
                   ) : (
                     <Text style={styles.connectButtonText}>
-                      {activeProfileId === profile.id ? 'Connected' : 'Connect'}
+                      {isStreamRunning && activeProfileId === profile.id ? 'Connected' : 'Connect'}
                     </Text>
                   )}
                 </TouchableOpacity>
