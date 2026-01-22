@@ -38,6 +38,9 @@ yarn-error.*
 # Windows nul files (accidentally created)
 nul
 
+# Ignore backup APKs
+Backup Apks/
+
 
 # typescript
 *.tsbuildinfo
