@@ -11,10 +11,10 @@ interface ModeSelectionDialogProps {
 
 const AVAILABLE_MODES = [
   { id: 'DGPS Mark', label: 'DGPS Mark', description: 'Mark points mission', icon: '📍' },
-  { id: 'Interval Spray', label: 'Interval Spray', description: 'Time-based spray intervals', icon: '💧' },
+  { id: 'Dash', label: 'Dash', description: 'ON/OFF spray pattern with configurable distance', icon: '➖' },
+  { id: 'Continuous', label: 'Continuous', description: 'Continuous marking mode', icon: '🔄' },
   { id: 'Survey', label: 'Survey', description: 'Area survey mission', icon: '🗺️' },
   { id: 'Manual Control', label: 'Manual Control', description: 'Direct rover control', icon: '🎮' },
-  { id: 'Custom', label: 'Custom', description: 'Custom mission mode', icon: '⚙️' },
 ];
 
 export const ModeSelectionDialog: React.FC<ModeSelectionDialogProps> = ({

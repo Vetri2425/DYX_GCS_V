@@ -84,6 +84,12 @@ export function RoverProvider({ children }: RoverProviderProps): React.ReactElem
   }, [rover.telemetry.gps_failsafe]);
 
   const setMissionWaypoints = useCallback((waypoints: Waypoint[]) => {
+    // Guard against undefined/null
+    if (!waypoints || !Array.isArray(waypoints)) {
+      console.warn('[RoverContext] Attempted to set invalid waypoints:', waypoints);
+      return;
+    }
+
     // Avoid redundant updates that can trigger render/effect loops
     setMissionWaypointsState(prev => {
       const sameLength = prev.length === waypoints.length;
@@ -91,7 +97,7 @@ export function RoverProvider({ children }: RoverProviderProps): React.ReactElem
           const n = waypoints[i];
           const pDistance = (p as any).distance ?? 0;
           const nDistance = (n as any).distance ?? 0;
-          return p.lat === n.lat && p.lon === n.lon && p.alt === n.alt && p.sn === n.sn && p.status === n.status && Number(pDistance) === Number(nDistance);
+          return p.lat === n.lat && p.lon === n.lon && p.alt === n.alt && p.sn === n.sn && p.status === n.status && Number(pDistance) === Number(nDistance) && p.mark === n.mark;
         });
       if (shallowSame) {
         return prev;
@@ -162,25 +168,47 @@ export function RoverProvider({ children }: RoverProviderProps): React.ReactElem
 
   // Listen for GPS failsafe events
   useEffect(() => {
-    if (!rover.socket) return;
+    if (!rover.socket || rover.connectionState !== 'connected') {
+      // Only log when connection state changes to avoid spam
+      if (rover.connectionState !== 'connecting') {
+        console.log('[RoverContext] ⚠️ Socket not ready for GPS failsafe listener. Connection state:', rover.connectionState);
+      }
+      return;
+    }
+
+    console.log('[RoverContext] 🔌 Registering GPS failsafe listeners. Connection state:', rover.connectionState);
 
     const handleServoSuppressed = (event: GpsFailsafeEvent) => {
       console.log('[RoverContext] 🚫 Servo suppressed event:', event);
     };
 
     const handleFailsafeModeChanged = (data: { mode: GpsFailsafeMode }) => {
-      console.log('[RoverContext] ⚙️ Failsafe mode changed from backend:', data.mode);
+      console.log('═══════════════════════════════════════');
+      console.log('[RoverContext] 🔔 RECEIVED FAILSAFE MODE FROM BACKEND');
+      console.log('═══════════════════════════════════════');
+      console.log('Previous Mode:', gpsFailsafeMode);
+      console.log('New Mode:', data.mode);
+      console.log('Full Data:', data);
+      console.log('═══════════════════════════════════════');
       setGpsFailsafeModeState(data.mode);
+      console.log('✅ State updated to:', data.mode);
     };
 
     rover.socket.on('servo_suppressed', handleServoSuppressed);
     rover.socket.on('failsafe_mode_changed', handleFailsafeModeChanged);
+    console.log('[RoverContext] ✅ GPS failsafe listeners registered');
+
+    // ✅ FIX: Request current GPS failsafe mode after registering listener
+    // This prevents race condition where backend sends mode before listener is ready
+    console.log('[RoverContext] 📡 Requesting current GPS failsafe mode from backend');
+    rover.socket.emit('request_gps_failsafe_mode');
 
     return () => {
+      console.log('[RoverContext] 🔌 Unregistering GPS failsafe listeners');
       rover.socket?.off('servo_suppressed', handleServoSuppressed);
       rover.socket?.off('failsafe_mode_changed', handleFailsafeModeChanged);
     };
-  }, [rover.socket]);
+  }, [rover.socket, rover.connectionState]);
 
   // ✅ CRITICAL FIX: Memoize stable values separately to prevent infinite loops
   // while still allowing telemetry updates to propagate instantly to consumers.

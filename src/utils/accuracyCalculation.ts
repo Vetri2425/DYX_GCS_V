@@ -36,10 +36,10 @@ export function calculateHaversineDistance(
 
 /**
  * Determine accuracy level based on position error
- * Thresholds:
- * - Excellent: ≤ 30mm
- * - Good: 30-60mm
- * - Poor: > 60mm
+ * Thresholds (in mm):
+ * - Excellent: ≤ 30 mm
+ * - Good: 30-60 mm
+ * - Poor: > 60 mm (triggers servo suppression)
  * @param errorMm Position error in millimeters
  * @returns Object with accuracy level and color
  */
@@ -50,13 +50,13 @@ export interface AccuracyResult {
 }
 
 export function getAccuracyLevel(errorMm: number): AccuracyResult {
-  if (errorMm <= 30) {
+  if (errorMm <= 30.0) {
     return {
       level: 'excellent',
       color: '#10B981', // Green
       label: 'Excellent',
     };
-  } else if (errorMm < 60) {
+  } else if (errorMm <= 60.0) {
     return {
       level: 'good',
       color: '#F59E0B', // Orange
@@ -112,10 +112,10 @@ export function calculateAccuracy(
  * Format accuracy display string
  * @param errorMm Error in millimeters
  * @param accuracy Accuracy result
- * @returns Formatted string like "Excellent - 35mm"
+ * @returns Formatted string like "Excellent - 35.0mm"
  */
 export function formatAccuracyDisplay(errorMm: number, accuracy: AccuracyResult): string {
-  // Round to 1 decimal place if < 10mm, otherwise round to whole number
-  const displayError = errorMm < 10 ? errorMm.toFixed(1) : Math.round(errorMm).toString();
+  // Always show 1 decimal place for mm values
+  const displayError = errorMm.toFixed(1);
   return `${accuracy.label} - ${displayError}mm`;
 }

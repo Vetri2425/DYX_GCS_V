@@ -170,3 +170,21 @@ export const calculateMissionStatistics = (
 };
 
 export const haversineDistance = calculateDistance;
+
+/**
+ * Recalculate distances for all waypoints after reordering.
+ * First waypoint gets distance = 0, subsequent ones get distance from previous.
+ */
+export const recalculateWaypointDistances = (
+    waypoints: PathPlanWaypoint[]
+): PathPlanWaypoint[] => {
+    return waypoints.map((wp, idx) => {
+        if (idx === 0) return { ...wp, distance: 0 };
+        const prev = waypoints[idx - 1];
+        const dist = calculateDistance(
+            { lat: prev.lat, lon: prev.lon },
+            { lat: wp.lat, lon: wp.lon }
+        );
+        return { ...wp, distance: dist };
+    });
+};

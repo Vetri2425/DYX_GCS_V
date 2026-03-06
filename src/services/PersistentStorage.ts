@@ -81,6 +81,12 @@ class PersistentStorageService {
    */
   async saveWaypoints(waypoints: Waypoint[]): Promise<boolean> {
     try {
+      // Guard against undefined/null
+      if (!waypoints || !Array.isArray(waypoints)) {
+        console.warn('[Storage] Skipping save - waypoints is invalid:', waypoints);
+        return false;
+      }
+
       const data = JSON.stringify(waypoints);
       await AsyncStorage.setItem(STORAGE_KEYS.MISSION_WAYPOINTS, data);
       await this.updateLastSaveTimestamp();

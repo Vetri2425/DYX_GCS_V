@@ -6,7 +6,7 @@
 import axios from 'axios';
 import { JetsonDevice } from './jetsonDiscovery';
 
-const DEFAULT_IP = '192.168.1.102';
+const DEFAULT_IP = '192.168.0.212';
 const CONNECTION_TIMEOUT = 5000; // 5 seconds
 
 /**
@@ -14,8 +14,8 @@ const CONNECTION_TIMEOUT = 5000; // 5 seconds
  */
 const PRIORITY_ORDER = [
   // Highest priority
-  '192.168.1.102',
-  '192.168.1.212',
+  '192.168.0.212',
+  '192.168.0.212',
   '192.168.1.213',
 
   // Remaining allowed in desired blocks
@@ -90,7 +90,7 @@ async function testConnection(ip: string, port: number = 5001): Promise<JetsonDe
 export async function attemptAutoConnect(
   onProgress?: (message: string) => void
 ): Promise<JetsonDevice | null> {
-  // Step 1: Try default IP first (192.168.1.102)
+  // Step 1: Try default IP first (192.168.0.212)
   if (onProgress) onProgress(`Connecting to ${DEFAULT_IP}...`);
 
   const defaultConnection = await testConnection(DEFAULT_IP);

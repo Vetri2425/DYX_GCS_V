@@ -4,8 +4,8 @@ import { colors } from '../../theme/colors';
 
 interface FailsafeStrictPopupProps {
   visible: boolean;
-  accuracyError: number;
-  threshold: number;
+  wpDistCm: number;      // Distance to waypoint in cm (replaces accuracyError)
+  thresholdCm: number;   // Threshold in cm (6.0 cm for servo suppression)
   onAcknowledge: () => void;
   onResume: () => void;
   onRestart: () => void;
@@ -14,8 +14,8 @@ interface FailsafeStrictPopupProps {
 
 export const FailsafeStrictPopup: React.FC<FailsafeStrictPopupProps> = ({
   visible,
-  accuracyError,
-  threshold,
+  wpDistCm,
+  thresholdCm,
   onAcknowledge,
   onResume,
   onRestart,
@@ -77,15 +77,15 @@ export const FailsafeStrictPopup: React.FC<FailsafeStrictPopupProps> = ({
               </Animated.View>
               <Text style={styles.title}>GPS Failsafe Triggered</Text>
               <View style={styles.infoBox}>
-                <Text style={styles.infoLabel}>Accuracy Error:</Text>
-                <Text style={styles.infoValue}>{accuracyError.toFixed(1)} mm</Text>
+                <Text style={styles.infoLabel}>WP Distance:</Text>
+                <Text style={styles.infoValue}>{wpDistCm.toFixed(1)} cm</Text>
               </View>
               <View style={styles.infoBox}>
                 <Text style={styles.infoLabel}>Threshold:</Text>
-                <Text style={styles.infoValue}>{threshold.toFixed(0)} mm</Text>
+                <Text style={styles.infoValue}>{thresholdCm.toFixed(1)} cm</Text>
               </View>
               <Text style={styles.message}>
-                GPS accuracy has exceeded the safe threshold. Mission has been paused. Please acknowledge to
+                Waypoint distance has exceeded the safe threshold. Mission has been paused. Please acknowledge to
                 continue.
               </Text>
               <TouchableOpacity style={styles.buttonPrimary} onPress={handleAcknowledge}>

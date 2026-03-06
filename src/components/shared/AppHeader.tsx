@@ -1,8 +1,7 @@
 import React, { useState } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Image } from 'react-native';
 import { colors } from '../../theme/colors';
-import { TTSToggleButton } from './TTSToggleButton';
-import { FailsafeModeSelector } from '../pathplan/FailsafeModeSelector';
+import { SettingsScreen } from '../../screens/SettingsScreen';
 import { useRover } from '../../context/RoverContext';
 
 interface Props {
@@ -16,29 +15,8 @@ export const AppHeader: React.FC<Props> = ({
   onTabChange,
   missionMode = 'DGPS Mark',
 }) => {
-  const [showFailsafeModeSelector, setShowFailsafeModeSelector] = useState(false);
-  const { gpsFailsafeMode, setGpsFailsafeMode, telemetry } = useRover();
-  
-  // Determine if mission is active
-  // Mission is considered inactive if:
-  // 1. Status is IDLE/STANDBY/empty
-  // 2. OR mission is completed (current_wp >= total_wp AND total_wp > 0)
-  const missionStatus = (telemetry.mission.status || 'IDLE').toUpperCase();
-  const isMissionCompleted = telemetry.mission.total_wp > 0 && 
-                             telemetry.mission.current_wp >= telemetry.mission.total_wp &&
-                             telemetry.mission.progress_pct >= 100;
-  const isMissionActive = !['IDLE', 'STANDBY', ''].includes(missionStatus) && !isMissionCompleted;
-  
-  // Log mission status changes only (for debugging)
-  React.useEffect(() => {
-    // Only log on significant changes to avoid console spam
-    if (isMissionActive || isMissionCompleted) {
-      console.log('[AppHeader] Mission:', missionStatus, 
-                  '| WP:', telemetry.mission.current_wp + '/' + telemetry.mission.total_wp,
-                  '| Completed:', isMissionCompleted ? 'Yes' : 'No',
-                  '| Failsafe locked:', isMissionActive ? 'Yes' : 'No');
-    }
-  }, [isMissionActive, isMissionCompleted]);
+  const [showSettings, setShowSettings] = useState(false);
+  const { telemetry } = useRover();
   
   const getModeIcon = (mode: string): string => {
     switch (mode.toLowerCase()) {
@@ -119,13 +97,12 @@ export const AppHeader: React.FC<Props> = ({
         </View>
       </View>
 
-      {/* Right: Mission Mode and TTS Control */}
+      {/* Right: Mission Mode and Settings */}
       <View style={styles.rightSection}>
-        <TTSToggleButton />
         <TouchableOpacity
-          onPress={() => setShowFailsafeModeSelector(true)}
+          onPress={() => setShowSettings(true)}
           style={styles.gearButton}
-          accessibilityLabel="Open GPS failsafe settings"
+          accessibilityLabel="Open settings"
           accessibilityRole="button"
           activeOpacity={0.7}
         >
@@ -139,13 +116,9 @@ export const AppHeader: React.FC<Props> = ({
           </View>
         </View>
       </View>
-      <FailsafeModeSelector
-        visible={showFailsafeModeSelector}
-        currentMode={gpsFailsafeMode}
-        onModeChange={setGpsFailsafeMode}
-        onClose={() => setShowFailsafeModeSelector(false)}
-        disabled={isMissionActive}
-      />
+
+      {/* Settings Screen Modal */}
+      <SettingsScreen visible={showSettings} onClose={() => setShowSettings(false)} />
     </View>
   );
 };

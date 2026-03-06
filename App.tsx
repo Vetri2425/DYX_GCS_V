@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { NavigationContainer } from '@react-navigation/native';
 import TabNavigator from './src/navigation/TabNavigator';
 import { StatusBar, View, Text, TouchableOpacity, StyleSheet, TextInput, ScrollView, KeyboardAvoidingView, Platform, Alert } from 'react-native';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { RoverProvider } from './src/context/RoverContext';
 import { ComponentReadinessProvider } from './src/context/ComponentReadinessContext';
 // SystemReadinessOverlay removed - too aggressive, blocks UI unnecessarily
@@ -16,8 +17,8 @@ import { Ionicons } from '@expo/vector-icons';
 // Initialize global crash handler ONCE at module load
 GlobalCrashHandler.initialize();
 
-// Fallback rover IPs in priority order
-const FALLBACK_IPS = ['192.168.1.102', '192.168.1.212'];
+// Fallback rover IPs in priority order - 192.168.0.212 is primary (working IP)
+const FALLBACK_IPS = ['192.168.0.212', '192.168.0.212', '192.168.1.103'];
 
 /**
  * Test if a backend URL is reachable with graceful retry probing.
@@ -26,21 +27,24 @@ const FALLBACK_IPS = ['192.168.1.102', '192.168.1.212'];
  */
 async function testBackendConnection(url: string, timeout: number = 10000): Promise<boolean> {
   const start = Date.now();
-  const perAttemptTimeout = 2000; // 2s per request attempt
-  const delayBetweenAttempts = 800; // ~0.8s between attempts
+  const perAttemptTimeout = 3000; // 3s per request attempt (increased)
+  const delayBetweenAttempts = 500; // 0.5s between attempts
 
   console.log(`[testBackendConnection] 🔎 Probing ${url} for up to ${timeout}ms...`);
 
   while (Date.now() - start < timeout) {
     const attemptStart = Date.now();
     try {
-      console.log(`[testBackendConnection] Attempting GET ${url}/api/tts/status with ${perAttemptTimeout}ms timeout`);
-      const response = await axios.get(`${url}/api/tts/status`, {
+      console.log(`[testBackendConnection] Attempting GET ${url}/api/mission/status with ${perAttemptTimeout}ms timeout`);
+      const response = await axios.get(`${url}/api/mission/status`, {
         timeout: perAttemptTimeout,
         validateStatus: () => true,
+        headers: {
+          'Accept': 'application/json',
+        },
       });
       const elapsed = Date.now() - start;
-      console.log(`[testBackendConnection] ✅ Reachable (status ${response.status}) after ${elapsed}ms`, response.data);
+      console.log(`[testBackendConnection] ✅ Reachable (status ${response.status}) after ${elapsed}ms`);
       return response.status < 500;
     } catch (err: any) {
       const attemptElapsed = Date.now() - attemptStart;
@@ -106,58 +110,20 @@ function AppContent() {
     setRetrying(true);
     setConnectionStatus('');
     setBackendUnreachable(false);
-    
+
     // Initialize dynamic backend URL from storage if present, else use .env/default
     await initializeBackendURL();
 
-    // Test 192.168.1.102 with 5 second timeout
-    setConnectionStatus('Testing primary backend 192.168.1.102 (5s timeout)...');
-    console.log('Testing primary backend: 192.168.1.102 (5s timeout)...');
-    const primaryURL = 'http://192.168.1.102:5001';
-    const perAttemptMs = 5000; // 5s per attempt
-    const attemptsPerHost = 1;   // 1 attempt per host -> 5s
+    console.log('[initBackend] 🔍 Skipping HTTP test, using Socket.IO connection');
 
-    // Primary host
-    const primaryOk = await probeWithAttempts(
-      primaryURL,
-      attemptsPerHost,
-      perAttemptMs,
-      (msg) => setConnectionStatus(`Primary: ${msg}`),
-      'Primary',
-    );
-    if (primaryOk) {
-      console.log('✅ Primary backend connected: 192.168.1.102');
-      setConnectionStatus('✅ Primary backend connected!');
-      setBackendURL(primaryURL);
-      setBackendConfigured(true);
-      setRetrying(false);
-      return;
-    }
+    // SKIP HTTP TEST - Just set the backend URL and let Socket.IO handle connection
+    // Socket.IO is more reliable for React Native and handles reconnection automatically
+    const primaryURL = 'http://192.168.0.212:5001';
 
-    // Fallback host
-    const fallbackURL = 'http://192.168.1.212:5001';
-    setConnectionStatus('Primary unreachable. Testing fallback backend (1×5s)...');
-    console.log('Primary unreachable, testing fallback backend (1×5s): 192.168.1.212');
-    const fallbackOk = await probeWithAttempts(
-      fallbackURL,
-      attemptsPerHost,
-      perAttemptMs,
-      (msg) => setConnectionStatus(`Fallback: ${msg}`),
-      'Fallback',
-    );
-    if (fallbackOk) {
-      console.log('✅ Fallback backend connected: 192.168.1.212');
-      setConnectionStatus('✅ Fallback backend connected!');
-      setBackendURL(fallbackURL);
-      setBackendConfigured(true);
-      setRetrying(false);
-      return;
-    }
-
-    // Both unreachable
-    console.warn('❌ No backend reachable after 1×5s on both hosts');
-    setConnectionStatus('❌ No backend reachable after 10 seconds');
-    setBackendUnreachable(true);
+    console.log('✅ Setting backend URL:', primaryURL);
+    setConnectionStatus('✅ Backend configured. Connecting via Socket.IO...');
+    setBackendURL(primaryURL);
+    setBackendConfigured(true);
     setRetrying(false);
   };
 
@@ -184,14 +150,14 @@ function AppContent() {
     try {
       const port = parseInt(manualPort) || 5001;
       const url = `http://${manualIP.trim()}:${port}`;
-      
+
       console.log('[Manual IP] 🔧 Testing manual IP configuration');
       console.log('[Manual IP] URL:', url);
       console.log('[Manual IP] IP:', manualIP.trim());
       console.log('[Manual IP] Port:', port);
-      
+
       const isReachable = await testBackendConnection(url, 10000);
-      
+
       if (isReachable) {
         console.log('[Manual IP] ✅ Connected:', url);
         // Save the custom IP
@@ -225,7 +191,7 @@ function AppContent() {
   // Show manual IP entry screen
   if (backendUnreachable && showManualIPEntry) {
     return (
-      <KeyboardAvoidingView 
+      <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         style={styles.manualIPContainer}
       >
@@ -243,12 +209,12 @@ function AppContent() {
             <Text style={styles.manualIPSubtitle}>
               Enter the IP address and port of your backend server
             </Text>
-            
+
             <View style={styles.inputGroup}>
               <Text style={styles.inputLabel}>Backend IP Address</Text>
               <TextInput
                 style={styles.textInput}
-                placeholder="e.g., 192.168.1.102 or 10.23.61.50"
+                placeholder="e.g., 192.168.0.212 or 10.23.61.50"
                 placeholderTextColor="#999"
                 value={manualIP}
                 onChangeText={setManualIP}
@@ -277,7 +243,7 @@ function AppContent() {
               </Text>
             </View>
 
-            <TouchableOpacity 
+            <TouchableOpacity
               style={[styles.connectButton, testingIP && styles.buttonDisabled]}
               onPress={handleTestManualIP}
               disabled={testingIP}
@@ -288,7 +254,7 @@ function AppContent() {
               </Text>
             </TouchableOpacity>
 
-            <TouchableOpacity 
+            <TouchableOpacity
               style={styles.cancelButton}
               onPress={handleCancel}
               disabled={testingIP}
@@ -320,15 +286,15 @@ function AppContent() {
         <Text style={styles.errorTitle}>Backend Not Reachable</Text>
         <Text style={styles.errorMessage}>
           Could not connect to rover backend.{'\n'}
-          Tried: 192.168.1.102 and 192.168.1.212
+          Tried: 192.168.0.212 (primary) and 192.168.0.212 (fallback)
         </Text>
         <Text style={styles.errorHint}>
           • Check rover is powered on{'\n'}
           • Verify WiFi connection{'\n'}
           • Ensure backend server is running
         </Text>
-        <TouchableOpacity 
-          style={styles.retryButton} 
+        <TouchableOpacity
+          style={styles.retryButton}
           onPress={handleRetry}
           disabled={retrying}
         >
@@ -338,7 +304,7 @@ function AppContent() {
           </Text>
         </TouchableOpacity>
 
-        <TouchableOpacity 
+        <TouchableOpacity
           style={styles.manualIPButton}
           onPress={handleManualIPEntry}
           disabled={retrying}
@@ -570,13 +536,15 @@ export default function App() {
   // Global crash handler is already initialized at module load
   return (
     <ErrorBoundary componentName="App Root">
-      <ComponentReadinessProvider minLoadingTime={3000}>
-        <RoverProvider>
-          <ErrorBoundary componentName="Main Content">
-            <AppContent />
-          </ErrorBoundary>
-        </RoverProvider>
-      </ComponentReadinessProvider>
+      <GestureHandlerRootView style={{ flex: 1 }}>
+        <ComponentReadinessProvider minLoadingTime={3000}>
+          <RoverProvider>
+            <ErrorBoundary componentName="Main Content">
+              <AppContent />
+            </ErrorBoundary>
+          </RoverProvider>
+        </ComponentReadinessProvider>
+      </GestureHandlerRootView>
     </ErrorBoundary>
   );
 }

@@ -1,0 +1,869 @@
+# =============================================================================
+# Continue Extension - config.yaml
+# Project : ArduRover / Pixhawk / ROS2 / MAVLink Mission Analysis
+# Model   : mistralai/mistral-nemotron via NVIDIA NIM
+# Replace : All DeepSeek models removed
+# =============================================================================
+#
+# SETUP STEPS:
+#   1. Set your API key as an environment variable:
+#        Windows PowerShell : $env:NVIDIA_API_KEY = "your_key_here"
+#        Linux / macOS      : export NVIDIA_API_KEY="your_key_here"
+#   2. Place this file at:
+#        Windows : C:\Users\<you>\.continue\config.yaml
+#        Linux   : ~/.continue/config.yaml
+#        macOS   : ~/.continue/config.yaml
+#   3. Restart VS Code completely
+#   4. Open Continue panel → you should see "Nemotron - ArduRover Agent"
+#
+# =============================================================================
+
+name: ArduRover Mission Analysis Assistant
+version: 1.0.0
+schema: v1
+
+# =============================================================================
+# MODELS
+# =============================================================================
+models:
+  # ---------------------------------------------------------------------------
+  # PRIMARY MODEL — Chat, Edit, Apply
+  # Tuned for:
+  #   - High token output (8192) for complete report generation
+  #   - Low temperature (0.2) to avoid hallucination
+  #   - Full 128K context for large .bin/.log file summaries
+  # ---------------------------------------------------------------------------
+  - name: Nemotron - ArduRover Agent
+    provider: openai
+    model: mistralai/mistral-large-3-675b-instruct-2512
+    apiBase: https://integrate.api.nvidia.com/v1
+    apiKey: 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
+    roles:
+      - chat
+      - edit
+      - apply
+    contextLength: 128000
+    defaultCompletionOptions:
+      temperature: 0.2          # Low = accurate, no hallucination
+      topP: 0.85                # Focused but not too rigid
+      maxTokens: 8192           # Large output for full reports + code
+      stop:
+        - "<|eot|>"
+        - "<|end_of_turn|>"
+
+  # ---------------------------------------------------------------------------
+  # AUTOCOMPLETE MODEL — Same Nemotron, tuned for code completion
+  # Tuned for:
+  #   - Very low temperature for deterministic code suggestions
+  #   - Shorter maxTokens (512) for fast inline completion
+  #   - Lower context to keep autocomplete snappy
+  # ---------------------------------------------------------------------------
+  - name: Nemotron - Autocomplete
+    provider: openai
+    model: mistralai/mistral-large-3-675b-instruct-2512
+    apiBase: https://integrate.api.nvidia.com/v1
+    apiKey: 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
+    roles:
+      - autocomplete
+    contextLength: 16000
+    defaultCompletionOptions:
+      temperature: 0.1          # Near-deterministic for code
+      topP: 0.7
+      maxTokens: 512            # Fast, short completions
+    autocompleteOptions:
+      multiline: true
+      template: |
+        {{{prefix}}}
+        Complete the code. Only output code, no explanation.
+        Context: Python / ROS2 / MAVLink / ArduPilot / C++
+        {{{suffix}}}
+
+# =============================================================================
+# CONTEXT PROVIDERS
+# Controls what information the model can see when you ask a question.
+# =============================================================================
+context:
+  # --- Source code in your editor ---
+  - provider: code
+
+  # --- Git diff (uncommitted changes) ---
+  - provider: diff
+
+  # --- Terminal output (run commands, see logs) ---
+  - provider: terminal
+
+  # --- VS Code Problems panel (errors/warnings) ---
+  - provider: problems
+
+  # --- File/folder tree of your project ---
+  - provider: folder
+
+  # --- Semantic codebase search (retrieves relevant files automatically) ---
+  # nRetrieve: how many chunks to pull from your codebase
+  # nFinal   : how many to actually send to the model (keep manageable)
+  - provider: codebase
+    params:
+      nRetrieve: 40             # Search wide — your ROS2 workspace is large
+      nFinal: 8                 # Send top 8 relevant chunks to model
+
+  # --- Official documentation indexing ---
+  # These URLs will be crawled and indexed so you can use @docs in chat.
+  # The model can reference these when answering questions.
+  - provider: docs
+
+# =============================================================================
+# DOCS — Official documentation sources
+# These get indexed by Continue so the model can reference them.
+# Use @docs in chat to pull from these.
+# =============================================================================
+docs:
+  # ArduPilot ROS2 integration
+  - name: ArduPilot ROS2
+    startUrl: https://ardupilot.org/dev/docs/ros2.html
+    maxDepth: 3
+
+  # ArduPilot ROS (MAVROS)
+  - name: ArduPilot ROS MAVROS
+    startUrl: https://ardupilot.org/dev/docs/ros.html
+    maxDepth: 3
+
+  # MAVExplorer log analysis
+  - name: MAVExplorer Log Analysis
+    startUrl: https://ardupilot.org/dev/docs/using-mavexplorer-for-log-analysis.html
+    maxDepth: 2
+
+  # pymavlink GitHub
+  - name: pymavlink
+    startUrl: https://github.com/ArduPilot/pymavlink
+    maxDepth: 2
+
+  # MAVLink Python guide
+  - name: MAVLink Python Guide
+    startUrl: https://mavlink.io/en/mavgen_python/
+    maxDepth: 2
+
+  # MAVROS ROS2 README
+  - name: MAVROS ROS2
+    startUrl: https://github.com/mavlink/mavros/blob/ros2/mavros/README.md
+    maxDepth: 2
+
+  # ArduPilot Rover docs
+  - name: ArduRover
+    startUrl: https://ardupilot.org/rover/
+    maxDepth: 3
+
+# =============================================================================
+# RULES
+# These are SYSTEM-LEVEL instructions the model follows on EVERY response.
+# Critical for: anti-hallucination, accuracy, report quality.
+# =============================================================================
+rules:
+  # --- ANTI-HALLUCINATION (most important) ---
+  - "NEVER fabricate or invent sensor data, GPS coordinates, voltage readings, or any telemetry values. Only report values that are actually extracted from the .bin or .log file being analyzed."
+  - "If you do not have access to the actual log file data, clearly state: 'No data available — please provide the .bin or .log file.' Do not guess or make up sample numbers."
+  - "Always specify which MAVLink message type (e.g. GPS, BAT, CTUN, ATT, NAV, NTUN, SYS_STATUS) each data point came from. This makes the report verifiable."
+  - "If a calculation seems wrong or a value is outside expected physical limits (e.g. GPS speed > 200 km/h for a rover, voltage < 0V), flag it as a potential data error. Do not silently accept it."
+
+  # --- ACCURACY & COMPLETENESS ---
+  - "Always use pymavlink with the ardupilotmega dialect for parsing ArduPilot .bin files. Set MAVLINK_DIALECT=ardupilotmega and MAVLINK20=1 as environment variables."
+  - "For large log files (>100MB), always recommend chunked processing. Never suggest loading an entire 850MB file into memory at once."
+  - "When writing Python code for log analysis, always include error handling for: missing message types, corrupt log segments, GPS fix status checks (fix_type >= 3), and empty data frames."
+  - "Include units in every value you report. Example: 12.4V not 12.4. 3.2 m/s not 3.2. 45 min not 45."
+
+  # --- HUMAN-READABLE OUTPUT ---
+  - "Write reports in plain, simple English. Avoid jargon where possible. If technical terms are needed, briefly explain them. Example: 'HDOP (accuracy score — lower is better): 1.2'"
+  - "Structure all reports with clear headings, short paragraphs, and bullet points for key facts. A non-technical person should understand the mission summary in under 2 minutes."
+  - "Always include a plain-English 'What happened?' summary as the first section of any mission report."
+
+  # --- ROS2 / MAVROS / ARDUPILOT CONTEXT ---
+  - "When helping with ROS2 + ArduPilot code, always use the ROS2 Humble distribution as the default unless the user specifies otherwise."
+  - "For MAVROS connections to Pixhawk, default serial port is /dev/ttyACM0 at 57600 baud. Always mention this can be changed based on the user's hardware setup."
+  - "When suggesting ROS2 launch files or node configurations for ArduPilot, reference the official ArduPilot ROS2 repos structure: ~/ardu_ws/src/"
+  - "Prefer AP_DDS (native ROS2 DDS) over MAVROS when the user is on ArduPilot 4.5+. Mention both options."
+
+  # --- CODE QUALITY ---
+  - "Always provide complete, runnable code. No pseudocode, no '...' placeholders, no 'fill in the rest yourself.'"
+  - "Include all imports at the top. Include a __main__ block. Include comments explaining what each section does."
+  - "For report generation scripts, always support output to .md (Markdown), .csv, and .txt formats in the same script using a command-line argument."
+
+# =============================================================================
+# PROMPTS
+# Custom slash-commands in the Continue chat.
+# Type /prompt-name to trigger.
+# =============================================================================
+prompts:
+  # ========================================
+  # MISSION ANALYSIS PROMPTS
+  # ========================================
+
+  - name: analyze-mission
+    description: Full ArduRover mission analysis from a .bin or .log file
+    prompt: |
+      Analyze the ArduRover mission log and produce a complete analysis.
+
+      Follow this exact structure:
+
+      # Mission Analysis Report
+
+      ## 1. What Happened? (Plain English Summary)
+      [2-3 sentences. What did the rover do? Did it complete the mission? Any issues?]
+
+      ## 2. Mission Overview
+      - Start time: [timestamp]
+      - End time: [timestamp]
+      - Total duration: [HH:MM:SS]
+      - Total distance traveled: [X.XX meters]
+      - Number of waypoints planned: [X]
+      - Number of waypoints completed: [X]
+      - Mission status: [Completed / Partial / Failed]
+
+      ## 3. GPS & Navigation
+      - GPS fix type (3=3D, 4=DGPS, 5=RTK): [value]
+      - Number of GPS dropout events (>2s gap): [X]
+      - Cross-track error (max): [X.XX meters]
+      - Cross-track error (average): [X.XX meters]
+      - Heading accuracy: [X degrees]
+      Source messages: GPS, NAV, NTUN
+
+      ## 4. Speed Profile
+      - Maximum speed: [X.XX m/s] ([X.XX km/h])
+      - Average speed: [X.XX m/s] ([X.XX km/h])
+      - Minimum speed (while moving): [X.XX m/s]
+      - Speed anomalies detected: [Yes/No — describe if Yes]
+      Source messages: CTUN (ActualSpeed), GPS (speed)
+
+      ## 5. Battery & Power
+      - Start voltage: [X.XX V]
+      - End voltage: [X.XX V]
+      - Minimum voltage: [X.XX V] (at [timestamp])
+      - Average current draw: [X.XX A]
+      - Battery warning triggered: [Yes/No]
+      Source messages: BAT, SYS_STATUS
+
+      ## 6. Steering & Control
+      - Maximum steering correction: [X degrees]
+      - Number of excessive steering events (>30° change): [X]
+      - Throttle range: [min]% to [max]%
+      - Control oscillation detected: [Yes/No]
+      Source messages: CTUN, ATT
+
+      ## 7. Anomalies & Warnings
+      [List each anomaly found. For each one:]
+      - What: [description]
+      - When: [timestamp]
+      - Severity: [Low / Medium / High]
+      - Possible cause: [explanation]
+
+      ## 8. Recommendations
+      [Actionable suggestions based on anomalies found]
+
+      IMPORTANT: Only use values from the actual log file. If no file is loaded, say so.
+
+  - name: analyze-log-file
+    description: Quick structure inspection of a .bin or .log file
+    prompt: |
+      Inspect the selected .bin or .log file and provide:
+
+      ## Log File Structure Analysis
+
+      ### 1. File Information
+      - File name: [name]
+      - File size: [size in MB]
+      - Format: [.bin DataFlash / .log text / .tlog MAVLink]
+
+      ### 2. Message Types Found
+      List every MAVLink message type in the file with:
+      - Message name
+      - Number of occurrences
+      - First timestamp
+      - Last timestamp
+
+      ### 3. Time Range
+      - Mission start: [timestamp]
+      - Mission end: [timestamp]
+      - Total duration: [HH:MM:SS]
+
+      ### 4. Data Completeness Check
+      - GPS data: [Present / Missing / Incomplete]
+      - Battery data: [Present / Missing / Incomplete]
+      - Navigation data: [Present / Missing / Incomplete]
+      - Attitude data: [Present / Missing / Incomplete]
+      - Any gaps > 5 seconds: [Yes/No — list if Yes]
+
+      ### 5. Recommended Next Steps
+      [What analysis can be done with this data]
+
+      Use pymavlink to parse. Show the extraction command.
+
+  - name: extract-telemetry
+    description: Extract specific telemetry data and generate Python extraction script
+    prompt: |
+      Generate a Python script that extracts the following telemetry from the ArduRover .bin log file:
+
+      1. GPS path (lat, lon, alt, timestamp, fix_type, satellites)
+      2. Speed over time (from CTUN.ActualSpeed and GPS groundspeed)
+      3. Battery voltage and current over time
+      4. Steering angle and throttle over time
+      5. Waypoint events (reached/missed)
+
+      Requirements:
+      - Use pymavlink with ardupilotmega dialect
+      - Process in chunks (max 50,000 messages at a time)
+      - Save each dataset to a separate CSV file
+      - Include a summary printout at the end
+      - Handle corrupt messages gracefully
+      - Accept the log file path as a command-line argument
+
+      Output file names:
+      - gps_path.csv
+      - speed_profile.csv
+      - battery_trend.csv
+      - steering_throttle.csv
+      - waypoint_events.csv
+      - extraction_summary.txt
+
+      Show the complete script. Show the terminal command to run it.
+
+  - name: detect-anomalies
+    description: Detect and explain anomalies in ArduRover mission data
+    prompt: |
+      Analyze the mission data for anomalies. Check for ALL of the following:
+
+      ## Anomaly Detection Report
+
+      ### 1. GPS Anomalies
+      - [ ] GPS dropouts (signal lost > 2 seconds)
+      - [ ] Sudden position jumps (> 10 meters between consecutive reads)
+      - [ ] Low satellite count (< 6 satellites)
+      - [ ] High HDOP (> 3.0 = poor accuracy)
+      - [ ] Fix type drops (e.g., 3D fix → no fix)
+
+      ### 2. Navigation Anomalies
+      - [ ] Cross-track error spikes (> 2 meters from planned path)
+      - [ ] Missed waypoints (rover passed without reaching waypoint)
+      - [ ] Heading oscillation (heading changing rapidly back and forth)
+      - [ ] Stuck rover (speed = 0 for > 30 seconds during Auto mode)
+
+      ### 3. Battery Anomalies
+      - [ ] Voltage drop rate too fast (> 0.5V per 5 minutes)
+      - [ ] Current spike (> 2x average current)
+      - [ ] Battery warning triggered by autopilot
+
+      ### 4. Control Anomalies
+      - [ ] Steering corrections > 30 degrees in single step
+      - [ ] Throttle oscillation (rapidly switching between values)
+      - [ ] Control loop instability (repeated overcorrections)
+
+      For each anomaly found:
+      - Timestamp when it occurred
+      - Severity: Low / Medium / High
+      - What likely caused it
+      - How to fix it for next mission
+
+      Only report anomalies that are actually present in the data.
+
+  # ========================================
+  # REPORT GENERATION PROMPTS
+  # ========================================
+
+  - name: generate-report-md
+    description: Generate full mission report as a Markdown (.md) file
+    prompt: |
+      Generate a complete Python script that produces a mission report in Markdown format.
+
+      The script should:
+      1. Accept the .bin log file path as argument
+      2. Parse using pymavlink (ardupilotmega dialect, chunked processing)
+      3. Extract all key metrics (GPS, speed, battery, steering, waypoints)
+      4. Detect anomalies automatically
+      5. Write a full report to: mission_report.md
+
+      The Markdown report structure must be:
+
+      ---
+      # ArduRover Mission Report
+      **Date:** [extracted from log]
+      **Generated:** [current date/time]
+      **Log file:** [filename]
+
+      ---
+
+      ## Summary
+      [Plain English — what happened]
+
+      ## Mission Metrics
+      | Metric | Value |
+      |--------|-------|
+      | Duration | ... |
+      | Distance | ... |
+      | Avg Speed | ... |
+      | Waypoints | X / Y completed |
+
+      ## GPS & Path
+      [Key GPS stats in a table]
+
+      ## Speed Profile
+      [Speed stats in a table]
+
+      ## Battery
+      [Battery stats in a table]
+
+      ## Steering & Control
+      [Control stats in a table]
+
+      ## Anomalies
+      [Each anomaly as a bullet with severity badge]
+
+      ## Recommendations
+      [Numbered list of actionable items]
+      ---
+
+      Show the complete script. Include the terminal run command.
+      Make sure the output Markdown renders cleanly in GitHub, VS Code Preview, and any standard Markdown viewer.
+
+  - name: generate-report-csv
+    description: Generate mission data export as CSV files
+    prompt: |
+      Generate a Python script that exports the full mission analysis as structured CSV files.
+
+      Output files:
+      1. mission_summary.csv — Single-row summary (duration, distance, avg speed, waypoints, etc.)
+      2. gps_timeline.csv — Full GPS path with columns: timestamp, lat, lon, alt, speed, fix_type, satellites
+      3. battery_timeline.csv — Battery over time: timestamp, voltage, current, remaining_pct
+      4. speed_timeline.csv — Speed over time: timestamp, speed_ms, speed_kmh, throttle_pct
+      5. anomalies.csv — All detected anomalies: timestamp, type, severity, description, recommendation
+
+      Requirements:
+      - Use pymavlink, chunked processing for large files
+      - All timestamps in ISO 8601 format (YYYY-MM-DDTHH:MM:SS)
+      - All units clearly labeled in column headers: voltage_V, speed_ms, alt_m, etc.
+      - Include a header row in every CSV
+      - Handle missing data with empty cells (not "N/A" or "None")
+      - Accept log file path as command-line argument
+
+      Show complete script + run command.
+
+  - name: generate-report-txt
+    description: Generate plain text mission report (terminal-friendly)
+    prompt: |
+      Generate a Python script that produces a plain-text mission report.
+      This format should be readable directly in any terminal or text editor.
+      No special formatting — just clean, aligned text.
+
+      Output file: mission_report.txt
+
+      Format:
+      ============================================================
+       ARDUROVER MISSION REPORT
+       Generated: [date time]
+       Log file : [filename]
+      ============================================================
+
+      SUMMARY
+      --------------------------------------------------------
+      [Plain English summary — 2-3 sentences]
+
+      MISSION METRICS
+      --------------------------------------------------------
+        Duration        : 00:45:12
+        Distance        : 1250.34 m
+        Average Speed   : 0.46 m/s (1.67 km/h)
+        Waypoints       : 10 / 12 completed
+
+      GPS & NAVIGATION
+      --------------------------------------------------------
+        Fix type        : 3D Fix
+        Satellites      : 12
+        GPS dropouts    : 2 events
+        Max cross-track : 1.8 m
+        ...
+
+      BATTERY
+      --------------------------------------------------------
+        Start voltage   : 14.82 V
+        End voltage     : 12.45 V
+        ...
+
+      ANOMALIES
+      --------------------------------------------------------
+        [1] GPS dropout at 00:12:34 — Severity: MEDIUM
+            Cause: Possible signal obstruction from terrain
+            Fix: Check antenna placement
+        ...
+
+      RECOMMENDATIONS
+      --------------------------------------------------------
+        1. ...
+        2. ...
+
+      ============================================================
+
+      Show complete script + run command.
+      Use fixed-width formatting with proper alignment.
+
+  # ========================================
+  # ROS2 / MAVROS / PIXHAWK PROMPTS
+  # ========================================
+
+  - name: ros2-mavros-help
+    description: Help with ROS2 + MAVROS + ArduPilot setup and code
+    prompt: |
+      Help with ROS2 and MAVROS integration for ArduPilot.
+
+      Context to always keep in mind:
+      - ROS2 distro: Humble (default for ArduPilot)
+      - Workspace: ~/ardu_ws/src/
+      - MAVROS serial default: /dev/ttyACM0 at 57600 baud
+      - ArduPilot 4.5+ supports AP_DDS (native ROS2) — prefer this if available
+      - MAVLink dialect: ardupilotmega
+      - Pixhawk connects via USB or telemetry radio
+
+      If the user asks about:
+      - Setting up MAVROS: provide the full ros2 workspace setup commands
+      - Writing ROS2 nodes: use Python (rclpy) or C++ (rclcpp)
+      - Subscribing to telemetry: list common MAVROS topic names
+      - Sending commands: show how to use MAVROS services
+      - SITL testing: show how to launch ArduPilot SITL with ROS2
+
+      Always show complete, runnable code.
+
+  - name: pixhawk-config
+    description: Help with Pixhawk configuration and parameter tuning for ArduRover
+    prompt: |
+      Help with Pixhawk configuration for ArduRover.
+
+      Key parameter categories to consider:
+      - SRx_* : MAVLink stream rates (how often data is sent)
+      - NAV_* : Navigation behavior (waypoint acceptance radius, etc.)
+      - WPNAV_* : Waypoint navigation tuning
+      - ROVER_* : Rover-specific parameters
+      - GPS_* : GPS configuration
+      - BAT_* : Battery monitoring thresholds
+      - LOG_* : Logging configuration (what gets saved to .bin)
+
+      When the user asks about a parameter:
+      1. Explain what it does in plain English
+      2. Show the current recommended range
+      3. Explain what happens if it's too high or too low
+      4. Show how to set it (via Mission Planner or MAVProxy command)
+
+      Always reference the official ArduPilot parameter documentation.
+
+  # ========================================
+  # GENERAL CODE PROMPTS (adapted from original config)
+  # ========================================
+
+  - name: document
+    description: Generate professional documentation for selected code
+    prompt: |
+      Generate comprehensive documentation for the selected code.
+
+      ## Documentation
+
+      ### Overview
+      [Brief description of what this code does]
+
+      ### Usage
+      ```python
+      # Example usage showing typical scenario
+      [Code example]
+      ```
+
+      ### Parameters
+      | Name | Type | Required | Default | Description |
+      |------|------|----------|---------|-------------|
+      | [param] | [type] | [yes/no] | [value] | [description] |
+
+      ### Returns
+      - **Type**: [return type]
+      - **Description**: [what is returned]
+
+      ### Examples
+
+      #### Example 1: [Common Use Case]
+      ```python
+      [Code example with comments]
+      ```
+
+      ### Error Handling
+      | Error Type | Cause | Resolution |
+      |------------|-------|------------|
+      | [ErrorName] | [Why it occurs] | [How to fix] |
+
+      ### Notes
+      - [Important note 1]
+      - [Known limitations]
+
+  - name: test
+    description: Generate comprehensive unit tests
+    prompt: |
+      Generate a complete test suite for the selected code.
+
+      Requirements:
+      - Use pytest (Python) or appropriate framework
+      - Happy path scenarios (at least 3)
+      - Error handling and edge cases (at least 3)
+      - Boundary conditions
+      - Mock external dependencies (especially pymavlink, ROS2 connections)
+      - Test isolation — no shared state between tests
+
+      Structure:
+      ```python
+      import pytest
+
+      class Test[ComponentName]:
+
+          def setup_method(self):
+              # Initialization
+
+          # --- Happy Path ---
+          def test_[expected behavior](self):
+              # Arrange → Act → Assert
+
+          # --- Error Handling ---
+          def test_[error case](self):
+              # Test
+
+          # --- Edge Cases ---
+          def test_[edge case](self):
+              # Test
+      ```
+
+      Show complete test file. Include comments explaining complex scenarios.
+
+  - name: implement
+    description: Implement a feature with structured approach
+    prompt: |
+      Implement the requested feature following this structure:
+
+      ## Implementation Plan
+
+      ### 1. Requirements
+      [What needs to be built]
+
+      ### 2. Technical Approach
+      [Implementation strategy — why this approach]
+
+      ### 3. Code
+      ```python
+      # File: [filename]
+      [Complete implementation — no placeholders, no "..."]
+      ```
+
+      ### 4. Usage
+      ```bash
+      # How to run it
+      [Command]
+      ```
+
+      ### 5. Testing
+      - [How to verify it works]
+
+      ### 6. Integration Notes
+      - [How this connects to the rest of the system]
+      - [Any dependencies to install]
+
+      Provide production-ready code with error handling, input validation, and comments.
+
+  - name: refactor
+    description: Refactor code with detailed analysis
+    prompt: |
+      Refactor the selected code.
+
+      ## Refactoring Analysis
+
+      ### 1. Current Issues
+      - [Issue 1: what's wrong and why]
+      - [Issue 2: what's wrong and why]
+
+      ### 2. Refactored Code
+      ```python
+      [Complete refactored code]
+      ```
+
+      ### 3. Key Changes
+      1. **[Change 1]**: Before → After | Why: [reason]
+      2. **[Change 2]**: Before → After | Why: [reason]
+
+      ### 4. Benefits
+      - [Benefit 1]
+      - [Benefit 2]
+
+      ### 5. Testing Checklist
+      - [ ] [Test to verify refactoring works]
+      - [ ] [Test for no regressions]
+
+  - name: fix
+    description: Debug and fix issues with detailed analysis
+    prompt: |
+      Analyze and fix the selected code.
+
+      ## Bug Analysis & Fix
+
+      ### 1. Problem
+      **What**: [Clear description]
+      **Severity**: [Critical / High / Medium / Low]
+      **Impact**: [What breaks]
+
+      ### 2. Root Cause
+      [Why is this happening]
+
+      ### 3. The Fix
+      ```python
+      [Complete fixed code]
+      ```
+
+      ### 4. What Changed
+      | Line(s) | Before | After | Why |
+      |---------|--------|-------|-----|
+      | [#] | [old] | [new] | [reason] |
+
+      ### 5. How to Verify
+      [How to confirm the fix works]
+
+      ### 6. Prevention
+      - [How to avoid this in the future]
+
+  - name: optimize
+    description: Optimize code with performance analysis
+    prompt: |
+      Optimize the selected code.
+
+      ## Performance Analysis
+
+      ### 1. Current Bottlenecks
+      - [Bottleneck 1: description]
+      - [Bottleneck 2: description]
+
+      ### 2. Optimized Code
+      ```python
+      [Complete optimized code with comments explaining each optimization]
+      ```
+
+      ### 3. Improvements
+      | Metric | Before | After | Gain |
+      |--------|--------|-------|------|
+      | Time | [O(...)] | [O(...)] | [X%] |
+      | Memory | [O(...)] | [O(...)] | [X%] |
+
+      ### 4. Trade-offs
+      - [What was sacrificed for performance]
+
+      ### 5. When to Use This
+      - Use when: [scenario]
+      - Avoid when: [scenario]
+
+  - name: explain
+    description: Explain code with structured breakdown
+    prompt: |
+      Explain the selected code clearly.
+
+      ## Code Explanation
+
+      ### 1. What Does This Do?
+      [2-3 sentences. Plain English.]
+
+      ### 2. Why Does It Exist?
+      [The problem it solves]
+
+      ### 3. Step-by-Step Breakdown
+      ```python
+      # Annotated code — explain each section
+      [Code with detailed inline comments]
+      ```
+
+      #### Flow:
+      1. **[Step 1]**: [What happens, input → output]
+      2. **[Step 2]**: [What happens, input → output]
+      3. **[Step 3]**: [What happens, input → output]
+
+      ### 4. Key Concepts
+      - **[Concept]**: [Brief explanation — assume reader is learning]
+
+      ### 5. Common Mistakes
+      - ❌ [Wrong way]: [Why it fails]
+      - ✅ [Right way]: [Why it works]
+
+  - name: design
+    description: Design system architecture
+    prompt: |
+      Design the requested system or component.
+
+      ## System Design
+
+      ### 1. Requirements
+      - Functional: [What it must do]
+      - Non-functional: [Performance, reliability, etc.]
+
+      ### 2. Architecture
+      ```
+      [ASCII diagram showing components and how they connect]
+
+      ┌─────────────┐     ┌─────────────┐     ┌─────────────┐
+      │  Component  │────▶│  Component  │────▶│  Component  │
+      │      A      │     │      B      │     │      C      │
+      └─────────────┘     └─────────────┘     └─────────────┘
+      ```
+
+      ### 3. Components
+      For each component:
+      - Responsibility
+      - Dependencies
+      - Interface (class/function signatures)
+
+      ### 4. Data Flow
+      [Step by step — how data moves through the system]
+
+      ### 5. Technology Choices
+      | Layer | Technology | Why |
+      |-------|------------|-----|
+      | [layer] | [tech] | [reason] |
+
+      ### 6. Implementation Phases
+      - Phase 1: [Core]
+      - Phase 2: [Enhanced]
+      - Phase 3: [Optimized]
+
+  - name: review
+    description: Code review with detailed feedback
+    prompt: |
+      Perform a code review of the selected code.
+
+      ## Code Review
+
+      ### Summary
+      **Quality**: [Excellent / Good / Fair / Needs Work]
+      **Decision**: [Approve / Approve with changes / Changes required]
+
+      ### Strengths
+      - [What's done well]
+
+      ### Issues
+
+      #### 🔴 Critical (must fix)
+      | Line | Issue | Fix |
+      |------|-------|-----|
+      | [#] | [description] | [how to fix] |
+
+      #### 🟡 Medium (should fix)
+      | Line | Issue | Fix |
+      |------|-------|-----|
+      | [#] | [description] | [how to fix] |
+
+      #### 🟢 Minor (nice to fix)
+      | Line | Issue | Fix |
+      |------|-------|-----|
+      | [#] | [description] | [how to fix] |
+
+      ### Improved Version
+      ```python
+      [Refactored code addressing the main issues]
+      ```
+
+      ### Testing Checklist
+      - [ ] [Test 1]
+      - [ ] [Test 2]
+
+# =============================================================================
+# END OF CONFIG
+# =============================================================================

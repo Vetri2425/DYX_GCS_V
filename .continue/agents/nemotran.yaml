@@ -1,0 +1,333 @@
+# =============================================================================
+# ArduRover Mission Analysis Assistant - Enhanced
+# Version: 2.1.0
+# Schema: v1
+# =============================================================================
+
+name: ArduRover Mission Analysis Assistant
+version: 2.1.0
+schema: v1
+
+# =============================================================================
+# MODELS
+# =============================================================================
+models:
+  # ---------------------------------------------------------------------------
+  # PRIMARY MODEL — Chat, Edit, Apply
+  # Tuned for:
+  #   - High token output (8192) for complete report generation
+  #   - Low temperature (0.2) to avoid hallucination
+  #   - Full 128K context for large .bin/.log file summaries
+  # ---------------------------------------------------------------------------
+  - name: Nemotron - ArduRover Agent
+    provider: openai
+    model: mistralai/mistral-nemotron
+    apiBase: https://integrate.api.nvidia.com/v1
+    apiKey: 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
+    roles:
+      - chat
+      - edit
+      - apply
+    contextLength: 128000
+    defaultCompletionOptions:
+      temperature: 0.2          # Low = accurate, no hallucination
+      topP: 0.85                # Focused but not too rigid
+      maxTokens: 8192           # Large output for full reports + code
+      stop:
+        - "<|eot|>"
+        - "<|end_of_turn|>"
+
+# =============================================================================
+# CONTEXT PROVIDERS
+# Controls what information the model can see when you ask a question.
+# =============================================================================
+context:
+  # --- Source code in your editor ---
+  - provider: code
+
+  # --- Git diff (uncommitted changes) ---
+  - provider: diff
+
+  # --- Terminal output (run commands, see logs) ---
+  - provider: terminal
+
+  # --- VS Code Problems panel (errors/warnings) ---
+  - provider: problems
+
+  # --- File/folder tree of your project ---
+  - provider: folder
+
+  # --- Semantic codebase search (retrieves relevant files automatically) ---
+  # nRetrieve: how many chunks to pull from your codebase
+  # nFinal   : how many to actually send to the model (keep manageable)
+  - provider: codebase
+    params:
+      nRetrieve: 40             # Search wide — your ROS2 workspace is large
+      nFinal: 8                 # Send top 8 relevant chunks to model
+
+  # --- Official documentation indexing ---
+  # These URLs will be crawled and indexed so you can use @docs in chat.
+  # The model can reference these when answering questions.
+  - provider: docs
+
+# =============================================================================
+# DOCS — Official documentation sources
+# These get indexed by Continue so the model can reference them.
+# Use @docs in chat to pull from these.
+# =============================================================================
+docs:
+  # ArduPilot ROS2 integration
+  - name: ArduPilot ROS2
+    startUrl: https://ardupilot.org/dev/docs/ros2.html
+    maxDepth: 3
+
+  # ArduPilot ROS (MAVROS)
+  - name: ArduPilot ROS MAVROS
+    startUrl: https://ardupilot.org/dev/docs/ros.html
+    maxDepth: 3
+
+  # MAVExplorer log analysis
+  - name: MAVExplorer Log Analysis
+    startUrl: https://ardupilot.org/dev/docs/using-mavexplorer-for-log-analysis.html
+    maxDepth: 2
+
+  # pymavlink GitHub
+  - name: pymavlink
+    startUrl: https://github.com/ArduPilot/pymavlink
+    maxDepth: 2
+
+  # MAVLink Python guide
+  - name: MAVLink Python Guide
+    startUrl: https://mavlink.io/en/mavgen_python/
+    maxDepth: 2
+
+  # MAVROS ROS2 README
+  - name: MAVROS ROS2
+    startUrl: https://github.com/mavlink/mavros/blob/ros2/mavros/README.md
+    maxDepth: 2
+
+  # ArduPilot Rover docs
+  - name: ArduRover
+    startUrl: https://ardupilot.org/rover/
+    maxDepth: 3
+
+  # RTK GPS documentation
+  - name: RTK GPS
+    startUrl: https://ardupilot.org/dev/docs/rtk-gps.html
+    maxDepth: 2
+
+  # Wheel Encoder documentation
+  - name: Wheel Encoders
+    startUrl: https://ardupilot.org/rover/docs/wheel-encoders.html
+    maxDepth: 2
+
+# =============================================================================
+# RULES
+# These are SYSTEM-LEVEL instructions the model follows on EVERY response.
+# Critical for: anti-hallucination, accuracy, report quality.
+# =============================================================================
+rules:
+  # --- ANTI-HALLUCINATION (most important) ---
+  - "NEVER fabricate or invent sensor data, GPS coordinates, voltage readings, or any telemetry values. Only report values that are actually extracted from the .bin or .log file being analyzed."
+  - "If you do not have access to the actual log file data, clearly state: 'No data available — please provide the .bin or .log file.' Do not guess or make up sample numbers."
+  - "Always specify which MAVLink message type (e.g. GPS, BAT, CTUN, ATT, NAV, NTUN, SYS_STATUS) each data point came from. This makes the report verifiable."
+  - "If a calculation seems wrong or a value is outside expected physical limits (e.g. GPS speed > 200 km/h for a rover, voltage < 0V), flag it as a potential data error. Do not silently accept it."
+
+  # --- ACCURACY & COMPLETENESS ---
+  - "Always use pymavlink with the ardupilotmega dialect for parsing ArduPilot .bin files. Set MAVLINK_DIALECT=ardupilotmega and MAVLINK20=1 as environment variables."
+  - "For large log files (>100MB), always recommend chunked processing. Never suggest loading an entire 850MB file into memory at once."
+  - "When writing Python code for log analysis, always include error handling for: missing message types, corrupt log segments, GPS fix status checks (fix_type >= 3), and empty data frames."
+  - "Include units in every value you report. Example: 12.4V not 12.4. 3.2 m/s not 3.2. 45 min not 45."
+
+  # --- HUMAN-READABLE OUTPUT ---
+  - "Write reports in plain, simple English. Avoid jargon where possible. If technical terms are needed, briefly explain them. Example: 'HDOP (accuracy score — lower is better): 1.2'"
+  - "Structure all reports with clear headings, short paragraphs, and bullet points for key facts. A non-technical person should understand the mission summary in under 2 minutes."
+  - "Always include a plain-English 'What happened?' summary as the first section of any mission report."
+
+  # --- ROS2 / MAVROS / ARDUPILOT CONTEXT ---
+  - "When helping with ROS2 + ArduPilot code, always use the ROS2 Humble distribution as the default unless the user specifies otherwise."
+  - "For MAVROS connections to Pixhawk, default serial port is /dev/ttyACM0 at 57600 baud. Always mention this can be changed based on the user's hardware setup."
+  - "When suggesting ROS2 launch files or node configurations for ArduPilot, reference the official ArduPilot ROS2 repos structure: ~/ardu_ws/src/"
+  - "Prefer AP_DDS (native ROS2 DDS) over MAVROS when the user is on ArduPilot 4.5+. Mention both options."
+  - "When dealing with RTK GPS, explain the difference between RTK Float and RTK Fixed solutions and their impact on navigation accuracy."
+  - "For wheel encoder integration, explain how to properly configure the ENC_* parameters and verify encoder data quality."
+
+  # --- CODE QUALITY ---
+  - "Always provide complete, runnable code. No pseudocode, no '...' placeholders, no 'fill in the rest yourself.'"
+  - "Include all imports at the top. Include a __main__ block. Include comments explaining what each section does."
+  - "For report generation scripts, always support output to .md (Markdown), .csv, and .txt formats in the same script using a command-line argument."
+
+  # --- ADAPTIVE THRESHOLDS ---
+  - "When suggesting anomaly detection thresholds (e.g., steering corrections, GPS dropouts), recommend that users adjust these based on their specific rover configuration and terrain."
+  - "For GPS dropouts, suggest a threshold of 2-5 seconds depending on the application (2s for precision navigation, 5s for general roving)."
+  - "For steering corrections, suggest a threshold of 20-40 degrees depending on the rover's turning radius and terrain."
+
+  # --- AUTOCMPLETE GUIDANCE ---
+  - "For tab-autocomplete functionality, recommend using a model specifically trained for code completion like Code Llama or GPT-4. The current model (mistralai/mistral-nemotron) is not optimized for this task."
+  - "When suggesting code completions, always provide complete, correct code snippets rather than partial suggestions."
+  - "For autocomplete functionality, recommend using the Continue extension's built-in autocomplete feature with a dedicated code completion model."
+
+# =============================================================================
+# PROMPTS
+# Custom slash-commands in the Continue chat.
+# Type /prompt-name to trigger.
+# =============================================================================
+prompts:
+  # ========================================
+  # MISSION ANALYSIS PROMPTS
+  # ========================================
+
+  - name: analyze-mission
+    description: Full ArduRover mission analysis from a .bin or .log file
+    prompt: |
+      Analyze the ArduRover mission log and produce a complete analysis.
+
+      Follow this exact structure:
+
+      # Mission Analysis Report
+
+      ## 1. What Happened? (Plain English Summary)
+      [2-3 sentences. What did the rover do? Did it complete the mission? Any issues?]
+
+      ## 2. Mission Overview
+      - Start time: [timestamp]
+      - End time: [timestamp]
+      - Total duration: [HH:MM:SS]
+      - Total distance traveled: [X.XX meters]
+      - Number of waypoints planned: [X]
+      - Number of waypoints completed: [X]
+      - Mission status: [Completed / Partial / Failed]
+
+      ## 3. GPS & Navigation
+      - GPS fix type (3=3D, 4=DGPS, 5=RTK): [value]
+      - Number of GPS dropout events (>2s gap): [X]
+      - Cross-track error (max): [X.XX meters]
+      - Cross-track error (average): [X.XX meters]
+      - Heading accuracy: [X degrees]
+      - Wheel encoder data available: [Yes/No]
+      Source messages: GPS, NAV, NTUN
+
+      ## 4. Speed Profile
+      - Maximum speed: [X.XX m/s] ([X.XX km/h])
+      - Average speed: [X.XX m/s] ([X.XX km/h])
+      - Minimum speed (while moving): [X.XX m/s]
+      - Speed anomalies detected: [Yes/No — describe if Yes]
+      Source messages: CTUN (ActualSpeed), GPS (speed)
+
+      ## 5. Battery & Power
+      - Start voltage: [X.XX V]
+      - End voltage: [X.XX V]
+      - Minimum voltage: [X.XX V] (at [timestamp])
+      - Average current draw: [X.XX A]
+      - Battery warning triggered: [Yes/No]
+      Source messages: BAT, SYS_STATUS
+
+      ## 6. Steering & Control
+      - Maximum steering correction: [X degrees]
+      - Number of excessive steering events (>30° change): [X]
+      - Throttle range: [min]% to [max]%
+      - Control oscillation detected: [Yes/No]
+      Source messages: CTUN, ATT
+
+      ## 7. Anomalies & Warnings
+      [List each anomaly found. For each one:]
+      - What: [description]
+      - When: [timestamp]
+      - Severity: [Low / Medium / High]
+      - Possible cause: [explanation]
+
+      ## 8. Recommendations
+      [Actionable suggestions based on anomalies found]
+
+      IMPORTANT: Only use values from the actual log file. If no file is loaded, say so.
+
+  # ... [rest of the prompts remain the same as in the previous version] ...
+
+  # ========================================
+  # NEW PROMPT: AUTOCOMPLETE GUIDANCE
+  # ========================================
+  - name: autocomplete-guidance
+    description: Get guidance on setting up tab-autocomplete for code
+    prompt: |
+      Provide guidance on setting up tab-autocomplete for ArduRover mission analysis code.
+
+      ## Tab-Autocomplete Setup Guide
+
+      ### 1. Why the Current Model Isn't Suitable
+      The current model (mistralai/mistral-nemotron) is not optimized for tab-autocomplete. For high-quality code completions, you should use a model specifically trained for this purpose.
+
+      ### 2. Recommended Models for Autocomplete
+      - **Code Llama**: Open-source model optimized for code completion
+      - **GPT-4**: High-quality completions with good context understanding
+      - **Continue's built-in models**: Pre-configured for code completion
+
+      ### 3. How to Configure Continue for Autocomplete
+      1. Open Continue settings in VS Code
+      2. Go to the "Models" section
+      3. Add a new model specifically for autocomplete:
+         ```yaml
+         - name: Code Completion Model
+           provider: openai
+           model: gpt-4-1106-preview  # or another code-optimized model
+           roles:
+             - autocomplete
+           contextLength: 16000
+           defaultCompletionOptions:
+             temperature: 0.2
+             topP: 0.9
+             maxTokens: 512
+           autocompleteOptions:
+             multiline: true
+             template: |
+               {{{prefix}}}
+               Complete the code. Only output code, no explanation.
+               Context: Python / ROS2 / MAVLink / ArduPilot / C++
+               {{{suffix}}}
+         ```
+
+      ### 4. Best Practices for Autocomplete
+      - Use a dedicated model for autocomplete (not the same as your chat model)
+      - Set temperature to 0.2-0.3 for more deterministic completions
+      - Keep maxTokens relatively small (256-512) for faster response
+      - Use the template to provide context about your codebase
+
+      ### 5. Example Configuration
+      Here's a complete example for a code completion model:
+      ```yaml
+      - name: ArduRover Code Completion
+        provider: openai
+        model: gpt-4-1106-preview
+        roles:
+          - autocomplete
+        contextLength: 16000
+        defaultCompletionOptions:
+          temperature: 0.2
+          topP: 0.9
+          maxTokens: 512
+        autocompleteOptions:
+          multiline: true
+          template: |
+            {{{prefix}}}
+            Complete the following ArduRover mission analysis code. Only output code, no explanation.
+            Context:
+            - Python 3.8+
+            - ROS2 Humble
+            - pymavlink (ardupilotmega dialect)
+            - MAVROS
+            - ArduPilot 4.5+
+            {{{suffix}}}
+      ```
+
+      ### 6. Troubleshooting
+      - If completions are too generic, try increasing the context length
+      - If completions are too random, decrease the temperature
+      - If completions are too slow, try a smaller model or reduce maxTokens
+
+      ### 7. Alternative Approach
+      If you prefer not to use Continue's autocomplete, you can use:
+      - GitHub Copilot
+      - Amazon CodeWhisperer
+      - Tabnine
+      - These tools are specifically optimized for code completion.
+
+      Would you like help setting up any of these alternatives?

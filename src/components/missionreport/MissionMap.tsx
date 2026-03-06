@@ -625,14 +625,14 @@ export const MissionMap: React.FC<Props> = ({
     }
 
     // Debug log to verify updates are being processed (10% sample rate to avoid spam)
-    if (Math.random() < 0.1) {
-      console.log('[MissionMap] 📍 Updating rover position:', {
-        lat: roverLat.toFixed(7),
-        lon: roverLon.toFixed(7),
-        heading: heading !== null ? heading.toFixed(1) + '°' : 'N/A',
-        status: armed ? 'ARMED' : (rtkFixType >= 5 ? 'RTK' : 'DISARMED')
-      });
-    }
+    // if (Math.random() < 0.1) {
+    //   console.log('[MissionMap] 📍 Updating rover position:', {
+    //     lat: roverLat.toFixed(7),
+    //     lon: roverLon.toFixed(7),
+    //     heading: heading !== null ? heading.toFixed(1) + '°' : 'N/A',
+    //     status: armed ? 'ARMED' : (rtkFixType >= 5 ? 'RTK' : 'DISARMED')
+    //   });
+    // }
 
     // TRAIL DISABLED: trailPoints processing commented out
     // const trailSegments = trailPoints.map(point => ({

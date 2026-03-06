@@ -47,7 +47,7 @@ export type MissionReportExportProps = {
       lat_achieved?: number;
       lon_achieved?: number;
       accuracy_level?: string;
-      position_error_mm?: number;
+      position_error_cm?: number;
     }
   >;
   missionMode?: string | null;
@@ -150,9 +150,9 @@ const MissionReportExport: React.FC<MissionReportExportProps> = ({
           statusDisplay = 'Skipped';
         }
 
-        // Format accuracy display if available
-        const accuracyDisplay = wpStatus?.position_error_mm 
-          ? `${wpStatus.accuracy_level ? wpStatus.accuracy_level.charAt(0).toUpperCase() + wpStatus.accuracy_level.slice(1) : 'Unknown'} - ${(wpStatus.position_error_mm < 10 ? wpStatus.position_error_mm.toFixed(1) : Math.round(wpStatus.position_error_mm))}mm`
+        // Format accuracy display if available (in cm)
+        const accuracyDisplay = wpStatus?.position_error_cm
+          ? `${wpStatus.accuracy_level ? wpStatus.accuracy_level.charAt(0).toUpperCase() + wpStatus.accuracy_level.slice(1) : 'Unknown'} - ${wpStatus.position_error_cm.toFixed(1)}cm`
           : '-';
 
         return {

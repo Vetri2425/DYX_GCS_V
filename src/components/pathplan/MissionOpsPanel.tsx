@@ -4,7 +4,9 @@ import { View, Text, StyleSheet, TouchableOpacity, Modal, Alert } from 'react-na
 import { colors } from '../../theme/colors';
 import { PathPlanWaypoint } from '../../types/pathplan';
 import { ModeSelectionDialog } from './ModeSelectionDialog';
+import { DashConfigDialog } from './DashConfigDialog';
 import { useRover } from '../../context/RoverContext';
+import { setMissionMode as setBackendMissionMode } from '../../services/missionModeService';
 
 type Props = {
     waypoints: PathPlanWaypoint[];
@@ -43,9 +45,9 @@ const MissionOpsPanel: React.FC<Props> = ({
     onToggleFullScreen,
     isDeleteMode = false,
     selectedForDelete = [],
-    onToggleDeleteMode = () => {},
-    onToggleSelectAll = () => {},
-    onBulkDelete = () => {},
+    onToggleDeleteMode = () => { },
+    onToggleSelectAll = () => { },
+    onBulkDelete = () => { },
     onExportMission,
     onRequestUpload,
     onManualControlOpen,
@@ -54,6 +56,11 @@ const MissionOpsPanel: React.FC<Props> = ({
     const [showExportDialog, setShowExportDialog] = useState(false);
     const [selectedExportFormat, setSelectedExportFormat] = useState<'qgc' | 'json' | 'kml' | 'csv' | 'dxf'>('qgc');
     const [showModeDialog, setShowModeDialog] = useState(false);
+
+    // Dash mode configuration
+    const [dashDistance, setDashDistance] = useState(5.0);
+    const [dashGap, setDashGap] = useState(3.0);
+    const [showDashConfigDialog, setShowDashConfigDialog] = useState(false);
 
     // Check if manual control mode is active
     const isManualControlMode = missionMode === 'Manual Control';
@@ -127,7 +134,7 @@ const MissionOpsPanel: React.FC<Props> = ({
         // Host should open native picker and call onUpdateWaypoints after parsing
         try {
             console.log('[MissionOpsPanel] Upload button pressed, calling onRequestUpload');
-        } catch (e) {}
+        } catch (e) { }
         onRequestUpload?.();
     };
 
@@ -176,14 +183,67 @@ const MissionOpsPanel: React.FC<Props> = ({
         }
     };
 
-    const handleLoadMission = () => {
+    const handleLoadMission = async () => {
+        console.log('[MissionOpsPanel] 🚀 Load Mission button clicked');
+        console.log('[MissionOpsPanel] Waypoints count:', waypoints.length);
+        console.log('[MissionOpsPanel] Current mission mode:', missionMode);
+        
         if (waypoints.length === 0) {
+            console.log('[MissionOpsPanel] ❌ No waypoints to load');
             Alert.alert('No Data', 'No marking points to load');
             return;
         }
-        Alert.alert('Load Mission', `Load mission with ${waypoints.length} marking points to controller?`, [
-            { text: 'Cancel', style: 'cancel' },
-            { text: 'Load', onPress: () => onLoadMission?.() },
+
+        // Map frontend mode to backend mode
+        let backendMode: 'auto' | 'continuous' | 'dash' = 'auto';
+        let modeConfig = {};
+
+        if (missionMode === 'Continuous') {
+            backendMode = 'continuous';
+        } else if (missionMode === 'Dash') {
+            backendMode = 'dash';
+            modeConfig = {
+                dash_servo_on_time: dashDistance,
+                dash_servo_off_time: dashGap,
+            };
+        }
+
+        console.log('[MissionOpsPanel] Backend mode:', backendMode);
+        console.log('[MissionOpsPanel] Mode config:', modeConfig);
+
+        // First, set the mission mode on backend
+        try {
+            console.log('[MissionOpsPanel] 📡 Setting mission mode on backend...');
+            const modeResult = await setBackendMissionMode({ mode: backendMode, ...modeConfig });
+            console.log('[MissionOpsPanel] Mode result:', modeResult);
+            
+            if (!modeResult.success) {
+                console.log('[MissionOpsPanel] ⚠️ Failed to set mission mode:', modeResult.error);
+                // Continue anyway - the mode might be set later
+            } else {
+                console.log('[MissionOpsPanel] ✅ Mission mode set to:', backendMode, modeConfig);
+            }
+        } catch (error) {
+            console.log('[MissionOpsPanel] ❌ Error setting mission mode:', error);
+            console.log('[MissionOpsPanel] Error details:', {
+                message: (error as any)?.message,
+                code: (error as any)?.code,
+                stack: (error as any)?.stack,
+            });
+            // Continue anyway
+        }
+
+        // Then load the mission
+        console.log('[MissionOpsPanel] 📋 Showing confirmation alert...');
+        Alert.alert('Load Mission', `Load mission with ${waypoints.length} marking points in ${missionMode} mode?`, [
+            { text: 'Cancel', style: 'cancel', onPress: () => console.log('[MissionOpsPanel] User cancelled load') },
+            { 
+                text: 'Load', 
+                onPress: () => {
+                    console.log('[MissionOpsPanel] ✅ User confirmed load, calling onLoadMission...');
+                    onLoadMission?.();
+                }
+            },
         ]);
     };
 
@@ -194,14 +254,66 @@ const MissionOpsPanel: React.FC<Props> = ({
         setMissionMode('DGPS Mark');
     };
 
-    const handleModeSelect = (mode: string) => {
+    const handleModeSelect = async (mode: string) => {
         setMissionMode(mode);
         setShowModeDialog(false);
-        
+
+        // If Dash mode selected, show the Dash config dialog (API called after config)
+        if (mode === 'Dash') {
+            setShowDashConfigDialog(true);
+            return;
+        }
+
+        // Call backend API immediately for other modes
+        let backendMode: 'auto' | 'continuous' | 'dash' = 'auto';
+        if (mode === 'Continuous') {
+            backendMode = 'continuous';
+        }
+
+        try {
+            const result = await setBackendMissionMode({ mode: backendMode });
+            if (result.success) {
+                console.log('[MissionOpsPanel] Mode set successfully:', backendMode);
+            } else {
+                console.error('[MissionOpsPanel] Failed to set mode:', result.error);
+            }
+        } catch (error) {
+            console.error('[MissionOpsPanel] Error calling setMissionMode:', error);
+        }
+
         // If manual control selected, open the manual control UI
         if (mode === 'Manual Control') {
             onManualControlOpen?.();
         }
+    };
+
+    const handleDashConfigConfirm = async (onTime: number, offTime: number) => {
+        setDashDistance(onTime);
+        setDashGap(offTime);
+        setShowDashConfigDialog(false);
+        console.log('[MissionOpsPanel] Dash config set:', { onTime, offTime });
+
+        // Call backend API with dash configuration
+        try {
+            const result = await setBackendMissionMode({
+                mode: 'dash',
+                dash_servo_on_time: onTime,
+                dash_servo_off_time: offTime,
+            });
+            if (result.success) {
+                console.log('[MissionOpsPanel] Dash mode set successfully');
+            } else {
+                console.error('[MissionOpsPanel] Failed to set dash mode:', result.error);
+            }
+        } catch (error) {
+            console.error('[MissionOpsPanel] Error calling setMissionMode for dash:', error);
+        }
+    };
+
+    const handleDashConfigCancel = () => {
+        // Revert to DGPS Mark mode if user cancels Dash config
+        setMissionMode('DGPS Mark');
+        setShowDashConfigDialog(false);
     };
 
     return (
@@ -217,7 +329,7 @@ const MissionOpsPanel: React.FC<Props> = ({
                         <Text style={styles.modeLabel}>Current Mode:</Text>
                         <Text style={styles.modeValue}>{missionMode}</Text>
                     </View>
-                    <TouchableOpacity 
+                    <TouchableOpacity
                         style={styles.setModeButton}
                         onPress={() => setShowModeDialog(true)}
                         activeOpacity={0.7}
@@ -233,6 +345,15 @@ const MissionOpsPanel: React.FC<Props> = ({
                 currentMode={missionMode}
                 onSelectMode={handleModeSelect}
                 onCancel={() => setShowModeDialog(false)}
+            />
+
+            {/* Dash Mode Config Dialog */}
+            <DashConfigDialog
+                visible={showDashConfigDialog}
+                initialDistance={dashDistance}
+                initialGap={dashGap}
+                onConfirm={handleDashConfigConfirm}
+                onCancel={handleDashConfigCancel}
             />
 
             {/* Conditionally render Manual Control placeholder or standard mission controls */}
@@ -269,55 +390,55 @@ const MissionOpsPanel: React.FC<Props> = ({
                     </TouchableOpacity>
 
                     <View style={styles.footerRow}>
-                {isDeleteMode ? (
-                    <>
-                        <TouchableOpacity onPress={onToggleSelectAll}>
-                            <Text style={styles.selectAllText}>{selectedForDelete.length === waypoints.length ? 'Deselect All' : 'Select All'}</Text>
-                        </TouchableOpacity>
-                        <View style={styles.deleteControls}>
-                            <Text style={styles.selectedCount}>{selectedForDelete.length} selected</Text>
-                            <TouchableOpacity style={styles.deleteBtn} onPress={onBulkDelete} disabled={selectedForDelete.length === 0}>
-                                <Text style={styles.deleteBtnText}>Delete</Text>
-                            </TouchableOpacity>
-                            <TouchableOpacity style={styles.cancelBtn} onPress={onToggleDeleteMode}>
-                                <Text style={styles.cancelBtnText}>Cancel</Text>
-                            </TouchableOpacity>
-                        </View>
-                    </>
-                ) : (
-                    <>
-                        <View>
-                            <Text style={styles.coordsText}>X:{lastWaypoint ? lastWaypoint.lat.toFixed(7) : ''} Y:{lastWaypoint ? (lastWaypoint as any).lon.toFixed(7) : ''}</Text>
-                        </View>
-                        <TouchableOpacity 
-                            style={styles.trashIcon} 
-                            onPress={() => {
-                                if (waypoints.length === 0) return;
-                                if (onUpdateWaypoints) {
-                                    // Show confirmation alert
-                                    Alert.alert(
-                                        'Delete All Marking Points',
-                                        `Are you sure you want to delete all ${waypoints.length} marking points? This action cannot be undone.`,
-                                        [
-                                            {
-                                                text: 'Cancel',
-                                                style: 'cancel'
-                                            },
-                                            {
-                                                text: 'Delete All',
-                                                style: 'destructive',
-                                                onPress: () => onUpdateWaypoints([])
-                                            }
-                                        ]
-                                    );
-                                }
-                            }}
-                            disabled={waypoints.length === 0}
-                        >
-                            <Text style={{ color: waypoints.length === 0 ? '#555' : colors.accent, fontSize: 18 }}>🗑️</Text>
-                        </TouchableOpacity>
-                    </>
-                )}
+                        {isDeleteMode ? (
+                            <>
+                                <TouchableOpacity onPress={onToggleSelectAll}>
+                                    <Text style={styles.selectAllText}>{selectedForDelete.length === waypoints.length ? 'Deselect All' : 'Select All'}</Text>
+                                </TouchableOpacity>
+                                <View style={styles.deleteControls}>
+                                    <Text style={styles.selectedCount}>{selectedForDelete.length} selected</Text>
+                                    <TouchableOpacity style={styles.deleteBtn} onPress={onBulkDelete} disabled={selectedForDelete.length === 0}>
+                                        <Text style={styles.deleteBtnText}>Delete</Text>
+                                    </TouchableOpacity>
+                                    <TouchableOpacity style={styles.cancelBtn} onPress={onToggleDeleteMode}>
+                                        <Text style={styles.cancelBtnText}>Cancel</Text>
+                                    </TouchableOpacity>
+                                </View>
+                            </>
+                        ) : (
+                            <>
+                                <View>
+                                    <Text style={styles.coordsText}>X:{lastWaypoint ? lastWaypoint.lat.toFixed(7) : ''} Y:{lastWaypoint ? (lastWaypoint as any).lon.toFixed(7) : ''}</Text>
+                                </View>
+                                <TouchableOpacity
+                                    style={styles.trashIcon}
+                                    onPress={() => {
+                                        if (waypoints.length === 0) return;
+                                        if (onUpdateWaypoints) {
+                                            // Show confirmation alert
+                                            Alert.alert(
+                                                'Delete All Marking Points',
+                                                `Are you sure you want to delete all ${waypoints.length} marking points? This action cannot be undone.`,
+                                                [
+                                                    {
+                                                        text: 'Cancel',
+                                                        style: 'cancel'
+                                                    },
+                                                    {
+                                                        text: 'Delete All',
+                                                        style: 'destructive',
+                                                        onPress: () => onUpdateWaypoints([])
+                                                    }
+                                                ]
+                                            );
+                                        }
+                                    }}
+                                    disabled={waypoints.length === 0}
+                                >
+                                    <Text style={{ color: waypoints.length === 0 ? '#555' : colors.accent, fontSize: 18 }}>🗑️</Text>
+                                </TouchableOpacity>
+                            </>
+                        )}
                     </View>
                 </>
             )}

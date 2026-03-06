@@ -3,7 +3,7 @@ import { View, Text, StyleSheet, ScrollView } from 'react-native';
 import { colors } from '../../theme/colors';
 import { Waypoint } from './types';
 import MissionReportExport from './MissionReportExport';
-import { formatAccuracyDisplay, getAccuracyLevel } from '../../utils/accuracyCalculation';
+// Note: accuracy level and wp_dist_cm come from backend, no frontend calculation needed
 
 interface Props {
   waypoints: Waypoint[];
@@ -23,7 +23,7 @@ interface Props {
     lat_achieved?: number;
     lon_achieved?: number;
     accuracy_level?: string;
-    position_error_mm?: number;
+    position_error_cm?: number;  // Distance error in cm from backend (converted to mm for display)
   }>;
   missionMode: string | null;
   currentIndex?: number | null; // Currently active waypoint index
@@ -57,15 +57,28 @@ export const WaypointsTable: React.FC<Props> = ({ waypoints, onExport, onExportC
     }
   };
 
-  // Get accuracy display text and color
+  // Get GPS accuracy display from backend - shows position_error_cm and accuracy_level
   const getAccuracyDisplay = (wpStatus: any) => {
-    if (!wpStatus?.position_error_mm) {
-      return { text: '', color: undefined };
+    // console.log(`[WaypointsTable] GPS Accuracy for WP:`, { position_error_cm: wpStatus?.position_error_cm, accuracy_level: wpStatus?.accuracy_level });
+
+    if (!wpStatus) return { text: '', color: undefined };
+
+    // Show GPS accuracy error from backend (position_error_cm)
+    if (wpStatus.position_error_cm !== undefined && wpStatus.position_error_cm !== null && wpStatus.position_error_cm > 0) {
+      const level = wpStatus.accuracy_level || 'unknown';
+      const levelCapitalized = level.charAt(0).toUpperCase() + level.slice(1);
+
+      let color = '#94A3B8'; // default gray
+      if (level === 'excellent') color = '#10B981'; // green
+      else if (level === 'good') color = '#F59E0B'; // orange
+      else if (level === 'poor') color = '#EF4444'; // red
+
+      const positionErrorMm = wpStatus.position_error_cm * 10;
+      const text = `${levelCapitalized} - ${positionErrorMm.toFixed(1)}mm`;
+      return { text, color };
     }
-    
-    const accuracy = getAccuracyLevel(wpStatus.position_error_mm);
-    const text = formatAccuracyDisplay(wpStatus.position_error_mm, accuracy);
-    return { text, color: accuracy.color };
+
+    return { text: '', color: undefined };
   };
 
   // Calculate display status and color based on statusMap
@@ -149,20 +162,36 @@ export const WaypointsTable: React.FC<Props> = ({ waypoints, onExport, onExportC
                 <Text style={[styles.cell, styles.colLat, isCurrentWaypoint && styles.currentWaypointText, isSkipped && styles.skippedText]}>{wp.lat.toFixed(7)}</Text>
                 <Text style={[styles.cell, styles.colLon, isCurrentWaypoint && styles.currentWaypointText, isSkipped && styles.skippedText]}>{wp.lon.toFixed(7)}</Text>
                 <Text style={[styles.cell, styles.colAlt, isCurrentWaypoint && styles.currentWaypointText, isSkipped && styles.skippedText]}>{wp.alt.toFixed(2)}</Text>
-                <View style={[styles.cell, styles.colStatus, isCurrentWaypoint && styles.currentWaypointText, isSkipped && styles.skippedStatusCell]}>
-                  <Text style={[{ color: statusColor }, isSkipped && styles.skippedText]}>{statusDisplay} {isCurrentWaypoint ? '◄' : ''}</Text>
+                <View style={[styles.colStatus, isSkipped && styles.skippedStatusCell]}>
+                  <Text style={[styles.cell, { color: statusColor }, isCurrentWaypoint && styles.currentWaypointText, isSkipped && styles.skippedText]}>{statusDisplay} {isCurrentWaypoint ? '◄' : ''}</Text>
                   {isSkipped && <View style={styles.skippedBadge}><Text style={styles.skippedBadgeText}>SKIPPED</Text></View>}
                 </View>
                 <Text style={[styles.cell, styles.colTime, isCurrentWaypoint && styles.currentWaypointText, isSkipped && styles.skippedText]}>{formatTimestamp(wpStatus?.timestamp)}</Text>
-                <Text style={[
-                  styles.cell, 
-                  styles.colRemark, 
-                  isCurrentWaypoint && styles.currentWaypointText, 
-                  isSkipped && styles.skippedText,
-                  getAccuracyDisplay(wpStatus).color && { color: getAccuracyDisplay(wpStatus).color }
-                ]}>
-                  {getAccuracyDisplay(wpStatus).text || wpStatus?.remark || (wpStatus?.status === 'skipped' ? 'Skipped' : wpStatus?.status === 'completed' ? 'Completed' : 'Pending')}
-                </Text>
+                <View style={[styles.colRemark, styles.remarkCell]}>
+                  <Text style={[
+                    styles.cell,
+                    isCurrentWaypoint && styles.currentWaypointText,
+                    isSkipped && styles.skippedText,
+                  ]}>
+                    {wpStatus?.status === 'completed' ? '✅ Completed' : wpStatus?.status === 'skipped' ? 'Skipped' : wpStatus?.marked ? '📍 Marked' : wpStatus?.reached ? '🚀 Reached' : wpStatus?.status === 'loading' ? 'Loading' : 'Pending'}
+                  </Text>
+                  {(() => {
+                    const { text: accuracyText, color: accuracyColor } = getAccuracyDisplay(wpStatus);
+                    const displayText = accuracyText || wpStatus?.remark || '';
+                    // console.log(`[WaypointsTable] Remark cell WP${wp.sn}: accuracyText="${accuracyText}", remark="${wpStatus?.remark}", displayText="${displayText}"`);
+                    return displayText ? (
+                      <Text style={[
+                        styles.cell,
+                        styles.remarkDetail,
+                        isCurrentWaypoint && styles.currentWaypointText,
+                        isSkipped && styles.skippedText,
+                        accuracyColor && { color: accuracyColor }
+                      ]}>
+                        {displayText}
+                      </Text>
+                    ) : null;
+                  })()}
+                </View>
               </View>
             );
           })}
@@ -293,4 +322,13 @@ const styles = StyleSheet.create({
   colStatus: { flex: 1.0 },
   colTime: { flex: 1.2 },
   colRemark: { flex: 1.3 },
+  remarkCell: {
+    flexDirection: 'column',
+    justifyContent: 'center',
+  },
+  remarkDetail: {
+    fontSize: 12,
+    marginTop: 2,
+    opacity: 0.8,
+  },
 });

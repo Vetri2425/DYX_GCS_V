@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, Alert } from 'react-native';
 import VoiceSettingsModal from './VoiceSettingsModal';
 import { FailsafeModeSelector } from '../pathplan/FailsafeModeSelector';
 import { colors } from '../../theme/colors';
@@ -7,8 +7,9 @@ import { useRover } from '../../context/RoverContext';
 
 export function HeaderBar({ missionMode = 'DGPS Mark' }: { missionMode?: string }) {
   const [showVoiceModal, setShowVoiceModal] = useState(false);
-  const { gpsFailsafeMode, setGpsFailsafeMode, telemetry } = useRover();
+  const { gpsFailsafeMode, setGpsFailsafeMode, telemetry, services } = useRover();
   const [showFailsafeModeSelector, setShowFailsafeModeSelector] = useState(false);
+  const [isEmergencyStopping, setIsEmergencyStopping] = useState(false);
   const getModeIcon = (mode: string): string => {
     switch (mode.toLowerCase()) {
       case 'dgps mark':
@@ -24,6 +25,40 @@ export function HeaderBar({ missionMode = 'DGPS Mark' }: { missionMode?: string 
       default:
         return '🎯';
     }
+  };
+
+  const handleEmergencyStop = async () => {
+    Alert.alert(
+      '🚨 EMERGENCY STOP',
+      'This will immediately stop all operations. Continue?',
+      [
+        {
+          text: 'Cancel',
+          style: 'cancel',
+        },
+        {
+          text: 'STOP NOW',
+          style: 'destructive',
+          onPress: async () => {
+            setIsEmergencyStopping(true);
+            try {
+              console.log('[EMERGENCY] Executing emergency stop from header');
+              const response = await services.emergencyStop();
+              if (response?.success) {
+                Alert.alert('✅ Emergency Stop', 'All operations stopped');
+              } else {
+                Alert.alert('❌ Failed', 'Emergency stop failed');
+              }
+            } catch (error) {
+              console.error('[EMERGENCY] Error:', error);
+              Alert.alert('❌ Error', 'Failed to execute emergency stop');
+            } finally {
+              setIsEmergencyStopping(false);
+            }
+          },
+        },
+      ]
+    );
   };
 
   return (
@@ -71,6 +106,18 @@ export function HeaderBar({ missionMode = 'DGPS Mark' }: { missionMode?: string 
         >
           <Text style={styles.voiceIcon}>🔊</Text>
           <Text style={styles.voiceText}>Voice</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          onPress={handleEmergencyStop}
+          style={[styles.emergencyButton, isEmergencyStopping && styles.buttonDisabled]}
+          disabled={isEmergencyStopping}
+          accessibilityLabel="Emergency stop"
+          accessibilityRole="button"
+        >
+          <Text style={styles.emergencyIcon}>🚨</Text>
+          <Text style={styles.emergencyText}>
+            {isEmergencyStopping ? 'Stopping...' : 'STOP'}
+          </Text>
         </TouchableOpacity>
         <TouchableOpacity
           onPress={() => setShowFailsafeModeSelector(true)}
@@ -178,6 +225,32 @@ const styles = StyleSheet.create({
     color: '#ffffff',
     fontSize: 14,
     fontWeight: '700'
+  },
+  emergencyButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#DC2626',
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    borderWidth: 2,
+    borderColor: '#991B1B',
+    marginRight: 4,
+    minWidth: 90,
+  },
+  emergencyIcon: {
+    fontSize: 16,
+    marginRight: 6,
+    color: '#ffffff'
+  },
+  emergencyText: {
+    color: '#ffffff',
+    fontSize: 13,
+    fontWeight: '900',
+    letterSpacing: 0.5,
+  },
+  buttonDisabled: {
+    opacity: 0.5,
   },
   gearButton: {
     alignItems: 'center',

@@ -1,0 +1,692 @@
+name: AI Coding Assistant Pro
+version: 1.0.0
+schema: v1
+
+models:
+  # Main chat model - use deepseek-chat (NOT deepseek-reasoner)
+  - name: DeepSeek Chat
+    provider: deepseek
+    model: deepseek-chat
+    apiKey: sk-c7f3a23462054adb9f471f20809d35ef
+    apiBase: https://api.deepseek.com/beta
+    roles:
+      - chat
+      - edit
+      - apply
+    contextLength: 128000
+    defaultCompletionOptions:
+      temperature: 0.0
+      maxTokens: 8192  # Increased for longer structured responses
+
+  # Autocomplete model - use deepseek-coder
+  - name: DeepSeek Coder
+    provider: deepseek
+    model: deepseek-coder
+    apiKey: sk-c7f3a23462054adb9f471f20809d35ef
+    apiBase: https://api.deepseek.com/beta
+    roles:
+      - autocomplete
+    contextLength: 16000
+    defaultCompletionOptions:
+      temperature: 0.0
+      maxTokens: 2048
+
+# Context providers
+context:
+  - provider: code
+  - provider: diff
+  - provider: terminal
+  - provider: problems
+  - provider: folder
+  - provider: codebase
+    params:
+      nRetrieve: 25
+      nFinal: 5
+
+# System instructions for better output quality
+rules:
+  - Always provide well-structured, professional documentation
+  - Use clear hierarchical formatting with numbered sections
+  - Include concrete examples and implementation details
+  - Write as if creating technical specification documents
+  - Be thorough but concise - no fluff or unnecessary repetition
+  - Use bullet points for lists, not paragraphs
+  - Include "why" explanations, not just "what" or "how"
+  - Format code examples with proper syntax highlighting
+  - Provide actionable recommendations for developers
+
+# Custom prompts - GitHub Copilot style
+prompts:
+  # ========================================
+  # DOCUMENTATION & ANALYSIS PROMPTS
+  # ========================================
+  
+  - name: analyze-screen
+    description: Analyze UI screen/component with structured documentation
+    prompt: |
+      Analyze the selected code/screen and provide a comprehensive technical specification in this exact format:
+      
+      # [Screen/Component Name] Analysis
+      
+      ## 1. Purpose
+      [One paragraph explaining the primary function and user goals]
+      
+      ## 2. Component Summary
+      
+      ### [Component Name 1]
+      Function: [What this component does]
+      Key elements:
+      - [Element 1 with description]
+      - [Element 2 with description]
+      - [Element 3 with description]
+      
+      ### [Component Name 2]
+      Function: [What this component does]
+      Key elements:
+      - [Element 1 with description]
+      - [Element 2 with description]
+      
+      [Continue for all major components]
+      
+      ## 3. User Flow
+      
+      ### [Primary Flow Name]:
+      1. [Step 1] - [Description]
+      2. [Step 2] - [Description]
+      3. [Step 3] - [Description]
+      
+      ### [Secondary Flow Name]:
+      1. [Step 1] - [Description]
+      2. [Step 2] - [Description]
+      
+      ## 4. Technical Implementation Notes
+      - [Key technical consideration 1]
+      - [Key technical consideration 2]
+      - [Dependencies or requirements]
+      
+      ## 5. Edge Cases & Error Handling
+      - [Edge case 1 and how to handle it]
+      - [Edge case 2 and how to handle it]
+
+  - name: analyze-function
+    description: Deep analysis of function/method with structured format
+    prompt: |
+      Analyze the selected function and provide a structured analysis:
+      
+      ## Function Analysis: [Function Name]
+      
+      ### 1. Purpose
+      [Clear explanation of what this function does and why it exists]
+      
+      ### 2. Signature
+      ```
+      [Function signature with types]
+      ```
+      
+      ### 3. Parameters
+      - **[param1]**: [Type] - [Description and valid values]
+      - **[param2]**: [Type] - [Description and valid values]
+      
+      ### 4. Return Value
+      - **Type**: [Return type]
+      - **Description**: [What is returned and when]
+      
+      ### 5. Algorithm Flow
+      1. [Step 1 - what happens]
+      2. [Step 2 - what happens]
+      3. [Step 3 - what happens]
+      
+      ### 6. Dependencies
+      - [External library or function 1]
+      - [External library or function 2]
+      
+      ### 7. Side Effects
+      - [Any state mutations or external changes]
+      
+      ### 8. Error Handling
+      - [Error condition 1] → [How it's handled]
+      - [Error condition 2] → [How it's handled]
+      
+      ### 9. Performance Considerations
+      - Time complexity: [O notation]
+      - Space complexity: [O notation]
+      - [Any performance notes]
+      
+      ### 10. Potential Improvements
+      - [Improvement suggestion 1]
+      - [Improvement suggestion 2]
+
+  - name: document
+    description: Generate professional documentation
+    prompt: |
+      Generate comprehensive, professional documentation for the selected code:
+      
+      ## Documentation
+      
+      ### Overview
+      [Brief description of what this code does]
+      
+      ### Usage
+      ```typescript
+      // Example usage showing typical scenario
+      [Code example]
+      ```
+      
+      ### API Reference
+      
+      #### Parameters
+      | Name | Type | Required | Default | Description |
+      |------|------|----------|---------|-------------|
+      | [param] | [type] | [yes/no] | [value] | [description] |
+      
+      #### Returns
+      - **Type**: [return type]
+      - **Description**: [what is returned]
+      
+      ### Examples
+      
+      #### Example 1: [Common Use Case]
+      ```typescript
+      [Code example with comments]
+      ```
+      
+      #### Example 2: [Edge Case]
+      ```typescript
+      [Code example with comments]
+      ```
+      
+      ### Error Handling
+      | Error Type | Cause | Resolution |
+      |------------|-------|------------|
+      | [ErrorName] | [Why it occurs] | [How to fix] |
+      
+      ### Notes
+      - [Important note 1]
+      - [Important note 2]
+      - [Known limitations]
+      
+      ### See Also
+      - [Related function/component 1]
+      - [Related function/component 2]
+
+  # ========================================
+  # CODE GENERATION PROMPTS
+  # ========================================
+
+  - name: test
+    description: Generate comprehensive unit tests
+    prompt: |
+      Generate a complete test suite for the selected code following these requirements:
+      
+      1. **Test Structure**:
+         - Use describe/it blocks for organization
+         - Group related tests together
+         - Clear, descriptive test names
+      
+      2. **Coverage Requirements**:
+         - Happy path scenarios (at least 3)
+         - Error handling and edge cases (at least 3)
+         - Boundary conditions
+         - Null/undefined handling
+         - Type validation
+      
+      3. **Test Quality**:
+         - Use proper assertions (expect statements)
+         - Mock external dependencies
+         - Setup/teardown where needed
+         - Test isolation (no shared state)
+         - Meaningful test data
+      
+      4. **Format**:
+         ```typescript
+         describe('[Component/Function Name]', () => {
+           // Setup
+           beforeEach(() => {
+             // Initialization
+           });
+           
+           describe('Happy Path', () => {
+             it('should [expected behavior]', () => {
+               // Arrange
+               // Act
+               // Assert
+             });
+           });
+           
+           describe('Error Handling', () => {
+             it('should [handle error case]', () => {
+               // Test
+             });
+           });
+           
+           describe('Edge Cases', () => {
+             it('should [handle edge case]', () => {
+               // Test
+             });
+           });
+         });
+         ```
+      
+      Include comments explaining complex test scenarios.
+
+  - name: implement
+    description: Implement feature with structured approach
+    prompt: |
+      Implement the requested feature following this structured approach:
+      
+      ## Implementation Plan
+      
+      ### 1. Requirements Analysis
+      [List what needs to be built]
+      
+      ### 2. Technical Approach
+      [Explain the implementation strategy]
+      
+      ### 3. Code Structure
+      ```typescript
+      // File: [filename]
+      [Complete implementation with comments]
+      ```
+      
+      ### 4. Usage Example
+      ```typescript
+      // How to use the new feature
+      [Example code]
+      ```
+      
+      ### 5. Testing Strategy
+      - [Test case 1]
+      - [Test case 2]
+      - [Test case 3]
+      
+      ### 6. Integration Notes
+      - [How this integrates with existing code]
+      - [Any breaking changes]
+      - [Migration steps if needed]
+      
+      Provide production-ready code with:
+      - Proper error handling
+      - Input validation
+      - Type safety
+      - Clear comments
+      - Defensive programming
+
+  - name: refactor
+    description: Refactor code with detailed analysis
+    prompt: |
+      Refactor the selected code with this structured approach:
+      
+      ## Refactoring Analysis
+      
+      ### 1. Current Issues
+      - [Issue 1: Description and why it's problematic]
+      - [Issue 2: Description and why it's problematic]
+      - [Issue 3: Description and why it's problematic]
+      
+      ### 2. Refactoring Goals
+      - [Goal 1: What we're trying to achieve]
+      - [Goal 2: What we're trying to achieve]
+      
+      ### 3. Refactored Code
+      ```typescript
+      // [Filename]
+      [Complete refactored implementation with explanatory comments]
+      ```
+      
+      ### 4. Key Changes
+      1. **[Change 1]**: [Before] → [After] | Reason: [Why this improves the code]
+      2. **[Change 2]**: [Before] → [After] | Reason: [Why this improves the code]
+      3. **[Change 3]**: [Before] → [After] | Reason: [Why this improves the code]
+      
+      ### 5. Benefits
+      - ✅ [Benefit 1]
+      - ✅ [Benefit 2]
+      - ✅ [Benefit 3]
+      
+      ### 6. Migration Steps
+      1. [Step 1]
+      2. [Step 2]
+      3. [Step 3]
+      
+      ### 7. Testing Checklist
+      - [ ] [Test to verify refactoring works]
+      - [ ] [Test to verify no regressions]
+      - [ ] [Test for edge cases]
+
+  # ========================================
+  # DEBUGGING & OPTIMIZATION PROMPTS
+  # ========================================
+
+  - name: fix
+    description: Debug and fix issues with detailed analysis
+    prompt: |
+      Analyze and fix the selected code following this format:
+      
+      ## Bug Analysis & Fix
+      
+      ### 1. Issue Identification
+      **Problem**: [Clear description of the bug]
+      **Severity**: [Critical/High/Medium/Low]
+      **Impact**: [Who/what is affected]
+      
+      ### 2. Root Cause Analysis
+      [Explain what's causing the issue and why]
+      
+      ### 3. Reproduction Steps
+      1. [Step 1]
+      2. [Step 2]
+      3. [Expected vs Actual behavior]
+      
+      ### 4. The Fix
+      ```typescript
+      // Fixed code with inline comments explaining changes
+      [Complete fixed implementation]
+      ```
+      
+      ### 5. Changes Made
+      | Line(s) | Before | After | Reason |
+      |---------|--------|-------|--------|
+      | [#] | [old code] | [new code] | [why changed] |
+      
+      ### 6. Testing the Fix
+      ```typescript
+      // Test to verify the fix works
+      [Test code]
+      ```
+      
+      ### 7. Prevention
+      - [How to prevent this bug in the future]
+      - [Code review checklist item]
+      - [Potential lint rule or type check]
+      
+      ### 8. Related Issues
+      - [Other places this bug might exist]
+      - [Similar patterns to watch for]
+
+  - name: optimize
+    description: Optimize code with performance analysis
+    prompt: |
+      Optimize the selected code with detailed performance analysis:
+      
+      ## Performance Optimization Report
+      
+      ### 1. Current Performance Analysis
+      - **Time Complexity**: [Current O notation]
+      - **Space Complexity**: [Current O notation]
+      - **Bottlenecks**:
+        - [Bottleneck 1: Description and measurement]
+        - [Bottleneck 2: Description and measurement]
+      
+      ### 2. Optimization Opportunities
+      | Issue | Impact | Difficulty | Priority |
+      |-------|--------|------------|----------|
+      | [Issue 1] | [High/Med/Low] | [Easy/Med/Hard] | [1-5] |
+      | [Issue 2] | [High/Med/Low] | [Easy/Med/Hard] | [1-5] |
+      
+      ### 3. Optimized Implementation
+      ```typescript
+      // Optimized code with performance comments
+      [Complete optimized implementation]
+      ```
+      
+      ### 4. Performance Improvements
+      | Metric | Before | After | Improvement |
+      |--------|--------|-------|-------------|
+      | Time Complexity | [O(...)] | [O(...)] | [X% faster] |
+      | Space Complexity | [O(...)] | [O(...)] | [X% less memory] |
+      | Operations | [count] | [count] | [X% reduction] |
+      
+      ### 5. Optimization Techniques Used
+      1. **[Technique 1]**: [Explanation of how it improves performance]
+      2. **[Technique 2]**: [Explanation of how it improves performance]
+      3. **[Technique 3]**: [Explanation of how it improves performance]
+      
+      ### 6. Trade-offs
+      - ⚖️ [Trade-off 1: What was sacrificed for performance]
+      - ⚖️ [Trade-off 2: What was sacrificed for performance]
+      
+      ### 7. Benchmark Results
+      ```
+      [Performance test results showing improvement]
+      ```
+      
+      ### 8. When to Use
+      - ✅ Use this optimization when: [Scenario]
+      - ❌ Avoid this optimization when: [Scenario]
+
+  - name: explain
+    description: Explain code with structured breakdown
+    prompt: |
+      Explain the selected code in a structured, educational format:
+      
+      ## Code Explanation
+      
+      ### 1. High-Level Overview
+      [What this code does in 2-3 sentences]
+      
+      ### 2. Purpose & Context
+      - **What**: [What this code accomplishes]
+      - **Why**: [Why this code exists/is needed]
+      - **Where**: [Where it fits in the larger system]
+      
+      ### 3. Step-by-Step Breakdown
+      
+      ```typescript
+      // Line-by-line explanation
+      [Code with detailed inline comments]
+      ```
+      
+      #### Detailed Flow:
+      1. **[Step 1]**: [What happens]
+         - Input: [What comes in]
+         - Process: [What's done]
+         - Output: [What goes out]
+      
+      2. **[Step 2]**: [What happens]
+         - Input: [What comes in]
+         - Process: [What's done]
+         - Output: [What goes out]
+      
+      ### 4. Key Concepts Used
+      - **[Concept 1]**: [Brief explanation]
+      - **[Concept 2]**: [Brief explanation]
+      - **[Concept 3]**: [Brief explanation]
+      
+      ### 5. Important Details
+      - ⚠️ [Important detail 1 to be aware of]
+      - ⚠️ [Important detail 2 to be aware of]
+      
+      ### 6. Common Misconceptions
+      - ❌ [Common mistake]: [Why it's wrong]
+      - ✅ [Correct approach]: [Why it's right]
+      
+      ### 7. Related Patterns
+      - [Related pattern/concept 1]
+      - [Related pattern/concept 2]
+      
+      ### 8. Further Reading
+      - [Resource/link for deeper understanding]
+
+  # ========================================
+  # ARCHITECTURE & DESIGN PROMPTS
+  # ========================================
+
+  - name: design
+    description: Design system architecture or component
+    prompt: |
+      Design a system architecture or component following this format:
+      
+      ## System Design Document
+      
+      ### 1. Requirements
+      
+      #### Functional Requirements
+      - [Requirement 1]
+      - [Requirement 2]
+      - [Requirement 3]
+      
+      #### Non-Functional Requirements
+      - **Performance**: [Target metrics]
+      - **Scalability**: [Scale expectations]
+      - **Security**: [Security requirements]
+      - **Maintainability**: [Maintenance considerations]
+      
+      ### 2. High-Level Architecture
+      
+      ```
+      [ASCII diagram or description of architecture]
+      
+      ┌─────────────┐     ┌─────────────┐     ┌─────────────┐
+      │  Component  │────▶│  Component  │────▶│  Component  │
+      │      A      │     │      B      │     │      C      │
+      └─────────────┘     └─────────────┘     └─────────────┘
+      ```
+      
+      ### 3. Component Breakdown
+      
+      #### Component A: [Name]
+      - **Responsibility**: [What it does]
+      - **Dependencies**: [What it needs]
+      - **Interface**:
+        ```typescript
+        interface [ComponentInterface] {
+          [methods and properties]
+        }
+        ```
+      
+      #### Component B: [Name]
+      - **Responsibility**: [What it does]
+      - **Dependencies**: [What it needs]
+      - **Interface**: [Interface definition]
+      
+      ### 4. Data Flow
+      1. [Step 1: Data enters system]
+      2. [Step 2: Data is processed]
+      3. [Step 3: Data is stored/returned]
+      
+      ### 5. Technology Stack
+      | Layer | Technology | Justification |
+      |-------|------------|---------------|
+      | [Frontend] | [Tech] | [Why chosen] |
+      | [Backend] | [Tech] | [Why chosen] |
+      | [Database] | [Tech] | [Why chosen] |
+      
+      ### 6. Design Patterns Used
+      - **[Pattern 1]**: [How and why it's used]
+      - **[Pattern 2]**: [How and why it's used]
+      
+      ### 7. Security Considerations
+      - [Security measure 1]
+      - [Security measure 2]
+      - [Authentication/Authorization approach]
+      
+      ### 8. Scalability Strategy
+      - [How the system scales horizontally]
+      - [How the system scales vertically]
+      - [Bottlenecks and mitigation]
+      
+      ### 9. Error Handling Strategy
+      - [How errors are detected]
+      - [How errors are logged]
+      - [How errors are recovered]
+      
+      ### 10. Implementation Phases
+      
+      **Phase 1**: [Core features]
+      - [Feature 1]
+      - [Feature 2]
+      
+      **Phase 2**: [Enhanced features]
+      - [Feature 3]
+      - [Feature 4]
+      
+      **Phase 3**: [Optimization]
+      - [Improvement 1]
+      - [Improvement 2]
+
+  - name: review
+    description: Code review with detailed feedback
+    prompt: |
+      Perform a comprehensive code review of the selected code:
+      
+      ## Code Review Report
+      
+      ### Summary
+      **Overall Quality**: [Excellent/Good/Fair/Needs Improvement]
+      **Recommendation**: [Approve/Approve with changes/Request changes]
+      
+      ### 1. Strengths ✅
+      - [What's done well 1]
+      - [What's done well 2]
+      - [What's done well 3]
+      
+      ### 2. Issues Found
+      
+      #### 🔴 Critical Issues (Must Fix)
+      | Line(s) | Issue | Impact | Suggested Fix |
+      |---------|-------|--------|---------------|
+      | [#] | [Description] | [Impact] | [How to fix] |
+      
+      #### 🟡 Medium Issues (Should Fix)
+      | Line(s) | Issue | Impact | Suggested Fix |
+      |---------|-------|--------|---------------|
+      | [#] | [Description] | [Impact] | [How to fix] |
+      
+      #### 🟢 Minor Issues (Nice to Fix)
+      | Line(s) | Issue | Impact | Suggested Fix |
+      |---------|-------|--------|---------------|
+      | [#] | [Description] | [Impact] | [How to fix] |
+      
+      ### 3. Code Quality Assessment
+      
+      | Category | Rating | Notes |
+      |----------|--------|-------|
+      | Readability | [1-5] | [Comments] |
+      | Maintainability | [1-5] | [Comments] |
+      | Performance | [1-5] | [Comments] |
+      | Security | [1-5] | [Comments] |
+      | Test Coverage | [1-5] | [Comments] |
+      | Documentation | [1-5] | [Comments] |
+      
+      ### 4. Specific Recommendations
+      
+      #### Security
+      - [Security recommendation 1]
+      - [Security recommendation 2]
+      
+      #### Performance
+      - [Performance recommendation 1]
+      - [Performance recommendation 2]
+      
+      #### Best Practices
+      - [Best practice recommendation 1]
+      - [Best practice recommendation 2]
+      
+      ### 5. Suggested Refactoring
+      ```typescript
+      // Improved version addressing main concerns
+      [Refactored code]
+      ```
+      
+      ### 6. Testing Recommendations
+      - [ ] [Test case that should be added]
+      - [ ] [Test case that should be added]
+      - [ ] [Test case that should be added]
+      
+      ### 7. Questions for Developer
+      1. [Question about design decision]
+      2. [Question about implementation choice]
+      
+      ### 8. Learning Resources
+      - [Link/resource for improvement area 1]
+      - [Link/resource for improvement area 2]
+
+# Autocomplete settings
+autocomplete:
+  multiline: true
+  template: |
+    {{{prefix}}}
+    
+    Complete the code following best practices.
+    
+    {{{suffix}}}

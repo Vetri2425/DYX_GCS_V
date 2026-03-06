@@ -9,6 +9,7 @@ export interface PathPlanWaypoint {
     block?: string;
     pile?: string;
     distance?: number; // Distance from previous waypoint in meters
+    mark?: boolean; // Per-waypoint marking. undefined = use global servo_enabled
 }
 
 export interface MissionData {

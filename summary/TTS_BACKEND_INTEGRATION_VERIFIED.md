@@ -166,14 +166,14 @@ GET /api/tts/status
 - [x] JSON formats match backend
 - [x] Service methods implemented
 - [x] UI components ready
-- [ ] Backend server running on `http://192.168.1.102:5001`
+- [ ] Backend server running on `http://192.168.0.212:5001`
 
 ### Test Scenarios:
 
 #### Test 1: Get TTS Status
 ```bash
 # Backend test
-curl -s http://192.168.1.102:5001/api/tts/status | jq
+curl -s http://192.168.0.212:5001/api/tts/status | jq
 
 # Frontend: Opens app, clicks speaker icon
 # Expected: Modal shows current TTS state
@@ -182,7 +182,7 @@ curl -s http://192.168.1.102:5001/api/tts/status | jq
 #### Test 2: Change Language to Tamil
 ```bash
 # Backend test
-curl -s -X POST http://192.168.1.102:5001/api/tts/language \
+curl -s -X POST http://192.168.0.212:5001/api/tts/language \
   -H "Content-Type: application/json" \
   -d '{"language":"ta"}' | jq
 
@@ -193,7 +193,7 @@ curl -s -X POST http://192.168.1.102:5001/api/tts/language \
 #### Test 3: Enable TTS
 ```bash
 # Backend test
-curl -s -X POST http://192.168.1.102:5001/api/tts/control \
+curl -s -X POST http://192.168.0.212:5001/api/tts/control \
   -H "Content-Type: application/json" \
   -d '{"enabled":true}' | jq
 
@@ -204,7 +204,7 @@ curl -s -X POST http://192.168.1.102:5001/api/tts/control \
 #### Test 4: Test Voice Output
 ```bash
 # Backend test
-curl -s -X POST http://192.168.1.102:5001/api/tts/test \
+curl -s -X POST http://192.168.0.212:5001/api/tts/test \
   -H "Content-Type: application/json" \
   -d '{"message":"Testing Tamil voice"}' | jq
 
@@ -320,14 +320,14 @@ curl -s -X POST http://192.168.1.102:5001/api/tts/test \
 
 **Get Status:**
 ```typescript
-fetch('http://192.168.1.102:5001/api/tts/status')
+fetch('http://192.168.0.212:5001/api/tts/status')
   .then(r => r.json())
   .then(data => console.log(data))
 ```
 
 **Set Language:**
 ```typescript
-fetch('http://192.168.1.102:5001/api/tts/language', {
+fetch('http://192.168.0.212:5001/api/tts/language', {
   method: 'POST',
   headers: { 'Content-Type': 'application/json' },
   body: JSON.stringify({ language: 'ta' })
@@ -338,7 +338,7 @@ fetch('http://192.168.1.102:5001/api/tts/language', {
 
 **Enable TTS:**
 ```typescript
-fetch('http://192.168.1.102:5001/api/tts/control', {
+fetch('http://192.168.0.212:5001/api/tts/control', {
   method: 'POST',
   headers: { 'Content-Type': 'application/json' },
   body: JSON.stringify({ enabled: true })
@@ -390,7 +390,7 @@ JARVIS_LANG=en  # Default language, will be updated via API
 **Status:** ✅ READY FOR INTEGRATION TESTING
 
 **Next Steps:**
-1. Ensure backend is running on `http://192.168.1.102:5001`
+1. Ensure backend is running on `http://192.168.0.212:5001`
 2. Build and run the mobile app: `npm start`
 3. Click speaker icon in header
 4. Test all language selections

@@ -9,6 +9,7 @@ export interface Waypoint {
   lon: number;
   // Optional distance (meters) from previous waypoint. May be populated by PathPlan.
   distance?: number;
+  mark?: boolean;
   alt: number;
   status: 'Pending' | 'Completed' | 'Marked' | 'Reached' | 'Skipped';
   time: string;

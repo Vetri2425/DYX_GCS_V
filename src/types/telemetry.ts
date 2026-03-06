@@ -76,6 +76,11 @@ export interface RoverTelemetry {
   attitude?: {
     yaw_deg: number;
   };
+  // New fields from Pixhawk NTUN (CurrentState)
+  wp_dist_cm?: number;    // Distance to waypoint in cm
+  xtrack_cm?: number;     // Crosstrack error in cm (lateral deviation)
+  wp_brg?: number;        // Bearing to waypoint in degrees
+  position_error_cm?: number; // Total position error = sqrt(wp_dist² + xtrack²) in cm
   gps_failsafe?: GpsFailsafeStatus;
 }
 
@@ -95,6 +100,11 @@ export interface TelemetryEnvelope {
   attitude?: {
     yaw_deg: number;
   };
+  // New fields from Pixhawk NTUN (CurrentState)
+  wp_dist_cm?: number;
+  xtrack_cm?: number;
+  wp_brg?: number;
+  position_error_cm?: number; // Total position error = sqrt(wp_dist² + xtrack²) in cm
 }
 
 // Service response
@@ -137,12 +147,19 @@ export type GpsFailsafeMode = 'disable' | 'strict' | 'relax';
 export interface GpsFailsafeStatus {
   mode: GpsFailsafeMode;
   triggered: boolean;
-  accuracy_error_mm: number;
+  reason?: string;              // Human-readable trigger reason
+  fix_type?: number;            // GPS fix type (0-6, need 6 for RTK Fixed)
+  wp_dist_cm?: number;          // Distance to waypoint in cm (replaces accuracy_error_mm)
+  xtrack_cm?: number;           // Crosstrack error in cm (lateral deviation)
+  wp_brg?: number;              // Bearing to waypoint in degrees
+  requires_ack?: boolean;       // True if user acknowledgement needed (strict mode)
   servo_suppressed: boolean;
+  action?: string;              // "none", "pause_hold", "suppress_servo", or "recovered"
+  timestamp?: string;           // ISO format timestamp
 }
 
 export interface GpsFailsafeEvent {
-  accuracy_error_mm: number;
-  threshold_mm: number;
+  wp_dist_cm: number;           // Distance to waypoint in cm (replaces accuracy_error_mm)
+  threshold_cm: number;         // Threshold in cm (6.0 cm)
   timestamp: number;
 }

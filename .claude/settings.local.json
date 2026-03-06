@@ -30,7 +30,11 @@
       "Bash(taskkill /F /PID 47088)",
       "Bash(taskkill //F //PID 47088)",
       "Bash(adb logcat:*)",
-      "Bash(adb shell \"netstat -an | grep 5001\")"
+      "Bash(adb shell \"netstat -an | grep 5001\")",
+      "Bash(ssh:*)",
+      "Bash(__NEW_LINE_5f24c45df9e10f37__ echo \"=== Verification: Mission Endpoints in Config ===\")",
+      "Bash(__NEW_LINE_5f24c45df9e10f37__ echo \"=== Verification: WebSocket Subscription ===\")",
+      "Bash(__NEW_LINE_5f24c45df9e10f37__ echo \"=== Verification: Mission Parameters Methods ===\")"
     ],
     "deny": [],
     "ask": []

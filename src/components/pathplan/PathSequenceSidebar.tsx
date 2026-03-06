@@ -1,10 +1,13 @@
-import React, { useState } from 'react';
+import React, { useState, useCallback } from 'react';
 import { Modal, Alert } from 'react-native';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput } from 'react-native';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { colors } from '../../theme/colors';
 import { PathPlanWaypoint } from '../../types/pathplan';
 import { RowAssignmentDialog, BlockAssignmentDialog, PileAssignmentDialog, RowBlockPileButtons } from './RowBlockPileDialogs';
 import { EditWaypointDialog } from './EditWaypointDialog';
+import { DraggableWaypointsTable } from './DraggableWaypointsTable';
+import { recalculateWaypointDistances } from '../../utils/missionCalculator';
 import CheckBox from '@react-native-community/checkbox';
 import * as FileSystem from 'expo-file-system';
 import { Paths } from 'expo-file-system';
@@ -15,6 +18,8 @@ interface Props {
     onSelectWaypoint?: (id: number) => void;
     onDeleteWaypoint?: (id: number) => void;
     onUpdateWaypoints?: (waypoints: PathPlanWaypoint[]) => void;
+    onToggleMark?: (id: number, mark: boolean) => void;
+    globalServoEnabled?: boolean;
     missionName?: string;
     onMissionNameChange?: (name: string) => void;
 }
@@ -25,6 +30,8 @@ export const PathSequenceSidebar: React.FC<Props> = ({
     onSelectWaypoint,
     onDeleteWaypoint,
     onUpdateWaypoints,
+    onToggleMark,
+    globalServoEnabled = true,
     missionName = 'DRAWN MISSION - 4:15:34',
     onMissionNameChange,
 }) => {
@@ -131,6 +138,24 @@ export const PathSequenceSidebar: React.FC<Props> = ({
         onUpdateWaypoints?.(updatedWaypoints);
     };
 
+    const handleReorder = useCallback((fromIndex: number, toIndex: number) => {
+        if (!onUpdateWaypoints) return;
+
+        try {
+            const reordered = [...waypoints];
+            const [removed] = reordered.splice(fromIndex, 1);
+            reordered.splice(toIndex, 0, removed);
+
+            const updated = recalculateWaypointDistances(reordered);
+            onUpdateWaypoints(updated);
+
+            console.log(`Waypoint moved: ${fromIndex + 1} → ${toIndex + 1}`);
+        } catch (error) {
+            console.error('Reorder failed:', error);
+            Alert.alert('Error', 'Failed to reorder waypoints');
+        }
+    }, [waypoints, onUpdateWaypoints]);
+
     const handleExportWaypoints = async (format: 'json' | 'csv' | 'kml') => {
         let content = '';
         if (format === 'json') {
@@ -192,12 +217,13 @@ export const PathSequenceSidebar: React.FC<Props> = ({
                     <Text style={[styles.tableHeaderText, { flex: 1.2 }]}>Latitude</Text>
                     <Text style={[styles.tableHeaderText, { flex: 1.2 }]}>Longitude</Text>
                     <Text style={[styles.tableHeaderText, { flex: 0.6 }]}>Dist</Text>
+                    <Text style={[styles.tableHeaderText, { flex: 0.4 }]}>Mark</Text>
                     <Text style={[styles.tableHeaderText, { flex: 0.5 }]}>Action</Text>
                 </View>
 
                 {waypoints.map((wp, index) => (
                     <TouchableOpacity
-                        key={wp.id}
+                        key={`${wp.id}-${index}`}
                         style={[
                             styles.waypointItem,
                             selectedWaypoint === wp.id && styles.waypointItemSelected,
@@ -208,6 +234,17 @@ export const PathSequenceSidebar: React.FC<Props> = ({
                         <Text style={[styles.waypointCell, { flex: 1.2, fontFamily: 'monospace', fontSize: 10 }]}>{wp.lat?.toFixed(7) ?? '0.0000000'}</Text>
                         <Text style={[styles.waypointCell, { flex: 1.2, fontFamily: 'monospace', fontSize: 10 }]}>{wp.lon?.toFixed(7) ?? '0.0000000'}</Text>
                         <Text style={[styles.waypointCell, { flex: 0.6 }]}>{wp.distance?.toFixed(1) ?? '0.0'}</Text>
+
+                        {/* Mark Checkbox */}
+                        <TouchableOpacity
+                            style={{ flex: 0.4, alignItems: 'center' }}
+                            onPress={() => {
+                                const effective = wp.mark !== undefined ? wp.mark : globalServoEnabled;
+                                onToggleMark?.(wp.id, !effective);
+                            }}
+                        >
+                            <Text style={{ fontSize: 16 }}>{(wp.mark !== undefined ? wp.mark : globalServoEnabled) ? '✅' : '⬜'}</Text>
+                        </TouchableOpacity>
 
                         {/* Action Buttons */}
                         <View style={{ flex: 0.5, alignItems: 'center' }}>
@@ -235,8 +272,9 @@ export const PathSequenceSidebar: React.FC<Props> = ({
 
             {/* Full Screen Modal for Waypoint Table */}
             <Modal visible={isFullScreenTable} animationType="slide" transparent={false}>
-                <View style={{ flex: 1, backgroundColor: colors.panelBg }}>
-                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 24, backgroundColor: colors.cardBg }}>
+                <GestureHandlerRootView style={{ flex: 1 }}>
+                <View style={{ flex: 1, backgroundColor: colors.panelBg, padding: 18 }}>
+                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 24, backgroundColor: colors.cardBg, borderRadius: 16 }}>
                         <Text style={{ fontSize: 28, fontWeight: 'bold', color: colors.text }}>Marking Points Table</Text>
                         <View style={{ flexDirection: 'row', gap: 12 }}>
                             <TouchableOpacity 
@@ -277,51 +315,38 @@ export const PathSequenceSidebar: React.FC<Props> = ({
                             </TouchableOpacity>
                         </View>
                     </View>
-                    <ScrollView horizontal={false} style={{ flex: 1 }} contentContainerStyle={{ flexGrow: 1 }}>
-                        <View style={{ flex: 1, width: '100%' }}>
-                            {/* Table Header */}
-                            <View style={{ flexDirection: 'row', backgroundColor: '#0a2540', paddingVertical: 10, borderBottomWidth: 2, borderBottomColor: colors.border, width: '100%' }}>
-                                <Text style={{ flex: 0.7, color: '#67E8F9', fontWeight: 'bold', textAlign: 'center', fontSize: 20 }}>#</Text>
-                                <TouchableOpacity style={{ flex: 1.2 }} onPress={() => setShowBlockDialog(true)}>
-                                    <Text style={{ color: '#67E8F9', fontWeight: 'bold', textAlign: 'center', fontSize: 20 }}>Block</Text>
-                                </TouchableOpacity>
-                                <TouchableOpacity style={{ flex: 1.2 }} onPress={() => setShowRowDialog(true)}>
-                                    <Text style={{ color: '#67E8F9', fontWeight: 'bold', textAlign: 'center', fontSize: 20 }}>Row</Text>
-                                </TouchableOpacity>
-                                <TouchableOpacity style={{ flex: 1.2 }} onPress={() => setShowPileDialog(true)}>
-                                    <Text style={{ color: '#67E8F9', fontWeight: 'bold', textAlign: 'center', fontSize: 20 }}>Pile</Text>
-                                </TouchableOpacity>
-                                <Text style={{ flex: 2, color: '#67E8F9', fontWeight: 'bold', textAlign: 'center', fontSize: 20 }}>Latitude</Text>
-                                <Text style={{ flex: 2, color: '#67E8F9', fontWeight: 'bold', textAlign: 'center', fontSize: 20 }}>Longitude</Text>
-                                <Text style={{ flex: 1.2, color: '#67E8F9', fontWeight: 'bold', textAlign: 'center', fontSize: 20 }}>Altitude</Text>
-                                <Text style={{ flex: 1.2, color: '#67E8F9', fontWeight: 'bold', textAlign: 'center', fontSize: 20 }}>Dist (m)</Text>
-                                <Text style={{ flex: 0.8, color: '#67E8F9', fontWeight: 'bold', textAlign: 'center', fontSize: 20 }}></Text>
-                            </View>
-                            {/* Table Rows */}
-                            {waypoints.map((wp, index) => (
-                                <View key={wp.id} style={{ flexDirection: 'row', backgroundColor: index % 2 === 0 ? '#112e4a' : '#0a2540', paddingVertical: 6, alignItems: 'center', width: '100%' }}>
-                                    <Text style={{ flex: 0.7, color: '#ffffff', textAlign: 'center', fontWeight: 'bold', fontSize: 18 }}>{index + 1}</Text>
-                                    <Text style={{ flex: 1.2, color: '#fff', textAlign: 'center', fontSize: 18 }}>{wp.block || '-'}</Text>
-                                    <Text style={{ flex: 1.2, color: '#fff', textAlign: 'center', fontSize: 18 }}>{wp.row || '-'}</Text>
-                                    <Text style={{ flex: 1.2, color: '#fff', textAlign: 'center', fontSize: 18 }}>{wp.pile || '-'}</Text>
-                                    <Text style={{ flex: 2, color: '#fff', textAlign: 'center', fontFamily: 'monospace', fontSize: 18 }}>{wp.lat?.toFixed(7) ?? '0.0000000'}</Text>
-                                    <Text style={{ flex: 2, color: '#fff', textAlign: 'center', fontFamily: 'monospace', fontSize: 18 }}>{wp.lon?.toFixed(7) ?? '0.0000000'}</Text>
-                                    <Text style={{ flex: 1.2, color: '#fff', textAlign: 'center', fontSize: 18 }}>{wp.alt?.toFixed(2) || '0.00'}</Text>
-                                    <Text style={{ flex: 1.2, color: '#fff', textAlign: 'center', fontSize: 18 }}>{wp.distance?.toFixed(2) || '0.00'}</Text>
-                                    <TouchableOpacity onPress={() => onDeleteWaypoint?.(wp.id)} style={{ flex: 0.8, alignItems: 'center' }}>
-                                        <Text style={{ color: '#F87171', fontSize: 28 }}>🗑️</Text>
-                                    </TouchableOpacity>
-                                </View>
-                            ))}
-                            {waypoints.length === 0 && (
-                                <View style={styles.emptyState}>
-                                    <Text style={styles.emptyText}>No marking points yet</Text>
-                                    <Text style={styles.emptyHint}>Tap on map to add</Text>
-                                </View>
-                            )}
-                        </View>
-                    </ScrollView>
+                    {/* Table Header */}
+                    <View style={{ flex: 1, marginTop: 12, borderRadius: 16 }}>
+                    <View style={{ flexDirection: 'row', backgroundColor: '#0a2540', paddingVertical: 10, borderBottomWidth: 2, borderBottomColor: colors.border, width: '100%', alignItems: 'center', borderTopLeftRadius: 16, borderTopRightRadius: 16 }}>
+                        <View style={{ width: 36 }} />
+                        <Text style={{ flex: 0.7, color: '#67E8F9', fontWeight: 'bold', textAlign: 'center', fontSize: 20 }}>#</Text>
+                        <TouchableOpacity style={{ flex: 1.2 }} onPress={() => setShowBlockDialog(true)}>
+                            <Text style={{ color: '#67E8F9', fontWeight: 'bold', textAlign: 'center', fontSize: 20 }}>Block</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity style={{ flex: 1.2 }} onPress={() => setShowRowDialog(true)}>
+                            <Text style={{ color: '#67E8F9', fontWeight: 'bold', textAlign: 'center', fontSize: 20 }}>Row</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity style={{ flex: 1.2 }} onPress={() => setShowPileDialog(true)}>
+                            <Text style={{ color: '#67E8F9', fontWeight: 'bold', textAlign: 'center', fontSize: 20 }}>Pile</Text>
+                        </TouchableOpacity>
+                        <Text style={{ flex: 2, color: '#67E8F9', fontWeight: 'bold', textAlign: 'center', fontSize: 20 }}>Latitude</Text>
+                        <Text style={{ flex: 2, color: '#67E8F9', fontWeight: 'bold', textAlign: 'center', fontSize: 20 }}>Longitude</Text>
+                        <Text style={{ flex: 1.2, color: '#67E8F9', fontWeight: 'bold', textAlign: 'center', fontSize: 20 }}>Altitude</Text>
+                        <Text style={{ flex: 1.2, color: '#67E8F9', fontWeight: 'bold', textAlign: 'center', fontSize: 20 }}>Dist (m)</Text>
+                        <Text style={{ flex: 0.8, color: '#67E8F9', fontWeight: 'bold', textAlign: 'center', fontSize: 20 }}>Mark</Text>
+                        <View style={{ flex: 0.8 }} />
+                    </View>
+                    {/* Draggable Table */}
+                    <DraggableWaypointsTable
+                        waypoints={waypoints}
+                        onReorder={handleReorder}
+                        onDelete={onDeleteWaypoint}
+                        onToggleMark={onToggleMark}
+                        globalServoEnabled={globalServoEnabled}
+                    />
+                    </View>
                 </View>
+                </GestureHandlerRootView>
             </Modal>
 
             {/* Dialogs */}

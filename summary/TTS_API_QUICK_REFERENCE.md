@@ -20,7 +20,7 @@
 
 ### 1. Get Current Status
 ```bash
-curl -s http://192.168.1.102:5001/api/tts/status | jq
+curl -s http://192.168.0.212:5001/api/tts/status | jq
 ```
 **Expected Response:**
 ```json
@@ -29,7 +29,7 @@ curl -s http://192.168.1.102:5001/api/tts/status | jq
 
 ### 2. Get Supported Languages
 ```bash
-curl -s http://192.168.1.102:5001/api/tts/languages | jq
+curl -s http://192.168.0.212:5001/api/tts/languages | jq
 ```
 **Expected Response:**
 ```json
@@ -38,7 +38,7 @@ curl -s http://192.168.1.102:5001/api/tts/languages | jq
 
 ### 3. Change to Tamil
 ```bash
-curl -X POST http://192.168.1.102:5001/api/tts/language \
+curl -X POST http://192.168.0.212:5001/api/tts/language \
   -H "Content-Type: application/json" \
   -d '{"language":"ta"}' | jq
 ```
@@ -49,7 +49,7 @@ curl -X POST http://192.168.1.102:5001/api/tts/language \
 
 ### 4. Enable TTS
 ```bash
-curl -X POST http://192.168.1.102:5001/api/tts/control \
+curl -X POST http://192.168.0.212:5001/api/tts/control \
   -H "Content-Type: application/json" \
   -d '{"enabled":true}' | jq
 ```
@@ -60,7 +60,7 @@ curl -X POST http://192.168.1.102:5001/api/tts/control \
 
 ### 5. Test Voice
 ```bash
-curl -X POST http://192.168.1.102:5001/api/tts/test \
+curl -X POST http://192.168.1. 39:5001/api/tts/test \
   -H "Content-Type: application/json" \
   -d '{"message":"வணக்கம்"}' | jq
 ```
@@ -130,7 +130,7 @@ const result = await services.testTTS('Hello world');
 ## File Locations
 
 ### Configuration
-- **Backend URL:** [src/config.ts:18](src/config.ts#L18) → `http://192.168.1.102:5001`
+- **Backend URL:** [src/config.ts:18](src/config.ts#L18) → `http://192.168.0.212:5001`
 - **API Endpoints:** [src/config.ts:78-83](src/config.ts#L78-L83)
 
 ### Services

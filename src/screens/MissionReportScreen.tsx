@@ -18,7 +18,9 @@ import { LogClearDialog } from '../components/missionreport/LogClearDialog';
 import { MissionStartConfirmationDialog } from '../components/missionreport/MissionStartConfirmationDialog';
 import { useScreenReadiness } from '../hooks/useComponentReadiness';
 import PersistentStorage from '../services/PersistentStorage';
-import { calculateAccuracy, formatAccuracyDisplay } from '../utils/accuracyCalculation';
+// NOTE: calculateAccuracy and formatAccuracyDisplay commented out - now using backend wp_dist_cm
+// import { calculateAccuracy, formatAccuracyDisplay } from '../utils/accuracyCalculation';
+import { getAccuracyLevel } from '../utils/accuracyCalculation';
 
 // Layout constants — change these to adjust the overall layout quickly
 const LEFT_PANEL_WIDTH = '21%';
@@ -44,7 +46,7 @@ type WpStatus = {
   lat_achieved?: number;   // Actual rover lat when reached
   lon_achieved?: number;   // Actual rover lon when reached
   accuracy_level?: string; // 'excellent' | 'good' | 'fair' | 'poor'
-  position_error_mm?: number; // Distance error in mm
+  position_error_cm?: number; // Distance error in cm (was position_error_mm)
 };
 
 export default function MissionReportScreen() {
@@ -402,20 +404,17 @@ export default function MissionReportScreen() {
 
   // ✅ FIX: Depend on entire telemetry object to ensure live updates (matches DYX-GCS source)
   const vehicleStatus = useMemo((): VehicleStatus => {
-    missionLog('[MissionReportScreen] 🔄 Recomputing vehicleStatus with telemetry:', {
-      battery: telemetry.battery.percentage,
-      gps: telemetry.rtk.fix_type,
-      satellites: telemetry.global.satellites_visible,
-      hrms: telemetry.hrms,
-      vrms: telemetry.vrms,
-    });
+    // 🔧 FIX: Handle hrms/vrms as strings or numbers (backend sends strings currently)
+    const hrmsValue = typeof telemetry.hrms === 'string' ? parseFloat(telemetry.hrms) : telemetry.hrms;
+    const vrmsValue = typeof telemetry.vrms === 'string' ? parseFloat(telemetry.vrms) : telemetry.vrms;
+    
     return {
       battery: `${telemetry.battery.percentage.toFixed(1)}% (${telemetry.battery.voltage.toFixed(2)}V)`,
       gps: getFixTypeLabel(telemetry.rtk.fix_type),
       satellites: telemetry.global.satellites_visible,
       satelliteSignal: `${telemetry.global.satellites_visible}/10`,
-      hrms: `${telemetry.hrms.toFixed(3)} m`,
-      vrms: `${telemetry.vrms.toFixed(3)} m`,
+      hrms: `${(hrmsValue || 0).toFixed(3)} m`,
+      vrms: `${(vrmsValue || 0).toFixed(3)} m`,
       imu: telemetry.imu_status,
       mode: telemetry.state?.mode || 'UNKNOWN',
     };
@@ -1169,8 +1168,22 @@ export default function MissionReportScreen() {
         }
 
         if (savedIsActive) {
-          setIsMissionActive(savedIsActive);
-          console.log('[MissionReportScreen] 📂 Restored mission active state:', savedIsActive);
+          // 🔧 FIX: Only restore mission active state if backend telemetry confirms mission is actually running
+          // This prevents showing STOP button when backend mission is not running
+          const currentBackendStatus = telemetry?.mission?.status?.toString().toLowerCase();
+          const isBackendActuallyRunning = currentBackendStatus === 'running' || currentBackendStatus === 'active';
+          
+          if (isBackendActuallyRunning) {
+            setIsMissionActive(savedIsActive);
+            console.log('[MissionReportScreen] 📂 Restored mission active state:', savedIsActive, '(confirmed by backend)');
+          } else if (currentBackendStatus === undefined || currentBackendStatus === '') {
+            // If no telemetry yet, temporarily restore but will be corrected by MissionControlCard sync
+            setIsMissionActive(savedIsActive);
+            console.log('[MissionReportScreen] 📂 Restored mission active state temporarily (no telemetry yet):', savedIsActive);
+          } else {
+            setIsMissionActive(false);
+            console.log('[MissionReportScreen] 📂 Skipped restoring mission active state - backend shows:', currentBackendStatus || 'no status');
+          }
         }
 
         if (savedMode) {
@@ -1391,21 +1404,63 @@ export default function MissionReportScreen() {
         const roverLon = telemetryRef.current.global?.lon;
         const hrms = telemetryRef.current.hrms;
         const vrms = telemetryRef.current.vrms;
-        
+
+        // COMMENTED OUT: Frontend Haversine calculation - now using backend accuracy_error_mm
         // Calculate accuracy if we have position data and target waypoint
-        let accuracyData: { accuracy_level?: string; position_error_mm?: number } = {};
-        if (targetWaypoint && roverLat != null && roverLon != null && roverLat !== 0 && roverLon !== 0) {
-          const { errorMm, accuracy } = calculateAccuracy(
-            targetWaypoint.lat,
-            targetWaypoint.lon,
-            roverLat,
-            roverLon
-          );
+        // let accuracyData: { accuracy_level?: string; position_error_mm?: number } = {};
+        // if (targetWaypoint && roverLat != null && roverLon != null && roverLat !== 0 && roverLon !== 0) {
+        //   const { errorMm, accuracy } = calculateAccuracy(
+        //     targetWaypoint.lat,
+        //     targetWaypoint.lon,
+        //     roverLat,
+        //     roverLon
+        //   );
+        //   accuracyData = {
+        //     accuracy_level: accuracy.level,
+        //     position_error_mm: errorMm,
+        //   };
+        //   console.log(`[MissionReportScreen] 📊 Accuracy calculated for WP ${statusKey}: ${errorMm.toFixed(1)}mm (${accuracy.label})`);
+        // }
+
+        // USE ACCURACY DATA: Primary data source from event.accuracy_error_mm (sent by backend at top level)
+        // Priority: 1) event.accuracy_error_mm (PRIMARY from backend), 2) hrms fallback
+        
+        // PRIMARY: Backend accuracy_error_mm
+        const gpsFailsafeAccuracyMm = event.accuracy_error_mm ?? null;
+        
+        // COMMENTED OUT METHODS (kept for reference):
+        // const positionErrorCmFromEvent = event.position_error_cm ?? event.data?.position_error_cm ?? null;
+        // const accuracyErrorMmFromEvent = event.accuracy_error_mm ?? event.data?.accuracy_error_mm ?? null;
+        // const positionErrorMm_METHOD2 = telemetryRef.current.position_error_cm != null ? telemetryRef.current.position_error_cm * 10 : null;
+        // const positionErrorMm_METHOD3 = positionErrorCmFromEvent != null ? positionErrorCmFromEvent * 10 : null;
+        // const positionErrorMm_METHOD4 = accuracyErrorMmFromEvent != null ? accuracyErrorMmFromEvent : null;
+        
+        // Use backend accuracy as primary source
+        const backendAccuracyMm = gpsFailsafeAccuracyMm;
+
+        // FALLBACK: hrms (meters) converted to mm if no GPS failsafe available
+        // const hrmsAccuracyMm = hrms != null && hrms > 0 ? hrms * 1000 : null;
+        // const backendAccuracyMm_FALLBACK = (positionErrorMm != null && positionErrorMm > 0)
+        //                              ? positionErrorMm
+        //                              : hrmsAccuracyMm;
+
+        let accuracyData: { accuracy_level?: string; position_error_cm?: number } = {};
+        if (backendAccuracyMm != null) {
+          // Use same thresholds as frontend: Excellent ≤30mm, Good 30-60mm, Poor >60mm
+          const accuracy = getAccuracyLevel(backendAccuracyMm);
           accuracyData = {
             accuracy_level: accuracy.level,
-            position_error_mm: errorMm,
+            position_error_cm: backendAccuracyMm / 10, // Convert mm to cm for consistency with WaypointsTable
           };
-          console.log(`[MissionReportScreen] 📊 Accuracy calculated for WP ${statusKey}: ${errorMm.toFixed(1)}mm (${accuracy.label})`);
+          const source = 'event_accuracy_error_mm';
+          console.log(`[MissionReportScreen] 📊 Backend accuracy for WP ${statusKey}: ${backendAccuracyMm.toFixed(1)}mm (${accuracy.label}) [source: ${source}]`);
+        } else {
+          console.log(`[MissionReportScreen] ⚠️ No backend accuracy for WP ${statusKey}, sources checked:`, {
+            event_accuracy_error_mm: event.accuracy_error_mm,
+            // telemetry_position_error_cm: telemetryRef.current.position_error_cm,
+            // event_position_error_cm: event.position_error_cm,
+            // hrms: hrms,
+          });
         }
         
         const prevEntry = statusMapRef.current[statusKey];
@@ -1465,6 +1520,50 @@ export default function MissionReportScreen() {
         // Find the corresponding waypoint by waypoint_id to get the correct sn
         const targetWaypoint = waypointsRef.current.find(wp => wp.sn === wpId);
         const statusKey = targetWaypoint ? targetWaypoint.sn : wpId;
+
+        // Get hrms from telemetry for accuracy fallback
+        const hrms = telemetryRef.current.hrms;
+
+        // USE ACCURACY DATA: Primary data source from event.accuracy_error_mm (sent by backend at top level)
+        // Priority: 1) event.accuracy_error_mm (PRIMARY from backend), 2) hrms fallback
+        
+        // PRIMARY: Backend accuracy_error_mm
+        const gpsFailsafeAccuracyMm = event.accuracy_error_mm ?? null;
+        
+        // COMMENTED OUT METHODS (kept for reference):
+        // const positionErrorCmFromEvent = event.position_error_cm ?? event.data?.position_error_cm ?? null;
+        // const accuracyErrorMmFromEvent = event.accuracy_error_mm ?? event.data?.accuracy_error_mm ?? null;
+        // const positionErrorMm_METHOD2 = telemetryRef.current.position_error_cm != null ? telemetryRef.current.position_error_cm * 10 : null;
+        // const positionErrorMm_METHOD3 = positionErrorCmFromEvent != null ? positionErrorCmFromEvent * 10 : null;
+        // const positionErrorMm_METHOD4 = accuracyErrorMmFromEvent != null ? accuracyErrorMmFromEvent : null;
+        
+        // Use backend accuracy as primary source
+        const backendAccuracyMm = gpsFailsafeAccuracyMm;
+
+        // FALLBACK: hrms (meters) converted to mm if no GPS failsafe available
+        // const hrmsAccuracyMm = hrms != null && hrms > 0 ? hrms * 1000 : null;
+        // const backendAccuracyMm_FALLBACK = (positionErrorMm != null && positionErrorMm > 0)
+        //                              ? positionErrorMm
+        //                              : hrmsAccuracyMm;
+
+        let accuracyData: { accuracy_level?: string; position_error_cm?: number } = {};
+        if (backendAccuracyMm != null) {
+          // Use same thresholds as frontend: Excellent ≤30mm, Good 30-60mm, Poor >60mm
+          const accuracy = getAccuracyLevel(backendAccuracyMm);
+          accuracyData = {
+            accuracy_level: accuracy.level,
+            position_error_cm: backendAccuracyMm / 10, // Convert mm to cm for consistency with WaypointsTable
+          };
+          const source = 'event_accuracy_error_mm';
+          console.log(`[MissionReportScreen] 📊 Backend accuracy for WP ${statusKey} (marked): ${backendAccuracyMm.toFixed(1)}mm (${accuracy.label}) [source: ${source}]`);
+        } else {
+          console.log(`[MissionReportScreen] ⚠️ No backend accuracy for WP ${statusKey} (marked), sources checked:`, {
+            event_accuracy_error_mm: event.accuracy_error_mm,
+            // telemetry_position_error_cm: telemetryRef.current.position_error_cm,
+            // event_position_error_cm: event.position_error_cm,
+            // hrms: hrms,
+          });
+        }
         
         const prevEntry = statusMapRef.current[statusKey];
         const nextEntry = {
@@ -1475,6 +1574,7 @@ export default function MissionReportScreen() {
           pile: event.pile ?? prevEntry?.pile,
           rowNo: event.rowNo ?? event.row_no ?? prevEntry?.rowNo,
           remark: event.remark ?? (markingStatus === 'skipped' ? 'Skipped' : prevEntry?.remark),
+          ...accuracyData, // Add accuracy data from backend
         } as WpStatus;
 
         const changed = !prevEntry ||
@@ -1482,7 +1582,8 @@ export default function MissionReportScreen() {
           prevEntry.marked !== nextEntry.marked ||
           prevEntry.pile !== nextEntry.pile ||
           prevEntry.rowNo !== nextEntry.rowNo ||
-          prevEntry.remark !== nextEntry.remark;
+          prevEntry.remark !== nextEntry.remark ||
+          prevEntry.accuracy_level !== nextEntry.accuracy_level;
 
         if (changed) {
           setStatusMap(prev => ({
@@ -1490,7 +1591,7 @@ export default function MissionReportScreen() {
             [statusKey]: nextEntry,
           }));
         }
-        
+
         const statusEmoji = markingStatus === 'skipped' ? '⏭️' : '✅';
         console.log(`[MissionReportScreen] ${statusEmoji} Waypoint ${statusKey} ${markingStatus} at ${timestamp}`);
         // showNotification(
@@ -1565,7 +1666,7 @@ export default function MissionReportScreen() {
         if (event.mission_state === 'paused' || event.mission_state === 'PAUSED') {
           console.log('[MissionReportScreen] 🔴 MISSION STATE CHANGED TO PAUSED');
           console.log('[MissionReportScreen] 📋 Pause reason:', event.pause_reason || event.reason || 'Unknown');
-          console.log('[MissionReportScreen] 📋 GPS Failsafe mode:', gpsFailsafeMode);
+          console.log('[MissionReportScreen] 📋 GPS Failsafe mode:', telemetryRef.current.gps_failsafe?.mode);
           console.log('[MissionReportScreen] 📋 Full pause event:', JSON.stringify(event));
         }
         
@@ -1678,12 +1779,12 @@ export default function MissionReportScreen() {
           gps_failsafe_triggered: event.gps_failsafe_triggered,
           reason: event.reason,
           current_waypoint: event.current_waypoint,
-          accuracy_error: event.accuracy_error_mm,
+          wp_dist_cm: event.wp_dist_cm,
           full_event: JSON.stringify(event)
         });
         // Show notification to user
         showNotification(
-          'warning',
+          'info',
           'Mission Paused',
           event.reason || 'Mission paused by system'
         );
@@ -1805,7 +1906,15 @@ export default function MissionReportScreen() {
                 markedCount={markedCount}
                 statusMap={getDisplayMissionData().statusMap}
                 isMissionActive={isMissionActive}
-                roverPosition={roverPosition}
+                wpDistCm={telemetry.wp_dist_cm}
+                currentRoverPosition={
+                  roverPosition && roverPosition.lat && roverPosition.lng
+                    ? {
+                        latitude: roverPosition.lat,
+                        longitude: roverPosition.lng,
+                      }
+                    : undefined
+                }
               />
             </View>
             <View style={styles.centerPanel}>

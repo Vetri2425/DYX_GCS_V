@@ -1,7 +1,8 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 import { colors } from '../../theme/colors';
 import { Waypoint } from './types';
+import { Geodesic } from 'geographiclib';
 
 interface Props {
   waypoints: Waypoint[];
@@ -17,7 +18,13 @@ interface Props {
     remark?: string;
   }>;
   isMissionActive?: boolean;
-  roverPosition?: { lat: number; lng: number } | null;
+  wpDistCm?: number; // DEPRECATED: Legacy backend distance, kept for backward compatibility
+  
+  // NEW REQUIRED PROP: Current rover GPS position for accurate distance calculation
+  currentRoverPosition?: {
+    latitude: number;   // Rover's current GPS latitude (decimal degrees)
+    longitude: number;  // Rover's current GPS longitude (decimal degrees)
+  };
 }
 
 // Layout constants for quick adjustments
@@ -33,7 +40,8 @@ export const MissionProgressCard: React.FC<Props> = ({
   markedCount: providedMarkedCount,
   statusMap = {},
   isMissionActive = false,
-  roverPosition,
+  wpDistCm, // DEPRECATED: Legacy backend distance
+  currentRoverPosition, // NEW: Current rover GPS position
 }) => {
   const totalWaypoints = waypoints.length;
 
@@ -62,95 +70,139 @@ export const MissionProgressCard: React.FC<Props> = ({
   const currentWp = isMissionActive && currentIndex !== null && currentIndex >= 0 ? waypoints[currentIndex] : null;
   const nextWp = isMissionActive && nextIndex < totalWaypoints ? waypoints[nextIndex] : null;
 
-  // Calculate distance between two points using Vincenty formula
-  // (More accurate than Haversine - accurate to within 0.5mm vs ~0.5% error)
-  const calculateDistance = (point1: { lat: number; lon?: number; lng?: number } | null, point2: { lat: number; lon?: number; lng?: number } | null): number => {
-    if (!point1 || !point2) return 0;
+  /**
+   * HIGH-PRECISION GEODETIC DISTANCE CALCULATION
+   * 
+   * Calculate distance using Karney's formula (WGS84 ellipsoid)
+   * - Accuracy: ~15 nanometers for any distance on Earth
+   * - Method: Solves inverse geodesic problem on WGS84 ellipsoid
+   * - Better than Vincenty: More accurate and handles antipodal points
+   * 
+   * Reference: Karney, C. F. F. (2013). Algorithms for geodesics. 
+   *            Journal of Geodesy, 87(1), 43-55.
+   */
+  const calculateGeodesicDistance = (
+    lat1: number,
+    lon1: number,
+    lat2: number,
+    lon2: number
+  ): number => {
+    try {
+      // Initialize WGS84 ellipsoid (Earth's reference ellipsoid)
+      const geod = Geodesic.WGS84;
 
-    const lon1 = point1.lon ?? point1.lng ?? 0;
-    const lon2 = point2.lon ?? point2.lng ?? 0;
+      // Solve inverse geodesic problem
+      const result = geod.Inverse(lat1, lon1, lat2, lon2);
 
-    // WGS-84 ellipsoid parameters
-    const a = 6378137.0; // semi-major axis in meters
-    const b = 6356752.314245; // semi-minor axis in meters
-    const f = 1 / 298.257223563; // flattening
-
-    const lat1 = (point1.lat * Math.PI) / 180;
-    const lat2 = (point2.lat * Math.PI) / 180;
-    const lon1Rad = (lon1 * Math.PI) / 180;
-    const lon2Rad = (lon2 * Math.PI) / 180;
-
-    const L = lon2 - lon1;
-    const U1 = Math.atan((1 - f) * Math.tan(lat1));
-    const U2 = Math.atan((1 - f) * Math.tan(lat2));
-    const sinU1 = Math.sin(U1);
-    const cosU1 = Math.cos(U1);
-    const sinU2 = Math.sin(U2);
-    const cosU2 = Math.cos(U2);
-
-    let lambda = L;
-    let lambdaP: number;
-    let iterLimit = 100;
-    let cosSqAlpha: number;
-    let sinSigma: number;
-    let cos2SigmaM: number;
-    let cosSigma: number;
-    let sigma: number;
-
-    do {
-      const sinLambda = Math.sin(lambda);
-      const cosLambda = Math.cos(lambda);
-      sinSigma = Math.sqrt(
-        (cosU2 * sinLambda) * (cosU2 * sinLambda) +
-        (cosU1 * sinU2 - sinU1 * cosU2 * cosLambda) *
-        (cosU1 * sinU2 - sinU1 * cosU2 * cosLambda)
-      );
-      
-      if (sinSigma === 0) return 0; // co-incident points
-      
-      cosSigma = sinU1 * sinU2 + cosU1 * cosU2 * cosLambda;
-      sigma = Math.atan2(sinSigma, cosSigma);
-      const sinAlpha = cosU1 * cosU2 * sinLambda / sinSigma;
-      cosSqAlpha = 1 - sinAlpha * sinAlpha;
-      cos2SigmaM = cosSigma - 2 * sinU1 * sinU2 / cosSqAlpha;
-      
-      if (!Number.isFinite(cos2SigmaM)) cos2SigmaM = 0; // equatorial line
-      
-      const C = f / 16 * cosSqAlpha * (4 + f * (4 - 3 * cosSqAlpha));
-      lambdaP = lambda;
-      lambda = L + (1 - C) * f * sinAlpha *
-        (sigma + C * sinSigma * (cos2SigmaM + C * cosSigma *
-          (-1 + 2 * cos2SigmaM * cos2SigmaM)));
-    } while (Math.abs(lambda - lambdaP) > 1e-12 && --iterLimit > 0);
-
-    if (iterLimit === 0) {
-      // Vincenty failed to converge, fall back to Haversine
-      const R = 6371000;
-      const dLat = lat2 - lat1;
-      const dLon = lon2 - lon1;
-      const aHav = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-        Math.cos(lat1) * Math.cos(lat2) *
-        Math.sin(dLon / 2) * Math.sin(dLon / 2);
-      const cHav = 2 * Math.atan2(Math.sqrt(aHav), Math.sqrt(1 - aHav));
-      return R * cHav;
+      // Return distance in meters (s12 = geodesic distance)
+      // Type assertion: GeographicLib always returns s12 for valid coordinates
+      return (result as any).s12 ?? 0;
+    } catch (error) {
+      console.error('[MissionProgressCard] Geodesic calculation error:', error);
+      return 0;
     }
-
-    const uSq = cosSqAlpha * (a * a - b * b) / (b * b);
-    const A = 1 + uSq / 16384 * (4096 + uSq * (-768 + uSq * (320 - 175 * uSq)));
-    const B = uSq / 1024 * (256 + uSq * (-128 + uSq * (74 - 47 * uSq)));
-    const deltaSigma = B * sinSigma * (cos2SigmaM + B / 4 * (cosSigma *
-      (-1 + 2 * cos2SigmaM * cos2SigmaM) - B / 6 * cos2SigmaM *
-      (-3 + 4 * sinSigma * sinSigma) * (-3 + 4 * cos2SigmaM * cos2SigmaM)));
-
-    const distance = b * A * (sigma - deltaSigma);
-    return Number.isFinite(distance) && distance >= 0 ? distance : 0;
   };
 
-  // Calculate live distance: from rover position to next waypoint if mission active
-  const distance = isMissionActive && roverPosition && nextWp
-    ? calculateDistance(roverPosition, nextWp)
-    : calculateDistance(currentWp, nextWp);
-  const distanceText = distance > 0 ? `${(distance * 100).toFixed(1)}cm` : '—';
+  /**
+   * Calculate distance to current target waypoint (MEMOIZED)
+   * 
+   * Only recalculates when:
+   * - Mission active status changes
+   * - Current waypoint index changes
+   * - Rover position updates
+   * - Waypoints array changes
+   */
+  const distanceToCurrent = useMemo(() => {
+    // Guard: Mission must be active
+    if (!isMissionActive) {
+      return null;
+    }
+
+    // Guard: Must have valid current waypoint index
+    if (currentIndex === null || currentIndex < 0 || currentIndex >= waypoints.length) {
+      return null;
+    }
+
+    // Guard: Must have current rover position
+    if (!currentRoverPosition?.latitude || !currentRoverPosition?.longitude) {
+      console.warn('[MissionProgressCard] Missing rover position for distance calculation');
+      return null;
+    }
+
+    // Get target waypoint
+    const targetWaypoint = waypoints[currentIndex];
+
+    // Guard: Validate waypoint coordinates
+    if (!targetWaypoint?.lat || !targetWaypoint?.lon) {
+      console.error('[MissionProgressCard] Invalid waypoint coordinates at index', currentIndex);
+      return null;
+    }
+
+    /**
+     * Validate coordinate ranges (WGS84 bounds)
+     * Valid latitude: -90 to 90
+     * Valid longitude: -180 to 180
+     */
+    const isValidCoordinate = (lat: number, lon: number): boolean => {
+      return (
+        lat >= -90 &&
+        lat <= 90 &&
+        lon >= -180 &&
+        lon <= 180 &&
+        !isNaN(lat) &&
+        !isNaN(lon) &&
+        isFinite(lat) &&
+        isFinite(lon)
+      );
+    };
+
+    if (!isValidCoordinate(currentRoverPosition.latitude, currentRoverPosition.longitude)) {
+      console.error('[MissionProgressCard] Invalid rover coordinates:', currentRoverPosition);
+      return null;
+    }
+
+    if (!isValidCoordinate(targetWaypoint.lat, targetWaypoint.lon)) {
+      console.error('[MissionProgressCard] Invalid waypoint coordinates:', targetWaypoint);
+      return null;
+    }
+
+    // Calculate geodesic distance using Karney formula
+    const distanceMeters = calculateGeodesicDistance(
+      currentRoverPosition.latitude,
+      currentRoverPosition.longitude,
+      targetWaypoint.lat,
+      targetWaypoint.lon
+    );
+
+    // Convert meters to centimeters for display
+    const distanceCm = distanceMeters * 100;
+
+    return distanceCm;
+  }, [isMissionActive, currentIndex, waypoints, currentRoverPosition]);
+
+  /**
+   * Format distance for display
+   * 
+   * Display Rules:
+   * - Mission inactive: Show "—" (em dash)
+   * - No distance calculated: Show "—"
+   * - Distance ≥ 0: Show with 1 decimal precision (e.g., "245.3cm")
+   * 
+   * Unit: Centimeters (cm) for consistency with original implementation
+   * Precision: 1 decimal place (millimeter accuracy)
+   */
+  const distanceText = useMemo(() => {
+    if (!isMissionActive) {
+      return '—'; // Mission not active
+    }
+
+    if (distanceToCurrent === null) {
+      return '—'; // No valid distance calculated
+    }
+
+    // Format with 1 decimal place
+    return `${distanceToCurrent.toFixed(1)}cm`;
+  }, [isMissionActive, distanceToCurrent]);
 
   return (
     <View style={styles.card}>

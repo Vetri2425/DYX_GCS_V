@@ -32,6 +32,7 @@ const MissionControlCard: React.FC<MissionControlCardProps> = ({
   onResume,
   onNext,
   onSkip,
+  onBulkSkip,
   onLoadMission,
   mode,
   onSetMode,
@@ -40,11 +41,10 @@ const MissionControlCard: React.FC<MissionControlCardProps> = ({
   const { services, telemetry } = useRover();
   const [isLoadingMission, setIsLoadingMission] = React.useState(false);
   const [isTogglingMode, setIsTogglingMode] = React.useState(false);
+  const [isRunning, setIsRunning] = React.useState(false);
+  const [isPaused, setIsPaused] = React.useState(false);
   const [isStarting, setIsStarting] = React.useState(false);
   const [isStopping, setIsStopping] = React.useState(false);
-  const [isPaused, setIsPaused] = React.useState(false);
-  const [isPausing, setIsPausing] = React.useState(false);
-  const [isResuming, setIsResuming] = React.useState(false);
   const [isNexting, setIsNexting] = React.useState(false);
   const [isSkipping, setIsSkipping] = React.useState(false);
   const [isBulkMode, setIsBulkMode] = React.useState(false);
@@ -53,7 +53,12 @@ const MissionControlCard: React.FC<MissionControlCardProps> = ({
   const [bulkTo, setBulkTo] = React.useState<string>('');
   const [bulkError, setBulkError] = React.useState<string | null>(null);
   const [isBulkSubmitting, setIsBulkSubmitting] = React.useState(false);
-  const [isRunning, setIsRunning] = React.useState(false);
+  const [isPausing, setIsPausing] = React.useState(false);
+  const [isResuming, setIsResuming] = React.useState(false);
+  
+  // 🔧 NEW: REST API mission status polling (primary source)
+  const [apiMissionStatus, setApiMissionStatus] = React.useState<string | null>(null);
+  const [apiStatusLoading, setApiStatusLoading] = React.useState(false);
   const [confirmAction, setConfirmAction] = React.useState<null | {
     action: string;
     onConfirm: () => void
@@ -83,20 +88,120 @@ const MissionControlCard: React.FC<MissionControlCardProps> = ({
     setTimeout(() => setToast({ visible: false, type: 'info', message: undefined }), duration);
   };
 
-  // Sync internal isRunning state with external isMissionActive prop
-  // This ensures the START/STOP button reflects the actual mission state
-  // Only depends on isMissionActive to avoid infinite loops
+  // 🔧 NEW: Poll REST API for mission status (primary source)
+  // This ensures reliable state even if WebSocket has inconsistencies
   React.useEffect(() => {
-    if (isMissionActive && !isRunning) {
-      console.log('[MissionControlCard] 🟢 Mission started externally - updating button state to show STOP');
-      setIsRunning(true);
-      setIsPaused(false); // Reset pause state when starting
-    } else if (!isMissionActive && isRunning) {
-      console.log('[MissionControlCard] 🔴 Mission completed/stopped externally - resetting button state to show START');
-      setIsRunning(false);
-      setIsPaused(false); // Also reset pause state
+    let isMounted = true;
+    let pollInterval: NodeJS.Timeout | null = null;
+
+    const fetchMissionStatus = async () => {
+      if (!isMounted || apiStatusLoading) return;
+      
+      try {
+        setApiStatusLoading(true);
+        const response = await services.getMissionStatus();
+        
+        console.log(`[MissionControlCard] 📡 REST API Response:`, response);
+        
+        if (isMounted && response) {
+          // API returns JSON directly, not HTTP response wrapper
+          // Check response.data directly
+          const responseData = response.data || response;
+          console.log(`[MissionControlCard] 📡 REST API responseData:`, responseData);
+          
+          // Extract mission_state from various possible locations
+          // 1. response.status.mission_state (nested)
+          // 2. response.latest_update.mission_state
+          // 3. response.mission_state (flat)
+          const missionState = 
+            responseData.status?.mission_state ||
+            responseData.latest_update?.mission_state ||
+            responseData.mission_state ||
+            responseData.state;
+          
+          console.log(`[MissionControlCard] 📡 Extracted missionState: "${missionState}"`);
+          
+          if (missionState) {
+            // Normalize: convert to lowercase for consistency
+            const normalizedState = missionState.toString().toLowerCase();
+            console.log(`[MissionControlCard] 📡 REST API mission status: "${missionState}" (normalized: "${normalizedState}")`);
+            setApiMissionStatus(normalizedState);
+          }
+        }
+      } catch (error) {
+        // Silently fail - WebSocket will be backup
+        console.log('[MissionControlCard] ⚠️ REST API poll failed, using WebSocket backup');
+      } finally {
+        if (isMounted) {
+          setApiStatusLoading(false);
+        }
+      }
+    };
+
+    // Initial fetch
+    fetchMissionStatus();
+
+    // Poll every 3000ms for faster button updates
+    pollInterval = setInterval(fetchMissionStatus, 3000);
+
+    return () => {
+      isMounted = false;
+      if (pollInterval) {
+        clearInterval(pollInterval);
+      }
+    };
+  }, [services]);
+
+  // Sync internal isRunning state with backend mission status
+  // USE ONLY REST API (primary source) - WebSocket removed due to inconsistent state values
+  React.useEffect(() => {
+    // Get REST API status (only source now)
+    const apiStatus = apiMissionStatus || '';
+    
+    // Use only REST API status
+    const primaryStatus = apiStatus;
+    const statusSource = apiStatus ? 'REST API' : 'none';
+    
+    console.log(`[MissionControlCard] 📊 Mission Status: Primary="${primaryStatus}" (${statusSource})`);
+    
+    // Normalize status - handle case variations
+    // Backend states: idle, loading, ready, running, paused, completed, error, stopped
+    const normalizedStatus = primaryStatus.toLowerCase().trim();
+    
+    // Determine if mission is running
+    // Only "running" state means mission is actively executing
+    const isMissionRunning = normalizedStatus === 'running';
+    const isMissionPaused = normalizedStatus === 'paused';
+    const isMissionReady = normalizedStatus === 'ready' || normalizedStatus === 'loading' || normalizedStatus === 'active';
+    const isMissionIdle = normalizedStatus === 'idle' || normalizedStatus === 'stopped' || normalizedStatus === 'completed' || normalizedStatus === 'error' || normalizedStatus === '';
+    
+    console.log(`[MissionControlCard] 🔍 Status Analysis: running=${isMissionRunning}, paused=${isMissionPaused}, ready=${isMissionReady}, idle=${isMissionIdle}`);
+
+    // PRIMARY SYNC: Use REST API status only
+    // Note: "paused" means mission is active but paused - keep STOP button, show RESUME
+    const shouldBeRunning = isMissionRunning || isMissionPaused;  // paused = still running (just paused)
+    const shouldBePaused = isMissionPaused;
+    
+    if (shouldBeRunning !== isRunning) {
+      if (shouldBeRunning) {
+        console.log(`[MissionControlCard] 🟢 Mission is RUNNING/PAUSED (${statusSource}) - updating button to STOP`);
+      } else {
+        console.log(`[MissionControlCard] 🔴 Mission is NOT RUNNING (${statusSource}) - updating button to START`);
+      }
+      setIsRunning(shouldBeRunning);
+      // Don't reset paused state when running state changes
     }
-  }, [isMissionActive]);
+    
+    // Sync pause state
+    if (shouldBePaused !== isPaused) {
+      if (shouldBePaused) {
+        console.log(`[MissionControlCard] ⏸️ Mission is PAUSED (${statusSource}) - showing RESUME button`);
+      } else {
+        console.log(`[MissionControlCard] ▶️ Mission is NOT PAUSED (${statusSource}) - showing PAUSE button`);
+      }
+      setIsPaused(shouldBePaused);
+    }
+  }, [isMissionActive, apiMissionStatus]);
 
   // Mission control handlers with action guard protection
   const handleStart = preventAction(async () => {
@@ -130,18 +235,40 @@ const MissionControlCard: React.FC<MissionControlCardProps> = ({
   const handleStop = async () => {
     setIsStopping(true);
     try {
-      if (onStop) {
-        console.log('[MissionControlCard] 🛑 Executing stop mission...');
-        await onStop();
+      console.log('[MissionControlCard] 🛑 Executing stop mission...');
 
-        // Reset all button states when stopping
+      // Call backend service to stop mission
+      const response = await services.stopMission();
+
+      // Check if stop was successful
+      if (response && response.success) {
+        // Reset all button states when stopping successfully
         setIsRunning(false);
         setIsPaused(false);
         console.log('[MissionControlCard] ✅ Mission stopped - button reset to START state');
+        showLocalToast('success', 'Mission stopped');
+      } else if (response?.message?.includes('No mission running')) {
+        // Mission is already stopped - treat as success
+        setIsRunning(false);
+        setIsPaused(false);
+        console.log('[MissionControlCard] ✅ Mission already stopped - button reset to START state');
+        showLocalToast('info', 'Mission already stopped');
+      } else {
+        // Stop failed - show error and let telemetry sync correct the state
+        const msg = response?.message ?? 'Stop command failed - mission may not be running';
+        console.warn('[MissionControlCard] ⚠️ Stop returned failure:', msg);
+        showLocalToast('error', msg);
+        // Let telemetry sync handle state correction
+      }
+
+      // Also call the optional callback if provided
+      if (onStop) {
+        await onStop();
       }
     } catch (error) {
       console.error('[MissionControlCard] ❌ Stop Error:', error);
       showLocalToast('error', 'Failed to stop mission');
+      // Let telemetry sync handle state correction
     } finally {
       setIsStopping(false);
     }
@@ -271,12 +398,12 @@ const MissionControlCard: React.FC<MissionControlCardProps> = ({
           >
             <Text style={styles.buttonText}>
               {isStarting
-                ? '⏳ Starting...'
-                : isStopping
-                  ? '⏳ Stopping...'
-                  : isRunning
-                    ? 'STOP'
-                    : 'START'}
+                  ? '⏳ Starting...'
+                  : isStopping
+                    ? '⏳ Stopping...'
+                    : isRunning
+                      ? 'STOP'
+                      : 'START'}
             </Text>
           </TouchableOpacity>
 
@@ -384,6 +511,7 @@ const MissionControlCard: React.FC<MissionControlCardProps> = ({
               </Text>
             </TouchableOpacity>
           </View>
+
         </View>
 
         {/* Loading Mission Modal */}
@@ -561,6 +689,7 @@ const MissionControlCard: React.FC<MissionControlCardProps> = ({
             </View>
           </View>
         </Modal>
+
         <Toast
           visible={toast.visible}
           type={toast.type}
@@ -582,6 +711,30 @@ const styles = StyleSheet.create({
   },
   cardPadding: {
     padding: 12,
+  },
+  emergencyButton: {
+    backgroundColor: '#DC2626',
+    paddingVertical: 20,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 16,
+    borderWidth: 2,
+    borderColor: '#991B1B',
+  },
+  emergencyButtonText: {
+    color: '#FFFFFF',
+    fontSize: 18,
+    fontWeight: '900',
+    letterSpacing: 1,
+  },
+  restartButton: {
+    backgroundColor: '#8B5CF6',
+    paddingVertical: 16,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 8,
   },
   buttonsContainer: {
     gap: 12,
@@ -653,8 +806,8 @@ const styles = StyleSheet.create({
   },
   buttonText: {
     color: '#FFFFFF',
-    fontSize: 16,
-    fontWeight: '700',
+    fontSize: 20,
+    fontWeight: '900',
     letterSpacing: 0.5,
   },
   buttonDisabled: {
@@ -802,7 +955,7 @@ const styles = StyleSheet.create({
   },
   confirmButtonText: {
     color: '#fff',
-    fontSize: 15,
+    fontSize: 20,
   },
 });
 

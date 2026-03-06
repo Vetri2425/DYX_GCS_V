@@ -1,6 +1,6 @@
 import React, { useRef, useState, useCallback, useMemo } from 'react';
-import { View, StyleSheet, TouchableOpacity, Text, PanResponder, GestureResponderEvent } from 'react-native';
-import Svg, { Line, G, Circle } from 'react-native-svg';
+import { View, StyleSheet, TouchableOpacity, Text, PanResponder, GestureResponderEvent, Alert } from 'react-native';
+import Svg, { Line, G, Circle, Text as SvgText } from 'react-native-svg';
 import { colors } from '../../theme/colors';
 import { PathPlanWaypoint } from '../../types/pathplan';
 
@@ -9,11 +9,21 @@ interface Props {
   waypoints: PathPlanWaypoint[];
   onConnectionsComplete: (connectedWaypointIds: number[]) => void;
   onCancel: () => void;
+  roverPosition?: { lat: number; lng: number; heading?: number } | null;
 }
 
 interface Point {
   x: number;
   y: number;
+}
+
+interface Bounds {
+  minLat: number;
+  maxLat: number;
+  minLon: number;
+  maxLon: number;
+  latRange: number;
+  lonRange: number;
 }
 
 interface CanvasWaypoint {
@@ -29,6 +39,7 @@ export const ManualPathConnectionCanvas: React.FC<Props> = ({
   waypoints,
   onConnectionsComplete,
   onCancel,
+  roverPosition,
 }) => {
   const [canvasSize, setCanvasSize] = useState({ width: 0, height: 0 });
   const [connectedWaypoints, setConnectedWaypoints] = useState<number[]>([]);
@@ -38,38 +49,43 @@ export const ManualPathConnectionCanvas: React.FC<Props> = ({
   const [dragStartWaypointId, setDragStartWaypointId] = useState<number | null>(null);
   const canvasRef = useRef<View>(null);
 
-  // Convert lat/lng to canvas coordinates
-  const latLngToCanvas = useCallback((lat: number, lon: number): Point => {
-    if (waypoints.length === 0 || canvasSize.width === 0) {
-      return { x: 0, y: 0 };
-    }
+  // Refs that always hold latest values — used in PanResponder to avoid stale closures
+  const connectedWaypointsRef = useRef<number[]>([]);
+  const dragStartWaypointIdRef = useRef<number | null>(null);
 
-    // Find bounding box of waypoints
+  // Bounding box calculation (static, only depends on waypoints)
+  const bounds = useMemo(() => {
+    if (waypoints.length === 0) {
+      return { minLat: 0, maxLat: 0, minLon: 0, maxLon: 0, latRange: 0.001, lonRange: 0.001 };
+    }
     const lats = waypoints.map(wp => wp.lat);
     const lons = waypoints.map(wp => wp.lon);
     const minLat = Math.min(...lats);
     const maxLat = Math.max(...lats);
     const minLon = Math.min(...lons);
     const maxLon = Math.max(...lons);
-
-    // Add padding (10% on each side)
     const latRange = maxLat - minLat || 0.001;
     const lonRange = maxLon - minLon || 0.001;
+    return { minLat, maxLat, minLon, maxLon, latRange, lonRange };
+  }, [waypoints]);
+
+  // Convert lat/lng to canvas coordinates (accepts bounds as parameter)
+  const latLngToCanvas = useCallback((lat: number, lon: number, bounds: Bounds, canvasSize: { width: number; height: number }): Point => {
+    if (canvasSize.width === 0) {
+      return { x: 0, y: 0 };
+    }
     const padding = 0.1;
-
-    const normalizedLat = (lat - minLat) / latRange;
-    const normalizedLon = (lon - minLon) / lonRange;
-
+    const normalizedLat = (lat - bounds.minLat) / bounds.latRange;
+    const normalizedLon = (lon - bounds.minLon) / bounds.lonRange;
     const x = (normalizedLon * (1 - 2 * padding) + padding) * canvasSize.width;
-    const y = ((1 - normalizedLat) * (1 - 2 * padding) + padding) * canvasSize.height; // Flip Y
-
+    const y = ((1 - normalizedLat) * (1 - 2 * padding) + padding) * canvasSize.height;
     return { x, y };
-  }, [waypoints, canvasSize]);
+  }, []);
 
-  // Get waypoints with canvas coordinates (memoized to prevent infinite re-renders)
+  // Get waypoints with canvas coordinates (static, does NOT depend on roverPosition)
   const canvasWaypoints: CanvasWaypoint[] = useMemo(() => {
     return waypoints.map(wp => {
-      const pos = latLngToCanvas(wp.lat, wp.lon);
+      const pos = latLngToCanvas(wp.lat, wp.lon, bounds, canvasSize);
       return {
         id: wp.id,
         x: pos.x,
@@ -78,7 +94,38 @@ export const ManualPathConnectionCanvas: React.FC<Props> = ({
         lon: wp.lon,
       };
     });
-  }, [waypoints, latLngToCanvas, canvasSize]);
+  }, [waypoints, bounds, canvasSize, latLngToCanvas]);
+
+  // Rover canvas position (dynamic, updates on GPS tick)
+  const roverCanvasPosition = useMemo(() => {
+    if (roverPosition == null || canvasSize.width === 0) return null;
+    return latLngToCanvas(roverPosition.lat, roverPosition.lng, bounds, canvasSize);
+  }, [roverPosition, bounds, canvasSize, latLngToCanvas]);
+
+  // Haversine distance in meters
+  const haversineDistance = useCallback((lat1: number, lon1: number, lat2: number, lon2: number): number => {
+    const R = 6371000; // Earth radius in meters
+    const toRad = (deg: number) => deg * Math.PI / 180;
+    const dLat = toRad(lat2 - lat1);
+    const dLon = toRad(lon2 - lon1);
+    const a = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
+    return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  }, []);
+
+  // Nearest waypoint calculation
+  const nearestWaypoint = useMemo(() => {
+    if (roverPosition == null || canvasWaypoints.length === 0) return null;
+    let nearest = canvasWaypoints[0];
+    let minDist = haversineDistance(roverPosition.lat, roverPosition.lng, nearest.lat, nearest.lon);
+    for (let i = 1; i < canvasWaypoints.length; i++) {
+      const dist = haversineDistance(roverPosition.lat, roverPosition.lng, canvasWaypoints[i].lat, canvasWaypoints[i].lon);
+      if (dist < minDist) {
+        minDist = dist;
+        nearest = canvasWaypoints[i];
+      }
+    }
+    return { waypoint: nearest, distance: minDist };
+  }, [roverPosition, canvasWaypoints, haversineDistance]);
 
 
   // Handle waypoint tap to connect
@@ -95,7 +142,7 @@ export const ManualPathConnectionCanvas: React.FC<Props> = ({
 
   const handleFinish = () => {
     if (connectedWaypoints.length < 2) {
-      alert('Please connect at least 2 marking points by tapping them');
+      Alert.alert('Connection Required', 'Please connect at least 2 marking points by tapping them');
       return;
     }
 
@@ -103,12 +150,16 @@ export const ManualPathConnectionCanvas: React.FC<Props> = ({
   };
 
   const handleClear = () => {
+    connectedWaypointsRef.current = [];
     setConnectedWaypoints([]);
   };
 
   const handleUndo = () => {
-    // Remove last connected waypoint
-    setConnectedWaypoints(prev => prev.slice(0, -1));
+    setConnectedWaypoints(prev => {
+      const next = prev.slice(0, -1);
+      connectedWaypointsRef.current = next;
+      return next;
+    });
   };
 
   // Check if a point is near a waypoint (within 60px radius)
@@ -156,12 +207,14 @@ export const ManualPathConnectionCanvas: React.FC<Props> = ({
         if (wp) {
           // Start dragging from this waypoint
           setIsDragging(true);
+          dragStartWaypointIdRef.current = wp.id;
           setDragStartWaypointId(wp.id);
           setCurrentDragPos({ x, y });
 
           // Add to connected list if not already there
-          if (!connectedWaypoints.includes(wp.id)) {
-            setConnectedWaypoints(prev => [...prev, wp.id]);
+          if (!connectedWaypointsRef.current.includes(wp.id)) {
+            connectedWaypointsRef.current = [...connectedWaypointsRef.current, wp.id];
+            setConnectedWaypoints(connectedWaypointsRef.current);
           }
         }
       },
@@ -175,13 +228,13 @@ export const ManualPathConnectionCanvas: React.FC<Props> = ({
         // Update current drag position
         setCurrentDragPos({ x, y });
 
-        // Check if finger is over a new waypoint
+        // Check if finger is over a new waypoint — use refs to avoid stale closure duplicates
         const wp = findWaypointNearPoint(x, y);
-        if (wp && wp.id !== dragStartWaypointId && !connectedWaypoints.includes(wp.id)) {
+        if (wp && wp.id !== dragStartWaypointIdRef.current && !connectedWaypointsRef.current.includes(wp.id)) {
           console.log('[Drag] Connecting waypoint:', wp.id);
-          // Connect this waypoint!
-          setConnectedWaypoints(prev => [...prev, wp.id]);
-          // This waypoint becomes the new start point
+          connectedWaypointsRef.current = [...connectedWaypointsRef.current, wp.id];
+          setConnectedWaypoints(connectedWaypointsRef.current);
+          dragStartWaypointIdRef.current = wp.id;
           setDragStartWaypointId(wp.id);
         }
       },
@@ -190,6 +243,7 @@ export const ManualPathConnectionCanvas: React.FC<Props> = ({
         console.log('[Drag] Release');
         setIsDragging(false);
         setCurrentDragPos(null);
+        dragStartWaypointIdRef.current = null;
         setDragStartWaypointId(null);
       },
 
@@ -197,6 +251,7 @@ export const ManualPathConnectionCanvas: React.FC<Props> = ({
         console.log('[Drag] Terminate');
         setIsDragging(false);
         setCurrentDragPos(null);
+        dragStartWaypointIdRef.current = null;
         setDragStartWaypointId(null);
       },
     });
@@ -217,6 +272,11 @@ export const ManualPathConnectionCanvas: React.FC<Props> = ({
             <Text style={styles.info}>
               Connected: {connectedWaypoints.length} / {waypoints.length} marking points
             </Text>
+            {nearestWaypoint && (
+              <Text style={[styles.info, { color: '#60A5FA' }]}>
+                Nearest: #{nearestWaypoint.waypoint.id} ({Math.round(nearestWaypoint.distance)}m)
+              </Text>
+            )}
           </View>
 
           {/* Mode Toggle Button */}
@@ -259,6 +319,34 @@ export const ManualPathConnectionCanvas: React.FC<Props> = ({
         }}
       >
         <Svg style={StyleSheet.absoluteFill}>
+          {/* Rover marker */}
+          {roverCanvasPosition && roverPosition && (
+            <G key="rover">
+              <Circle cx={roverCanvasPosition.x} cy={roverCanvasPosition.y} r={20} fill="#60A5FA" opacity={0.3} />
+              <Circle cx={roverCanvasPosition.x} cy={roverCanvasPosition.y} r={12} fill="#60A5FA" stroke="#fff" strokeWidth={2} />
+              {roverPosition.heading != null && (
+                <Line
+                  x1={roverCanvasPosition.x}
+                  y1={roverCanvasPosition.y}
+                  x2={roverCanvasPosition.x + Math.sin(roverPosition.heading * Math.PI / 180) * 25}
+                  y2={roverCanvasPosition.y - Math.cos(roverPosition.heading * Math.PI / 180) * 25}
+                  stroke="#fff"
+                  strokeWidth={3}
+                />
+              )}
+              <SvgText
+                x={roverCanvasPosition.x}
+                y={roverCanvasPosition.y + 35}
+                fill="#60A5FA"
+                fontSize="10"
+                fontWeight="bold"
+                textAnchor="middle"
+              >
+                ROVER
+              </SvgText>
+            </G>
+          )}
+
           {/* Grid lines (subtle) */}
           <G key="vertical-grid">
             {Array.from({ length: 21 }).map((_, i) => {

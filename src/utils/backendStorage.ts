@@ -10,6 +10,11 @@ const BACKEND_IP_KEY = '@backend_ip';
 const BACKEND_PORT_KEY = '@backend_port';
 const SESSION_SKIP_KEY = '@session_skip_discovery';
 
+// When the rover IP changes, add the old IP here so stale AsyncStorage
+// entries are automatically migrated to the new IP on next read.
+const STALE_IPS: string[] = ['192.168.1.39'];
+const CURRENT_DEFAULT_IP = '192.168.0.212';
+
 /**
  * Save backend URL to persistent storage
  */
@@ -27,11 +32,28 @@ export async function saveBackendURL(url: string, ip: string, port: number = 500
 }
 
 /**
- * Get saved backend URL from persistent storage
+ * Get saved backend URL from persistent storage.
+ * Auto-migrates stale IPs to the current default IP.
  */
 export async function getSavedBackendURL(): Promise<string | null> {
   try {
     const url = await AsyncStorage.getItem(BACKEND_URL_KEY);
+    if (!url) return null;
+
+    // Check if the stored URL contains a stale IP and migrate it
+    const staleIP = STALE_IPS.find((old) => url.includes(old));
+    if (staleIP) {
+      const migratedUrl = url.replace(staleIP, CURRENT_DEFAULT_IP);
+      const migratedIP = CURRENT_DEFAULT_IP;
+      console.log(`[BackendStorage] Migrating stale IP ${staleIP} → ${CURRENT_DEFAULT_IP}`);
+      // Persist migrated values so future reads are correct
+      await AsyncStorage.multiSet([
+        [BACKEND_URL_KEY, migratedUrl],
+        [BACKEND_IP_KEY, migratedIP],
+      ]);
+      return migratedUrl;
+    }
+
     return url;
   } catch (error) {
     console.error('Failed to get backend URL:', error);

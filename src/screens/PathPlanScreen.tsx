@@ -54,6 +54,8 @@ export default function PathPlanScreen() {
     socket,
   } = useRover();
 
+  const [globalServoEnabled, setGlobalServoEnabled] = useState(true);
+
   // Component mounted flag to prevent state updates after unmount
   const mountedRef = useRef(true);
   // Guard to prevent re-entrant upload handling causing recursive state updates
@@ -79,6 +81,28 @@ export default function PathPlanScreen() {
     timersRef.current.forEach(timer => clearTimeout(timer));
     timersRef.current.clear();
   };
+
+  useEffect(() => {
+    const fetchServoConfig = async () => {
+      try {
+        const res: any = await services.getMissionServoConfig();
+        const cfg = res?.message || res?.config || res?.data || res;
+        if (typeof cfg?.servo_enabled === 'boolean') {
+          setGlobalServoEnabled(cfg.servo_enabled);
+          console.log('[PathPlan] Servo config loaded:', cfg.servo_enabled);
+        }
+      } catch (err) {
+        console.error('[PathPlan] Failed to fetch servo config:', err);
+      }
+    };
+
+    fetchServoConfig();
+
+    // Poll for servo config changes every 2 seconds
+    const interval = setInterval(fetchServoConfig, 2000);
+
+    return () => clearInterval(interval);
+  }, [services]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -117,7 +141,7 @@ export default function PathPlanScreen() {
   }, []);
 
   // Use context waypoints directly - convert format on the fly
-  const waypoints = React.useMemo(() => 
+  const waypoints = React.useMemo(() =>
     (missionWaypoints as any[]).map((wp, idx) => ({
       id: wp.sn ?? wp.id ?? idx + 1,
       lat: wp.lat,
@@ -127,10 +151,11 @@ export default function PathPlanScreen() {
       block: wp.block ?? '',
       pile: wp.pile ?? String(idx + 1),
       distance: wp.distance ?? 0,
+      mark: typeof wp.mark === 'boolean' ? wp.mark : undefined,
     })),
     [missionWaypoints]
   );
-  
+
   // Update waypoints in context
   const updateWaypoints = React.useCallback((newWaypoints: PathPlanWaypoint[]) => {
     setMissionWaypoints(
@@ -147,6 +172,7 @@ export default function PathPlanScreen() {
         time: '—',
         remark: '—',
         distance: wp.distance ?? 0,
+        mark: wp.mark,
       }))
     );
   }, [setMissionWaypoints]);
@@ -156,7 +182,7 @@ export default function PathPlanScreen() {
   const [showFailsafeModeSelector, setShowFailsafeModeSelector] = useState(false);
   const [showStrictPopup, setShowStrictPopup] = useState(false);
   const [showRelaxNotification, setShowRelaxNotification] = useState(false);
-  const [failsafeEvent, setFailsafeEvent] = useState<{ accuracy: number; threshold: number } | null>(null);
+  const [failsafeEvent, setFailsafeEvent] = useState<{ wpDistCm: number; thresholdCm: number } | null>(null);
 
   // Sync waypoints to context only when explicitly needed (e.g., on upload)
   // Removed automatic sync to prevent infinite loop
@@ -165,10 +191,14 @@ export default function PathPlanScreen() {
   const [uploadPreviewName, setUploadPreviewName] = useState<string>('');
   const [uploadPreviewValidationErrors, setUploadPreviewValidationErrors] = useState<ValidationError[]>([]);
   const [showUploadPreview, setShowUploadPreview] = useState<boolean>(false);
+  const [uploadProgress, setUploadProgress] = useState<number>(0);
+  const [showUploadProgress, setShowUploadProgress] = useState<boolean>(false);
+  const [downloadProgress, setDownloadProgress] = useState<number>(0);
+  const [showDownloadProgress, setShowDownloadProgress] = useState<boolean>(false);
   const [pathAssignmentMode, setPathAssignmentMode] = useState<'auto' | 'manual'>('auto');
   const [manualPathConnections, setManualPathConnections] = useState<number[]>([]);
   const [isConnectingPath, setIsConnectingPath] = useState<boolean>(false);
-  
+
   // Drawing tools state
   const [activeDrawingTool, setActiveDrawingTool] = useState<string | null>(null);
   const [showCircleDialog, setShowCircleDialog] = useState(false);
@@ -242,16 +272,17 @@ export default function PathPlanScreen() {
       console.log('[PathPlanScreen] 🚫 Servo suppressed event received:', JSON.stringify(event, null, 2));
       console.log('[PathPlanScreen] 📋 Event details:', {
         mode: gpsFailsafeMode,
-        accuracy_error: event.accuracy_error_mm,
-        threshold: event.threshold_mm,
+        wp_dist_cm: event.wp_dist_cm,
+        xtrack_cm: event.xtrack_cm,
+        threshold_cm: 6.0,
         mission_paused: event.mission_paused,
         waypoint_id: event.waypoint_id,
         timestamp: event.timestamp
       });
-      
+
       setFailsafeEvent({
-        accuracy: event.accuracy_error_mm,
-        threshold: event.threshold_mm,
+        wpDistCm: event.wp_dist_cm ?? 0,
+        thresholdCm: 6.0,  // New threshold: 6.0 cm
       });
 
       console.log('[PathPlanScreen] GPS Failsafe mode:', gpsFailsafeMode);
@@ -277,7 +308,7 @@ export default function PathPlanScreen() {
   // Consolidated auto-save using refs to prevent multiple useEffect triggers
   // This prevents infinite loops from cascading state updates
   const autoSaveTimersRef = useRef<Record<string, NodeJS.Timeout>>({});
-  
+
   const debouncedAutoSave = useCallback(() => {
     // Clear existing timers
     Object.values(autoSaveTimersRef.current).forEach(timer => clearTimeout(timer));
@@ -330,7 +361,7 @@ export default function PathPlanScreen() {
   // Single consolidated useEffect for all auto-saves
   useEffect(() => {
     debouncedAutoSave();
-    
+
     return () => {
       Object.values(autoSaveTimersRef.current).forEach(timer => clearTimeout(timer));
       autoSaveTimersRef.current = {};
@@ -358,9 +389,9 @@ export default function PathPlanScreen() {
 
     const dist = lastWp
       ? haversineDistance(
-          { lat: lastWp.lat, lon: lastWp.lon },
-          { lat: coord.latitude, lon: coord.longitude }
-        )
+        { lat: lastWp.lat, lon: lastWp.lon },
+        { lat: coord.latitude, lon: coord.longitude }
+      )
       : 0;
 
     const newWp: PathPlanWaypoint = {
@@ -372,6 +403,7 @@ export default function PathPlanScreen() {
       block: 'B1',
       row: 'R1',
       pile: String(newId),
+      mark: undefined,
     };
 
     updateWaypoints([...waypoints, newWp]);
@@ -398,9 +430,9 @@ export default function PathPlanScreen() {
         const prevWp = index > 0 ? waypoints[index - 1] : null;
         const distance = prevWp
           ? haversineDistance(
-              { lat: prevWp.lat, lon: prevWp.lon },
-              { lat: coord.latitude, lon: coord.longitude }
-            )
+            { lat: prevWp.lat, lon: prevWp.lon },
+            { lat: coord.latitude, lon: coord.longitude }
+          )
           : 0;
 
         return {
@@ -431,6 +463,14 @@ export default function PathPlanScreen() {
     updateWaypoints(waypoints.filter(wp => wp.id !== id));
   };
 
+  const handleToggleMark = React.useCallback((id: number, newMarkValue: boolean) => {
+    const updatedWaypoints = missionWaypoints.map(wp => {
+      const wpId = wp.sn;
+      return wpId === id ? { ...wp, mark: newMarkValue } : wp;
+    });
+    setMissionWaypoints(updatedWaypoints);
+  }, [missionWaypoints, setMissionWaypoints]);
+
   const handleAddWaypoints = (coords: { latitude: number; longitude: number }[]) => {
     if (coords.length === 0) {
       Alert.alert('No Marking Points', 'No coordinates to add.');
@@ -441,12 +481,12 @@ export default function PathPlanScreen() {
       const newId = waypoints.length + index + 1;
       const lastWp = index === 0 && waypoints.length > 0 ? waypoints[waypoints.length - 1] : null;
       const prevWp = index > 0 ? { lat: coords[index - 1].latitude, lon: coords[index - 1].longitude } : lastWp;
-      
+
       const dist = prevWp
         ? haversineDistance(
-            { lat: prevWp.lat, lon: prevWp.lon },
-            { lat: coord.latitude, lon: coord.longitude }
-          )
+          { lat: prevWp.lat, lon: prevWp.lon },
+          { lat: coord.latitude, lon: coord.longitude }
+        )
         : 0;
 
       return {
@@ -460,17 +500,17 @@ export default function PathPlanScreen() {
         pile: String(newId),
       };
     });
-    
+
     if (DEBUG_LOG) console.log('[PathPlan] Adding', newWaypoints.length, 'waypoints from drawing tool');
     updateWaypoints([...waypoints, ...newWaypoints]);
     setActiveDrawingTool(null); // Clear active tool after adding waypoints
-    
+
     Alert.alert('Marking Points Added', `✓ ${newWaypoints.length} marking points added to mission`);
   };
 
   const handleTextAnnotation = (text: string, alignment: 'left' | 'center' | 'right', letterWidth: number, letterHeight: number, letterSpacing: number) => {
     const center = roverPosition ? { lat: roverPosition.lat, lng: roverPosition.lng } : { lat: 13.0827, lng: 80.2707 };
-    
+
     // Generate waypoint coordinates for the text
     const textCoords = textToWaypointPath({
       text,
@@ -494,7 +534,7 @@ export default function PathPlanScreen() {
 
     for (let i = 0; i < textCoords.length; i++) {
       const coord = textCoords[i];
-      
+
       // Check if this is a separation marker
       if (isNaN(coord.latitude) || isNaN(coord.longitude)) {
         // Reset distance calculation for next letter (don't connect to previous letter)
@@ -504,9 +544,9 @@ export default function PathPlanScreen() {
 
       const dist = lastValidWp
         ? haversineDistance(
-            { lat: lastValidWp.lat, lon: lastValidWp.lon },
-            { lat: coord.latitude, lon: coord.longitude }
-          )
+          { lat: lastValidWp.lat, lon: lastValidWp.lon },
+          { lat: coord.latitude, lon: coord.longitude }
+        )
         : 0;
 
       newWaypoints.push({
@@ -522,7 +562,7 @@ export default function PathPlanScreen() {
 
       lastValidWp = { lat: coord.latitude, lon: coord.longitude };
     }
-    
+
     updateWaypoints([...waypoints, ...newWaypoints]);
     Alert.alert('Text Path Created', `${newWaypoints.length} marking points generated for "${text}"`);
   };
@@ -541,7 +581,7 @@ export default function PathPlanScreen() {
     let lastValidWp: { lat: number; lon: number } | null = waypoints.length > 0 ? waypoints[waypoints.length - 1] : null;
     let wpId = waypoints.length + 1;
     let pathSegmentIndex = 1;
-    
+
     if (DEBUG_LOG) console.log('[PathPlan] Drawing completed with', coords.length, 'coordinates');
 
     for (let i = 0; i < coords.length; i++) {
@@ -559,9 +599,9 @@ export default function PathPlanScreen() {
       // Calculate distance from previous waypoint
       const dist = lastValidWp
         ? haversineDistance(
-            { lat: lastValidWp.lat, lon: lastValidWp.lon },
-            { lat: coord.latitude, lon: coord.longitude }
-          )
+          { lat: lastValidWp.lat, lon: lastValidWp.lon },
+          { lat: coord.latitude, lon: coord.longitude }
+        )
         : 0;
 
       newWaypoints.push({
@@ -578,7 +618,7 @@ export default function PathPlanScreen() {
       lastValidWp = { lat: coord.latitude, lon: coord.longitude };
       wpId++;
     }
-    
+
     if (newWaypoints.length > 0) {
       if (DEBUG_LOG) console.log('[PathPlan] Adding', newWaypoints.length, 'waypoints from drawing');
       updateWaypoints([...waypoints, ...newWaypoints]);
@@ -586,7 +626,7 @@ export default function PathPlanScreen() {
     } else {
       Alert.alert('No Marking Points', 'Drawing did not generate any marking points. Try drawing a longer path.');
     }
-    
+
     setIsDrawingMode(false);
     setDrawSettings(null);
   };
@@ -706,7 +746,7 @@ export default function PathPlanScreen() {
     const latIndex = headers.findIndex(h => h === 'latitude' || h === 'lat');
     const lonIndex = headers.findIndex(h => h === 'longitude' || h === 'lon' || h === 'lng');
     const altIndex = headers.findIndex(h => h === 'altitude' || h === 'alt');
-    
+
     // Optional field indices
     const blockIndex = headers.findIndex(h => h === 'block');
     const rowIndex = headers.findIndex(h => h === 'row');
@@ -780,6 +820,7 @@ export default function PathPlanScreen() {
         block: item.block ?? '',
         row: item.row ?? '',
         pile: item.pile ?? String(idx + 1),
+        mark: typeof item.mark === 'boolean' ? item.mark : undefined,
       });
     });
 
@@ -992,7 +1033,7 @@ export default function PathPlanScreen() {
       // This opens native file picker on Android (SAF) or Share dialog on iOS
       // Wrap in timeout for permission dialogs
       console.log('[PathPlan] Requesting storage permission...');
-      
+
       const downloadPromise = downloadFileToDevice(fileUri, filename, getMimeType(format));
       const downloadTimeout = new Promise<boolean>((_, reject) => {
         const timer = setTimeout(() => reject(new Error('Permission/download timeout after 30 seconds')), 30000);
@@ -1027,7 +1068,7 @@ export default function PathPlanScreen() {
         const errorMsg = error instanceof Error ? error.message : String(error);
         if (!errorMsg.includes('cancel') && !errorMsg.toLowerCase().includes('cancelled')) {
           Alert.alert(
-            'Export Failed', 
+            'Export Failed',
             `Failed to export mission:\n${errorMsg}\n\nTip: Make sure storage permissions are granted.`,
             [
               { text: 'OK' },
@@ -1051,6 +1092,16 @@ export default function PathPlanScreen() {
       console.warn('[PathPlan] Component unmounted, aborting load from controller');
       return;
     }
+
+    // Show progress UI and subscribe to progress events
+    setDownloadProgress(0);
+    setShowDownloadProgress(true);
+
+    const unsubscribe = services.onDownloadProgress((progress) => {
+      if (mountedRef.current) {
+        setDownloadProgress(progress.percent);
+      }
+    });
 
     try {
       console.log('[PathPlan] Loading mission from controller...');
@@ -1107,6 +1158,7 @@ export default function PathPlanScreen() {
             block: String(wp.block ?? wp.block_id ?? ''),
             row: String(wp.row ?? wp.row_no ?? ''),
             pile: String(wp.pile ?? wp.pile_no ?? idx + 1),
+            mark: typeof wp.mark === 'boolean' ? wp.mark : undefined,
           });
         } catch (wpError) {
           errors.push(`Waypoint ${idx + 1}: ${wpError instanceof Error ? wpError.message : 'Parse error'}`);
@@ -1143,16 +1195,23 @@ export default function PathPlanScreen() {
         `Could not load mission from controller:\n\n${errorMessage}`,
         [
           { text: 'OK', style: 'default' },
-          { text: 'Retry', onPress: () => {
-            const timer = setTimeout(() => {
-              if (mountedRef.current) {
-                handleLoadFromController();
-              }
-            }, 100);
-            addTimer(timer);
-          }, style: 'cancel' }
+          {
+            text: 'Retry', onPress: () => {
+              const timer = setTimeout(() => {
+                if (mountedRef.current) {
+                  handleLoadFromController();
+                }
+              }, 100);
+              addTimer(timer);
+            }, style: 'cancel'
+          }
         ]
       );
+    } finally {
+      // Cleanup subscription and hide progress
+      unsubscribe();
+      setShowDownloadProgress(false);
+      setDownloadProgress(0);
     }
   };
 
@@ -1208,64 +1267,85 @@ export default function PathPlanScreen() {
         row: wp.row || '',
         block: wp.block || '',
         pile: wp.pile || String(idx + 1),
+        ...(wp.mark !== undefined && { mark: wp.mark }),
       }));
 
-      const response = await services.loadMissionToController(controllerWaypoints);
+      // Show progress UI and subscribe to progress events
+      setUploadProgress(0);
+      setShowUploadProgress(true);
 
-      // Check if still mounted before updating state
-      if (!mountedRef.current) {
-        console.warn('[PathPlan] Component unmounted during upload');
-        return;
-      }
+      const unsubscribe = services.onUploadProgress((progress) => {
+        if (mountedRef.current) {
+          setUploadProgress(progress.percent);
+        }
+      });
 
-      if (response && response.success) {
-        console.log(`[PathPlan] Mission uploaded successfully: ${waypoints.length} waypoints`);
+      try {
+        const response = await services.loadMissionToController(controllerWaypoints);
 
-        // Update context with waypoints in proper Waypoint format
-        try {
-          const contextWaypoints = waypoints.map((wp, idx) => ({
-            sn: idx + 1,
-            block: wp.block || '',
-            row: wp.row || '',
-            pile: wp.pile || String(idx + 1),
-            lat: wp.lat,
-            lon: wp.lon,
-            distance: wp.distance ?? 0,
-            alt: wp.alt,
-            status: 'Pending' as const,
-            time: new Date().toISOString(),
-            remark: '',
-          }));
-          setMissionWaypoints(contextWaypoints);
-        } catch (contextError) {
-          console.error('[PathPlan] Failed to update context:', contextError);
-          // Non-fatal error - mission was uploaded successfully
+        // Check if still mounted before updating state
+        if (!mountedRef.current) {
+          console.warn('[PathPlan] Component unmounted during upload');
+          return;
         }
 
-        // BUGFIX: Clear mission runtime state when loading a new mission
-        // This prevents the Mission Progress tab from showing stale "mission active" state
-        // that was persisted from a previous mission session
-        try {
-          await Promise.all([
-            PersistentStorage.saveMissionActive(false),        // Reset mission active flag
-            PersistentStorage.saveStatusMap({}),               // Clear old waypoint statuses
-            PersistentStorage.saveMissionStartTime(null),      // Clear old start time
-            PersistentStorage.saveMissionEndTime(null),        // Clear old end time
-          ]);
-          console.log('[PathPlan] ✅ Cleared mission runtime state for new mission upload');
-        } catch (storageError) {
-          console.error('[PathPlan] ⚠️ Failed to clear mission runtime state:', storageError);
-          // Non-fatal error - mission was uploaded successfully
-        }
+        if (response && response.success) {
+          console.log(`[PathPlan] Mission uploaded successfully: ${waypoints.length} waypoints`);
 
-        Alert.alert(
-          'Upload Successful',
-          `Mission loaded successfully!\n\n${waypoints.length} marking points sent to controller.`,
-          [{ text: 'OK' }]
-        );
-      } else {
-        const errorMsg = response?.message || 'Unknown error occurred';
-        throw new Error(errorMsg);
+          // Update context with waypoints in proper Waypoint format
+          try {
+            const contextWaypoints = waypoints.map((wp, idx) => ({
+              sn: idx + 1,
+              block: wp.block || '',
+              row: wp.row || '',
+              pile: wp.pile || String(idx + 1),
+              lat: wp.lat,
+              lon: wp.lon,
+              distance: wp.distance ?? 0,
+              alt: wp.alt,
+              status: 'Pending' as const,
+              time: new Date().toISOString(),
+              remark: '',
+            }));
+            setMissionWaypoints(contextWaypoints);
+          } catch (contextError) {
+            console.error('[PathPlan] Failed to update context:', contextError);
+            // Non-fatal error - mission was uploaded successfully
+          }
+
+          // BUGFIX: Clear mission runtime state when loading a new mission
+          // This prevents the Mission Progress tab from showing stale "mission active" state
+          // that was persisted from a previous mission session
+          try {
+            await Promise.all([
+              PersistentStorage.saveMissionActive(false),        // Reset mission active flag
+              PersistentStorage.saveStatusMap({}),               // Clear old waypoint statuses
+              PersistentStorage.saveMissionStartTime(null),      // Clear old start time
+              PersistentStorage.saveMissionEndTime(null),        // Clear old end time
+            ]);
+            console.log('[PathPlan] ✅ Cleared mission runtime state for new mission upload');
+          } catch (storageError) {
+            console.error('[PathPlan] ⚠️ Failed to clear mission runtime state:', storageError);
+            // Non-fatal error - mission was uploaded successfully
+          }
+
+          Alert.alert(
+            'Upload Successful',
+            `Mission loaded successfully!\n\n${waypoints.length} marking points sent to controller.`,
+            [{ text: 'OK' }]
+          );
+        } else {
+          const errorMsg = response?.message || 'Unknown error occurred';
+          throw new Error(errorMsg);
+        }
+      } catch (uploadError) {
+        console.error('[PathPlan] loadMissionToController upload error:', uploadError);
+        throw uploadError;
+      } finally {
+        // Cleanup subscription and hide progress
+        unsubscribe();
+        setShowUploadProgress(false);
+        setUploadProgress(0);
       }
     } catch (err) {
       console.error('[PathPlan] loadMissionToController error:', err);
@@ -1276,14 +1356,16 @@ export default function PathPlanScreen() {
         `Could not load mission to controller:\n\n${errorMessage}\n\nPlease check your connection and try again.`,
         [
           { text: 'OK', style: 'default' },
-          { text: 'Retry', onPress: () => {
-            const timer = setTimeout(() => {
-              if (mountedRef.current) {
-                handleLoadMissionToController();
-              }
-            }, 100);
-            addTimer(timer);
-          }, style: 'cancel' }
+          {
+            text: 'Retry', onPress: () => {
+              const timer = setTimeout(() => {
+                if (mountedRef.current) {
+                  handleLoadMissionToController();
+                }
+              }, 100);
+              addTimer(timer);
+            }, style: 'cancel'
+          }
         ]
       );
     }
@@ -1305,7 +1387,7 @@ export default function PathPlanScreen() {
     isUploadingRef.current = true;
     try {
       if (DEBUG_LOG) console.log('[PathPlan] handleRequestUpload called - opening file picker dialog');
-      
+
       const res = await DocumentPicker.getDocumentAsync({
         copyToCacheDirectory: true,
         type: '*/*' as any
@@ -1421,10 +1503,25 @@ export default function PathPlanScreen() {
       // Calculate distances between waypoints
       const waypointsWithDistances = calculateDistances(parsed);
 
-      if (DEBUG_LOG) console.log('[PathPlan] Waypoints with distances:', waypointsWithDistances.length);
+      // Auto-set mark based on global servo_enabled setting
+      let globalServoEnabled = true;
+      try {
+        const response: any = await services.getMissionServoConfig();
+        // Backend returns config in 'message' field
+        const config = response.message || response.config || response.data || response;
+        globalServoEnabled = config.servo_enabled ?? true;
+      } catch (e) {
+        console.warn('[PathPlan] Could not fetch servo config for mark defaults');
+      }
+      const waypointsWithMark = waypointsWithDistances.map(wp => ({
+        ...wp,
+        mark: wp.mark ?? globalServoEnabled,
+      }));
+
+      if (DEBUG_LOG) console.log('[PathPlan] Waypoints with distances:', waypointsWithMark.length);
 
       // Validate waypoints and get errors/warnings
-      const validationErrors = validateWaypoints(waypointsWithDistances);
+      const validationErrors = validateWaypoints(waypointsWithMark);
       const criticalErrors = getCriticalErrors(validationErrors);
       const warnings = getWarnings(validationErrors);
 
@@ -1432,10 +1529,10 @@ export default function PathPlanScreen() {
 
       // Show preview modal instead of immediately replacing waypoints
       if (DEBUG_LOG) console.log('[PathPlan] Setting upload preview state and showing modal...');
-      setUploadPreviewWaypoints(waypointsWithDistances);
+      setUploadPreviewWaypoints(waypointsWithMark);
       setUploadPreviewName(name);
       setUploadPreviewValidationErrors(validationErrors);
-      
+
       if (DEBUG_LOG) console.log('[PathPlan] About to setShowUploadPreview(true)');
       setShowUploadPreview(true);
       if (DEBUG_LOG) console.log('[PathPlan] setShowUploadPreview(true) called - modal should now be visible');
@@ -1460,14 +1557,16 @@ export default function PathPlanScreen() {
         userMessage,
         [
           { text: 'OK', style: 'default' },
-          { text: 'Try Again', onPress: () => {
-            const timer = setTimeout(() => {
-              if (mountedRef.current) {
-                handleRequestUpload();
-              }
-            }, 100);
-            addTimer(timer);
-          }, style: 'cancel' }
+          {
+            text: 'Try Again', onPress: () => {
+              const timer = setTimeout(() => {
+                if (mountedRef.current) {
+                  handleRequestUpload();
+                }
+              }, 100);
+              addTimer(timer);
+            }, style: 'cancel'
+          }
         ]
       );
     } finally {
@@ -1526,13 +1625,15 @@ export default function PathPlanScreen() {
               </View>
               <PathSequenceSidebar
                 waypoints={isConnectingPath && manualPathConnections.length > 0
-                  ? manualPathConnections.map(id => waypoints.find(wp => wp.id === id)).filter(Boolean) as PathPlanWaypoint[]
+                  ? [...new Set(manualPathConnections)].map(id => waypoints.find(wp => wp.id === id)).filter(Boolean) as PathPlanWaypoint[]
                   : waypoints
                 }
                 selectedWaypoint={selectedWaypoint}
                 onSelectWaypoint={setSelectedWaypoint}
                 onDeleteWaypoint={handleDeleteWaypoint}
                 onUpdateWaypoints={handleUpdateWaypoints}
+                onToggleMark={handleToggleMark}
+                globalServoEnabled={globalServoEnabled}
                 missionName={missionName}
                 onMissionNameChange={setMissionName}
               />
@@ -1577,11 +1678,18 @@ export default function PathPlanScreen() {
             <ManualPathConnectionCanvas
               visible={isConnectingPath}
               waypoints={waypoints}
+              roverPosition={telemetry.global?.lat ? {
+                lat: telemetry.global.lat,
+                lng: telemetry.global.lon,
+                heading: telemetry.attitude?.yaw_deg
+              } : null}
               onConnectionsComplete={(connectedIds) => {
-                setManualPathConnections(connectedIds);
+                // Remove duplicates to prevent React key errors
+                const uniqueConnectedIds = [...new Set(connectedIds)];
+                setManualPathConnections(uniqueConnectedIds);
 
                 // ONLY keep connected waypoints in order (remove unconnected ones)
-                const connectedWaypoints = connectedIds.map(id =>
+                const connectedWaypoints = uniqueConnectedIds.map(id =>
                   waypoints.find(wp => wp.id === id)
                 ).filter(Boolean) as PathPlanWaypoint[];
 
@@ -1601,7 +1709,7 @@ export default function PathPlanScreen() {
                 // Update waypoints to ONLY show connected ones with recalculated distances
                 updateWaypoints(waypointsWithDistances);
                 setIsConnectingPath(false);
-                Alert.alert('✓ Path Created', `Path created with ${connectedIds.length} marking points. Unconnected marking points removed.`);
+                Alert.alert('✓ Path Created', `Path created with ${uniqueConnectedIds.length} marking points. Unconnected marking points removed.`);
               }}
               onCancel={() => {
                 setIsConnectingPath(false);
@@ -1640,23 +1748,25 @@ export default function PathPlanScreen() {
                         'Your current connections will be saved. Continue?',
                         [
                           { text: 'Cancel', style: 'cancel' },
-                          { text: 'Exit', style: 'destructive', onPress: () => {
-                            setIsConnectingPath(false);
-                            if (manualPathConnections.length > 0) {
-                              // Reorder waypoints based on connections
-                              const reorderedWaypoints = manualPathConnections.map(id =>
-                                waypoints.find(wp => wp.id === id)
-                              ).filter(Boolean) as PathPlanWaypoint[];
+                          {
+                            text: 'Exit', style: 'destructive', onPress: () => {
+                              setIsConnectingPath(false);
+                              if (manualPathConnections.length > 0) {
+                                // Reorder waypoints based on connections
+                                const reorderedWaypoints = manualPathConnections.map(id =>
+                                  waypoints.find(wp => wp.id === id)
+                                ).filter(Boolean) as PathPlanWaypoint[];
 
-                              // Add any unconnected waypoints at the end
-                              const connectedIds = new Set(manualPathConnections);
-                              const unconnectedWaypoints = waypoints.filter(wp => !connectedIds.has(wp.id));
+                                // Add any unconnected waypoints at the end
+                                const connectedIds = new Set(manualPathConnections);
+                                const unconnectedWaypoints = waypoints.filter(wp => !connectedIds.has(wp.id));
 
-                              const finalWaypoints = [...reorderedWaypoints, ...unconnectedWaypoints];
-                              updateWaypoints(finalWaypoints);
-                              Alert.alert('✓ Path Saved', `Connected ${manualPathConnections.length} marking points in custom order.`);
+                                const finalWaypoints = [...reorderedWaypoints, ...unconnectedWaypoints];
+                                updateWaypoints(finalWaypoints);
+                                Alert.alert('✓ Path Saved', `Connected ${manualPathConnections.length} marking points in custom order.`);
+                              }
                             }
-                          }}
+                          }
                         ]
                       );
                     }}
@@ -1909,27 +2019,29 @@ export default function PathPlanScreen() {
               <TouchableOpacity onPress={() => {
                 if (uploadPreviewWaypoints) {
                   const criticalErrors = getCriticalErrors(uploadPreviewValidationErrors);
-                  
+
                   if (criticalErrors.length > 0) {
                     Alert.alert(
                       'Cannot Proceed',
                       `${criticalErrors.length} critical error(s) found:\n\n${formatValidationErrors(uploadPreviewValidationErrors, 3)}`,
                       [
                         { text: 'Back to Edit' },
-                        { text: 'Upload New File', onPress: () => {
-                          setShowUploadPreview(false);
-                          const timer = setTimeout(() => {
-                            if (mountedRef.current) {
-                              handleRequestUpload();
-                            }
-                          }, 200);
-                          addTimer(timer);
-                        }}
+                        {
+                          text: 'Upload New File', onPress: () => {
+                            setShowUploadPreview(false);
+                            const timer = setTimeout(() => {
+                              if (mountedRef.current) {
+                                handleRequestUpload();
+                              }
+                            }, 200);
+                            addTimer(timer);
+                          }
+                        }
                       ]
                     );
                     return;
                   }
-                  
+
                   const warnings = getWarnings(uploadPreviewValidationErrors);
                   if (warnings.length > 0) {
                     Alert.alert(
@@ -1937,13 +2049,31 @@ export default function PathPlanScreen() {
                       `${warnings.length} warning(s) found:\n\n${formatValidationErrors(uploadPreviewValidationErrors)}`,
                       [
                         { text: 'Cancel' },
-                        { text: 'Proceed Anyway', onPress: () => {
-                          const sanitized = sanitizeWaypointsForUpload(uploadPreviewWaypoints);
-                          if (DEBUG_LOG) console.log('[PathPlan] Applying imported waypoints (Proceed with warnings):', sanitized.length, sanitized.slice(0, 3));
-                          updateWaypoints(sanitized);
-                          Alert.alert('✓ Import Complete', `Successfully imported ${sanitized.length} marking points.`);
-                          setShowUploadPreview(false);
-                        }}
+                        {
+                          text: 'Proceed Anyway', onPress: () => {
+                            const sanitized = sanitizeWaypointsForUpload(uploadPreviewWaypoints);
+
+                            // Check pathAssignmentMode even when there are warnings
+                            if (pathAssignmentMode === 'manual') {
+                              if (DEBUG_LOG) console.log('[PathPlan] Importing waypoints in MANUAL mode (with warnings):', sanitized.length);
+                              updateWaypoints(sanitized);
+                              setManualPathConnections([]);
+                              setIsConnectingPath(true);
+                              Alert.alert(
+                                '✏️ Manual Path Mode',
+                                `${sanitized.length} marking points imported. Click marking points in order to create your custom path. Tap a marking point to start, then tap others to connect them.`,
+                                [{ text: 'Start Connecting' }]
+                              );
+                              setShowUploadPreview(false);
+                            } else {
+                              // Auto mode: Sequential import as usual
+                              if (DEBUG_LOG) console.log('[PathPlan] Applying imported waypoints (Proceed with warnings):', sanitized.length, sanitized.slice(0, 3));
+                              updateWaypoints(sanitized);
+                              Alert.alert('✓ Import Complete', `Successfully imported ${sanitized.length} marking points.`);
+                              setShowUploadPreview(false);
+                            }
+                          }
+                        }
                       ]
                     );
                   } else {
@@ -2087,8 +2217,8 @@ export default function PathPlanScreen() {
       {showStrictPopup && failsafeEvent && (
         <FailsafeStrictPopup
           visible={showStrictPopup}
-          accuracyError={failsafeEvent.accuracy}
-          threshold={failsafeEvent.threshold}
+          wpDistCm={failsafeEvent.wpDistCm}
+          thresholdCm={failsafeEvent.thresholdCm}
           onAcknowledge={onFailsafeAcknowledge}
           onResume={() => {
             onFailsafeResume();
@@ -2109,10 +2239,35 @@ export default function PathPlanScreen() {
       {showRelaxNotification && failsafeEvent && (
         <FailsafeRelaxNotification
           visible={showRelaxNotification}
-          accuracyError={failsafeEvent.accuracy}
-          threshold={failsafeEvent.threshold}
+          accuracyError={failsafeEvent.wpDistCm}
+          threshold={failsafeEvent.thresholdCm}
           onDismiss={() => setShowRelaxNotification(false)}
         />
+      )}
+
+      {/* Mission Upload Progress Modal */}
+      {showUploadProgress && (
+        <View style={styles.progressOverlay}>
+          <View style={styles.progressCard}>
+            <Text style={styles.progressTitle}>Uploading Mission</Text>
+            <View style={styles.progressBarContainer}>
+              <View style={[styles.progressBarFill, { width: `${uploadProgress}%` }]} />
+            </View>
+            <Text style={styles.progressText}>{Math.round(uploadProgress)}%</Text>
+          </View>
+        </View>
+      )}
+
+      {showDownloadProgress && (
+        <View style={styles.progressOverlay}>
+          <View style={styles.progressCard}>
+            <Text style={styles.progressTitle}>Downloading Mission</Text>
+            <View style={styles.progressBarContainer}>
+              <View style={[styles.progressBarFill, { width: `${downloadProgress}%` }]} />
+            </View>
+            <Text style={styles.progressText}>{Math.round(downloadProgress)}%</Text>
+          </View>
+        </View>
       )}
 
     </SafeAreaView>
@@ -2134,7 +2289,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
   },
   leftPanel: {
-     flex: 0.5,
+    flex: 0.5,
     width: '25%',
     height: '98%',
     backgroundColor: colors.primary,
@@ -2244,5 +2399,48 @@ const styles = StyleSheet.create({
   fullscreenMap: {
     flex: 1,
     backgroundColor: colors.primary,
+  },
+  progressOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(0, 0, 0, 0.7)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 9999,
+  },
+  progressCard: {
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    padding: 24,
+    width: '80%',
+    maxWidth: 400,
+    alignItems: 'center',
+  },
+  progressTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: colors.primary,
+    marginBottom: 16,
+  },
+  progressBarContainer: {
+    width: '100%',
+    height: 8,
+    backgroundColor: '#E0E0E0',
+    borderRadius: 4,
+    overflow: 'hidden',
+    marginBottom: 12,
+  },
+  progressBarFill: {
+    height: '100%',
+    backgroundColor: colors.primary,
+    borderRadius: 4,
+  },
+  progressText: {
+    fontSize: 16,
+    fontWeight: '500',
+    color: '#333',
   },
 });
