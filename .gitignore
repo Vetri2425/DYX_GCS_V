@@ -41,6 +41,11 @@ nul
 # Ignore backup APKs
 Backup Apks/
 
+# Project docs and summary
+docs/
+summary/
+*.md
+
 
 # typescript
 *.tsbuildinfo
