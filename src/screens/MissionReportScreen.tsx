@@ -1893,12 +1893,6 @@ export default function MissionReportScreen() {
                 status={vehicleStatus}
                 telemetry={telemetry}
                 isConnected={connectionState === 'connected'}
-                services={{
-                  injectRTK: services.injectRTK,
-                  stopRTK: services.stopRTK,
-                  getRTKStatus: services.getRTKStatus,
-                }}
-                onOpenRTKInjection={openRTKInjection}
               />
               <MissionProgressCard
                 waypoints={getDisplayMissionData().waypoints}

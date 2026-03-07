@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
 import { colors } from '../../theme/colors';
 
@@ -9,6 +9,8 @@ interface DrawingToolsPanelProps {
   onShowSurveyGridTool: () => void;
   onShowTextTool: () => void;
   onShowDrawTool: () => void;
+  isCollapsed?: boolean;
+  onToggleCollapse?: () => void;
 }
 
 export const DrawingToolsPanel: React.FC<DrawingToolsPanelProps> = ({
@@ -18,7 +20,22 @@ export const DrawingToolsPanel: React.FC<DrawingToolsPanelProps> = ({
   onShowSurveyGridTool,
   onShowTextTool,
   onShowDrawTool,
+  isCollapsed = false,
+  onToggleCollapse,
 }) => {
+  // Internal state for collapse if not controlled externally
+  const [internalCollapsed, setInternalCollapsed] = useState(false);
+
+  // Use controlled state if provided, otherwise use internal state
+  const collapsed = onToggleCollapse ? isCollapsed : internalCollapsed;
+
+  const handleToggle = () => {
+    if (onToggleCollapse) {
+      onToggleCollapse();
+    } else {
+      setInternalCollapsed(!internalCollapsed);
+    }
+  };
   const drawingTools = [
     { name: 'line', icon: '📍', title: 'Points', color: colors.greenBtn },
     { name: 'draw', icon: '✏️', title: 'Draw', color: colors.greenBtn },
@@ -60,59 +77,74 @@ export const DrawingToolsPanel: React.FC<DrawingToolsPanelProps> = ({
 
   return (
     <View style={styles.container}>
-      {/* Header */}
+      {/* Header with Toggle Button */}
       <View style={styles.header}>
-        <Text style={styles.headerIcon}>✏️</Text>
-        <Text style={styles.headerText}>Drawing Tools</Text>
-      </View>
-
-      {/* Tool Buttons in Grid */}
-      <View style={styles.toolsGrid3Cols}>
-        {[...drawingTools, ...generatorTools].map((tool, idx) => {
-          const isGenerator = (tool as GeneratorTool).onPress !== undefined;
-          return (
-            <TouchableOpacity
-              key={tool.name}
-              style={[
-                styles.toolBtn,
-                activeDrawingTool === tool.name && styles.toolBtnActive,
-                activeDrawingTool === tool.name && { borderColor: tool.color },
-                isGenerator && styles.generatorBtn,
-              ]}
-              onPress={() => isGenerator ? (tool as GeneratorTool).onPress() : handleToolPress(tool.name)}
-              activeOpacity={0.7}
-            >
-              <Text style={styles.toolIcon}>{tool.icon}</Text>
-              <Text
-                style={[styles.toolLabel, activeDrawingTool === tool.name && styles.toolLabelActive]}
-              >
-                {tool.title}
-              </Text>
-            </TouchableOpacity>
-          );
-        })}
-      </View>
-
-      {/* Instructions */}
-      {activeDrawingTool && (
-        <View style={styles.instructions}>
-          <Text style={styles.instructionText}>
-            {activeDrawingTool === 'line' && '📍 Click to place points. Double-tap to finish.'}
-            {activeDrawingTool === 'draw' && '✏️ Click and drag to draw freehand path.'}
-            {activeDrawingTool === 'rectangle' && '📍 Click first corner, then drag to second corner.'}
-            {activeDrawingTool === 'circle' && '📍 Click center, then drag to set radius.'}
-            {activeDrawingTool === 'hexagon' && '📍 Click center, then drag to set size.'}
-            {activeDrawingTool === 'text' && '📝 Click to place text annotation on map.'}
-            {activeDrawingTool === 'measure' && '📍 Click points to measure distance.'}
-          </Text>
-          <TouchableOpacity
-            style={styles.cancelBtn}
-            onPress={() => onToolSelect(null)}
-            activeOpacity={0.7}
-          >
-            <Text style={styles.cancelBtnText}>✕ Cancel</Text>
-          </TouchableOpacity>
+        <View style={styles.headerLeft}>
+          <Text style={styles.headerIcon}>✏️</Text>
+          <Text style={styles.headerText}>Drawing Tools</Text>
         </View>
+        <TouchableOpacity
+          style={styles.collapseButton}
+          onPress={handleToggle}
+          activeOpacity={0.7}
+        >
+          <Text style={styles.collapseButtonText}>
+            {collapsed ? '▼' : '▲'}
+          </Text>
+        </TouchableOpacity>
+      </View>
+
+      {/* Tool Buttons in Grid - Only show when expanded */}
+      {!collapsed && (
+        <>
+          <View style={styles.toolsGrid3Cols}>
+            {[...drawingTools, ...generatorTools].map((tool, idx) => {
+              const isGenerator = (tool as GeneratorTool).onPress !== undefined;
+              return (
+                <TouchableOpacity
+                  key={tool.name}
+                  style={[
+                    styles.toolBtn,
+                    activeDrawingTool === tool.name && styles.toolBtnActive,
+                    activeDrawingTool === tool.name && { borderColor: tool.color },
+                    isGenerator && styles.generatorBtn,
+                  ]}
+                  onPress={() => isGenerator ? (tool as GeneratorTool).onPress() : handleToolPress(tool.name)}
+                  activeOpacity={0.7}
+                >
+                  <Text style={styles.toolIcon}>{tool.icon}</Text>
+                  <Text
+                    style={[styles.toolLabel, activeDrawingTool === tool.name && styles.toolLabelActive]}
+                  >
+                    {tool.title}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+
+          {/* Instructions */}
+          {activeDrawingTool && (
+            <View style={styles.instructions}>
+              <Text style={styles.instructionText}>
+                {activeDrawingTool === 'line' && '📍 Click to place points. Double-tap to finish.'}
+                {activeDrawingTool === 'draw' && '✏️ Click and drag to draw freehand path.'}
+                {activeDrawingTool === 'rectangle' && '📍 Click first corner, then drag to second corner.'}
+                {activeDrawingTool === 'circle' && '📍 Click center, then drag to set radius.'}
+                {activeDrawingTool === 'hexagon' && '📍 Click center, then drag to set size.'}
+                {activeDrawingTool === 'text' && '📝 Click to place text annotation on map.'}
+                {activeDrawingTool === 'measure' && '📍 Click points to measure distance.'}
+              </Text>
+              <TouchableOpacity
+                style={styles.cancelBtn}
+                onPress={() => onToolSelect(null)}
+                activeOpacity={0.7}
+              >
+                <Text style={styles.cancelBtnText}>✕ Cancel</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+        </>
       )}
     </View>
   );
@@ -129,11 +161,16 @@ const styles = StyleSheet.create({
   header: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
+    justifyContent: 'space-between',
     marginBottom: 12,
     paddingBottom: 8,
     borderBottomWidth: 1,
     borderBottomColor: colors.border,
+  },
+  headerLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
   },
   headerIcon: {
     fontSize: 16,
@@ -142,6 +179,19 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '700',
     color: colors.text,
+  },
+  collapseButton: {
+    padding: 4,
+    backgroundColor: colors.inputBg,
+    borderRadius: 4,
+    minWidth: 28,
+    minHeight: 28,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  collapseButtonText: {
+    fontSize: 12,
+    color: colors.textSecondary,
   },
   toolsGrid3Cols: {
     flexDirection: 'row',

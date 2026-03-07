@@ -13,7 +13,7 @@ const SESSION_SKIP_KEY = '@session_skip_discovery';
 // When the rover IP changes, add the old IP here so stale AsyncStorage
 // entries are automatically migrated to the new IP on next read.
 const STALE_IPS: string[] = ['192.168.1.39'];
-const CURRENT_DEFAULT_IP = '192.168.0.212';
+const CURRENT_DEFAULT_IP = '192.168.1.242';
 
 /**
  * Save backend URL to persistent storage

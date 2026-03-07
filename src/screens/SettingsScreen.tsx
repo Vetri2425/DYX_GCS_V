@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -7,6 +7,7 @@ import {
   TouchableOpacity,
   Switch,
   Modal,
+  TextInput,
   Alert,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -14,6 +15,9 @@ import { colors } from '../theme/colors';
 import { useRover } from '../context/RoverContext';
 import { FailsafeModeSelector } from '../components/pathplan/FailsafeModeSelector';
 import { ServoConfigModal } from '../components/settings/ServoConfigModal';
+import { NTRIPProfile } from '../types/ntrip';
+import { NTRIPProfileList } from '../components/missionreport/NTRIPProfileList';
+import { NTRIPProfileEditor } from '../components/missionreport/NTRIPProfileEditor';
 
 interface SettingsScreenProps {
   visible: boolean;
@@ -53,8 +57,184 @@ const SettingsScreenComponent: React.FC<SettingsScreenProps> = ({ visible, onClo
   const [isLoadingLed, setIsLoadingLed] = useState(false);
   const [lastLedUpdate, setLastLedUpdate] = useState<string>('');
 
+  // RTK Injection State
+  const [showRTKModal, setShowRTKModal] = useState(false);
+  const [modalScreen, setModalScreen] = useState<'list' | 'editor'>('list');
+  const [selectedProfile, setSelectedProfile] = useState<NTRIPProfile | null>(null);
+  const [activeProfileId, setActiveProfileId] = useState<string | null>(null);
+  const [isRTKStreamRunning, setIsRTKStreamRunning] = useState(false);
+  const [rtkTotalBytes, setRtkTotalBytes] = useState(0);
+  const [isRTKSubmitting, setIsRTKSubmitting] = useState(false);
+  const [rtkFeedback, setRtkFeedback] = useState<string | null>(null);
+  const [rtkError, setRtkError] = useState<string | null>(null);
+  const [rtkConfig, setRtkConfig] = useState({
+    casterAddress: '',
+    port: '2101',
+    mountpoint: '',
+    username: '',
+    password: '',
+  });
+  const rtkMonitorRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
   // Toast/Success Message State
   const [successMessage, setSuccessMessage] = useState<string>('');
+
+  // RTK Monitor Functions
+  const stopRTKMonitor = useCallback(() => {
+    if (rtkMonitorRef.current) {
+      clearInterval(rtkMonitorRef.current);
+      rtkMonitorRef.current = null;
+    }
+  }, []);
+
+  const startRTKMonitor = useCallback(() => {
+    if (rtkMonitorRef.current || !services) return;
+    rtkMonitorRef.current = setInterval(async () => {
+      try {
+        const rtkStatus = await services.getRTKStatus();
+        if (rtkStatus.success) {
+          setRtkTotalBytes(rtkStatus.ntrip?.total_bytes ?? 0);
+          setIsRTKStreamRunning(Boolean(rtkStatus.ntrip?.running));
+          if (!rtkStatus.ntrip?.running) {
+            stopRTKMonitor();
+          }
+        }
+      } catch (e) {
+        console.error('RTK monitor error:', e);
+      }
+    }, 250);
+  }, [services, stopRTKMonitor]);
+
+  // Check RTK status on component mount and modal open
+  useEffect(() => {
+    if (visible && services) {
+      const checkRTKStatus = async () => {
+        try {
+          const rtkStatus = await services.getRTKStatus();
+          if (rtkStatus.success) {
+            setIsRTKStreamRunning(rtkStatus.ntrip?.running || false);
+            setRtkTotalBytes(rtkStatus.ntrip?.total_bytes || 0);
+            if (rtkStatus.ntrip?.running) {
+              startRTKMonitor();
+            }
+          }
+        } catch (err) {
+          console.error('Failed to get initial RTK status:', err);
+        }
+      };
+      checkRTKStatus();
+    }
+    return () => {
+      stopRTKMonitor();
+    };
+  }, [visible, services, startRTKMonitor, stopRTKMonitor]);
+
+  // RTK Button Handlers
+  const handleOpenRTKModal = () => {
+    setModalScreen('list');
+    setSelectedProfile(null);
+    setShowRTKModal(true);
+  };
+
+  const handleSelectRTKProfile = async (profile: NTRIPProfile) => {
+    if (!services) {
+      Alert.alert('Error', 'RTK services not available');
+      return;
+    }
+
+    setIsRTKSubmitting(true);
+    setRtkFeedback(null);
+    setRtkError(null);
+
+    try {
+      const ntripUrl = `rtcm://${profile.username}:${profile.password}@${profile.casterAddress}:${profile.port}/${profile.mountpoint}`;
+      console.log('[RTK] Starting stream with URL:', ntripUrl);
+      const response = await services.injectRTK(ntripUrl.trim());
+
+      if (response.success) {
+        setRtkFeedback(response.message ?? 'RTK stream started successfully.');
+        setIsRTKStreamRunning(true);
+        setActiveProfileId(profile.id);
+        startRTKMonitor();
+
+        setTimeout(async () => {
+          try {
+            const status = await services.getRTKStatus();
+            if (status.success) {
+              if (status.ntrip?.running) {
+                Alert.alert('Success', `Connected to ${profile.name}`);
+              } else {
+                setRtkError('Stream started but connection failed. Check credentials and network.');
+                setIsRTKStreamRunning(false);
+                setActiveProfileId(null);
+                stopRTKMonitor();
+                Alert.alert('Connection Failed', 'Stream started but backend connection failed.\n\nCheck:\n• NTRIP credentials\n• Network connectivity\n• Caster availability');
+              }
+            }
+          } catch (err) {
+            console.warn('[RTK] Failed to verify connection status:', err);
+          }
+        }, 1000);
+      } else {
+        setRtkError(response.message ?? 'Failed to start RTK stream.');
+        Alert.alert('Connection Failed', response.message ?? 'Failed to start RTK stream.');
+      }
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : 'Failed to start RTK stream.';
+      setRtkError(errorMsg);
+      Alert.alert('Error', errorMsg);
+    } finally {
+      setIsRTKSubmitting(false);
+    }
+  };
+
+  const handleStopRTKStream = async () => {
+    if (!services) {
+      Alert.alert('Error', 'RTK services not available');
+      return;
+    }
+
+    setIsRTKSubmitting(true);
+    setRtkFeedback(null);
+    setRtkError(null);
+
+    try {
+      const response = await services.stopRTK();
+
+      if (response.success) {
+        setRtkFeedback(response.message ?? 'RTK stream stopped successfully.');
+        setIsRTKStreamRunning(false);
+        setActiveProfileId(null);
+        stopRTKMonitor();
+      } else {
+        setRtkError(response.message ?? 'Failed to stop RTK stream.');
+      }
+    } catch (err) {
+      setRtkError(err instanceof Error ? err.message : 'Failed to stop RTK stream.');
+    } finally {
+      setIsRTKSubmitting(false);
+    }
+  };
+
+  const handleAddNewRTKProfile = () => {
+    setSelectedProfile(null);
+    setModalScreen('editor');
+  };
+
+  const handleEditRTKProfile = (profile: NTRIPProfile) => {
+    setSelectedProfile(profile);
+    setModalScreen('editor');
+  };
+
+  const handleRTKProfileSaved = () => {
+    setModalScreen('list');
+    setSelectedProfile(null);
+  };
+
+  const handleCancelRTKEdit = () => {
+    setModalScreen('list');
+    setSelectedProfile(null);
+  };
 
   // GPS failsafe mode is now persisted by backend, no need for AsyncStorage
 
@@ -109,11 +289,11 @@ const SettingsScreenComponent: React.FC<SettingsScreenProps> = ({ visible, onClo
     try {
       console.log('[Settings] Loading servo configuration...');
       const response = await services.getMissionServoConfig();
-      
+
       if (response.success) {
         // Backend returns config in 'message' field
         const config = (response as any).message || (response as any).config || (response as any).data || response;
-        
+
         setServoEnabled(config.servo_enabled ?? false);
         setServoChannel(config.servo_channel ?? 9);
         setServoPwmOn(config.servo_pwm_on ?? 2300);
@@ -843,6 +1023,64 @@ const SettingsScreenComponent: React.FC<SettingsScreenProps> = ({ visible, onClo
                 </Text>
               )}
             </View>
+
+            {/* RTK Injection Section */}
+            <View style={styles.section}>
+              <View style={styles.sectionHeader}>
+                <Text style={styles.sectionIcon}>📡</Text>
+                <Text style={styles.sectionTitle}>RTK Injection</Text>
+              </View>
+
+              <View style={styles.settingRow}>
+                <View style={styles.settingInfo}>
+                  <Text style={styles.settingLabel}>NTRIP Connection</Text>
+                  <Text style={styles.settingDescription}>
+                    {isRTKStreamRunning ? `Connected • ${rtkTotalBytes} bytes received` : 'Not connected - Configure NTRIP caster'}
+                  </Text>
+                </View>
+                <View style={[styles.statusBadge, isRTKStreamRunning ? styles.statusBadgeOn : styles.statusBadgeOff]}>
+                  <Text style={styles.statusBadgeText}>
+                    {isRTKStreamRunning ? 'ACTIVE' : 'INACTIVE'}
+                  </Text>
+                </View>
+              </View>
+
+              <View style={styles.divider} />
+
+              {/* Configure RTK Button */}
+              <TouchableOpacity
+                style={[styles.configureButton, isRTKSubmitting && { opacity: 0.6 }]}
+                onPress={handleOpenRTKModal}
+                disabled={isRTKSubmitting}
+              >
+                <Text style={styles.configureButtonIcon}>{isRTKSubmitting ? '⏳' : '⚙️'}</Text>
+                <View style={styles.configureButtonContent}>
+                  <Text style={styles.configureButtonTitle}>
+                    {isRTKStreamRunning ? 'Manage RTK Connection' : 'Configure RTK Injection'}
+                  </Text>
+                  <Text style={styles.configureButtonDescription}>
+                    {isRTKSubmitting ? 'Processing...' : 'Set up NTRIP caster profiles and start RTK stream'}
+                  </Text>
+                </View>
+                <Text style={styles.configureButtonArrow}>›</Text>
+              </TouchableOpacity>
+
+              {isRTKStreamRunning && (
+                <TouchableOpacity
+                  style={[styles.configureButton, { backgroundColor: '#dc2626', marginTop: 12 }]}
+                  onPress={handleStopRTKStream}
+                  disabled={isRTKSubmitting}
+                >
+                  <Text style={styles.configureButtonIcon}>⏹️</Text>
+                  <View style={styles.configureButtonContent}>
+                    <Text style={[styles.configureButtonTitle, { color: '#fff' }]}>Stop RTK Stream</Text>
+                    <Text style={[styles.configureButtonDescription, { color: '#fca5a5' }]}>
+                      Disconnect from NTRIP caster
+                    </Text>
+                  </View>
+                </TouchableOpacity>
+              )}
+            </View>
           </ScrollView>
 
           {/* Footer */}
@@ -870,6 +1108,55 @@ const SettingsScreenComponent: React.FC<SettingsScreenProps> = ({ visible, onClo
           onTest={handleServoTest}
           onSave={handleServoSave}
         />
+
+        {/* RTK Profile Manager Modal */}
+        <Modal
+          visible={showRTKModal}
+          animationType="slide"
+          transparent={true}
+          onRequestClose={() => setShowRTKModal(false)}
+        >
+          <View style={rtkModalStyles.modalOverlay}>
+            <View style={rtkModalStyles.modalContent}>
+              <View style={rtkModalStyles.modalHeader}>
+                <Text style={rtkModalStyles.modalTitle}>RTK Injection</Text>
+                <TouchableOpacity onPress={() => setShowRTKModal(false)}>
+                  <Text style={rtkModalStyles.modalCloseButton}>✕</Text>
+                </TouchableOpacity>
+              </View>
+
+              {modalScreen === 'list' ? (
+                <NTRIPProfileList
+                  onSelectProfile={handleSelectRTKProfile}
+                  onAddNew={handleAddNewRTKProfile}
+                  onEditProfile={handleEditRTKProfile}
+                  isConnecting={isRTKSubmitting}
+                  activeProfileId={activeProfileId}
+                  isStreamRunning={isRTKStreamRunning}
+                />
+              ) : (
+                <NTRIPProfileEditor
+                  profile={selectedProfile}
+                  onSave={handleRTKProfileSaved}
+                  onCancel={handleCancelRTKEdit}
+                />
+              )}
+
+              {rtkFeedback && (
+                <View style={rtkModalStyles.feedbackBox}>
+                  <Text style={rtkModalStyles.feedbackText}>{rtkFeedback}</Text>
+                </View>
+              )}
+
+              {rtkError && (
+                <View style={rtkModalStyles.errorBox}>
+                  <Text style={rtkModalStyles.errorText}>{rtkError}</Text>
+                </View>
+              )}
+
+            </View>
+          </View>
+        </Modal>
       </View>
     </Modal>
   );
@@ -1294,6 +1581,117 @@ const styles = StyleSheet.create({
   configureButtonArrow: {
     fontSize: 32,
     color: colors.text,
+    fontWeight: 'bold',
+  },
+});
+
+// RTK Modal Styles
+const rtkModalStyles = StyleSheet.create({
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.7)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  modalContent: {
+    backgroundColor: '#1a1a2e',
+    borderRadius: 16,
+    padding: 20,
+    width: '90%',
+    maxHeight: '85%',
+    borderWidth: 2,
+    borderColor: '#3b82f6',
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 16,
+    paddingBottom: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#3b82f6',
+  },
+  modalTitle: {
+    fontSize: 22,
+    fontWeight: 'bold',
+    color: '#fff',
+  },
+  modalCloseButton: {
+    fontSize: 24,
+    color: '#94a3b8',
+    padding: 4,
+  },
+  feedbackBox: {
+    backgroundColor: 'rgba(16, 185, 129, 0.2)',
+    borderWidth: 1,
+    borderColor: '#10b981',
+    borderRadius: 8,
+    padding: 12,
+    marginTop: 12,
+  },
+  feedbackText: {
+    color: '#10b981',
+    fontSize: 14,
+  },
+  errorBox: {
+    backgroundColor: 'rgba(239, 68, 68, 0.2)',
+    borderWidth: 1,
+    borderColor: '#ef4444',
+    borderRadius: 8,
+    padding: 12,
+    marginTop: 12,
+  },
+  errorText: {
+    color: '#ef4444',
+    fontSize: 14,
+  },
+  manualEntrySection: {
+    marginTop: 20,
+    paddingTop: 16,
+    borderTopWidth: 1,
+    borderTopColor: '#374151',
+  },
+  manualEntryTitle: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: '#fff',
+    marginBottom: 12,
+  },
+  input: {
+    backgroundColor: '#1a1a1a',
+    borderRadius: 8,
+    padding: 12,
+    marginBottom: 10,
+    color: '#fff',
+    borderWidth: 1,
+    borderColor: '#374151',
+  },
+  buttonRow: {
+    flexDirection: 'row',
+    gap: 12,
+    marginTop: 8,
+  },
+  button: {
+    flex: 1,
+    backgroundColor: '#3b82f6',
+    borderRadius: 8,
+    padding: 14,
+    alignItems: 'center',
+  },
+  buttonDisabled: {
+    backgroundColor: '#4b5563',
+    opacity: 0.6,
+  },
+  stopButton: {
+    flex: 1,
+    backgroundColor: '#ef4444',
+    borderRadius: 8,
+    padding: 14,
+    alignItems: 'center',
+  },
+  buttonText: {
+    color: '#fff',
+    fontSize: 16,
     fontWeight: 'bold',
   },
 });

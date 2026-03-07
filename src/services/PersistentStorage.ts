@@ -803,6 +803,7 @@ class PersistentStorageService {
     selectedWaypoint?: number | null;
     mapCenter?: { lat: number; lon: number };
     mapZoom?: number;
+    isDrawingToolsCollapsed?: boolean;
   }): Promise<boolean> {
     try {
       await AsyncStorage.setItem(STORAGE_KEYS.PATHPLAN_UI_STATE, JSON.stringify(state));
@@ -821,6 +822,7 @@ class PersistentStorageService {
     selectedWaypoint?: number | null;
     mapCenter?: { lat: number; lon: number };
     mapZoom?: number;
+    isDrawingToolsCollapsed?: boolean;
   } | null> {
     try {
       const data = await AsyncStorage.getItem(STORAGE_KEYS.PATHPLAN_UI_STATE);

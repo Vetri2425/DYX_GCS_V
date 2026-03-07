@@ -54,6 +54,8 @@ export default function PathPlanScreen() {
     socket,
   } = useRover();
 
+  const [globalServoEnabled, setGlobalServoEnabled] = useState(true);
+
   // Component mounted flag to prevent state updates after unmount
   const mountedRef = useRef(true);
   // Guard to prevent re-entrant upload handling causing recursive state updates
@@ -79,6 +81,28 @@ export default function PathPlanScreen() {
     timersRef.current.forEach(timer => clearTimeout(timer));
     timersRef.current.clear();
   };
+
+  useEffect(() => {
+    const fetchServoConfig = async () => {
+      try {
+        const res: any = await services.getMissionServoConfig();
+        const cfg = res?.message || res?.config || res?.data || res;
+        if (typeof cfg?.servo_enabled === 'boolean') {
+          setGlobalServoEnabled(cfg.servo_enabled);
+          console.log('[PathPlan] Servo config loaded:', cfg.servo_enabled);
+        }
+      } catch (err) {
+        console.error('[PathPlan] Failed to fetch servo config:', err);
+      }
+    };
+
+    fetchServoConfig();
+
+    // Poll for servo config changes every 2 seconds
+    const interval = setInterval(fetchServoConfig, 2000);
+
+    return () => clearInterval(interval);
+  }, [services]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -127,6 +151,7 @@ export default function PathPlanScreen() {
       block: wp.block ?? '',
       pile: wp.pile ?? String(idx + 1),
       distance: wp.distance ?? 0,
+      mark: typeof wp.mark === 'boolean' ? wp.mark : undefined,
     })),
     [missionWaypoints]
   );
@@ -147,6 +172,7 @@ export default function PathPlanScreen() {
         time: '—',
         remark: '—',
         distance: wp.distance ?? 0,
+        mark: wp.mark,
       }))
     );
   }, [setMissionWaypoints]);
@@ -377,6 +403,7 @@ export default function PathPlanScreen() {
       block: 'B1',
       row: 'R1',
       pile: String(newId),
+      mark: undefined,
     };
 
     updateWaypoints([...waypoints, newWp]);
@@ -435,6 +462,14 @@ export default function PathPlanScreen() {
   const handleDeleteWaypoint = (id: number) => {
     updateWaypoints(waypoints.filter(wp => wp.id !== id));
   };
+
+  const handleToggleMark = React.useCallback((id: number, newMarkValue: boolean) => {
+    const updatedWaypoints = missionWaypoints.map(wp => {
+      const wpId = wp.sn;
+      return wpId === id ? { ...wp, mark: newMarkValue } : wp;
+    });
+    setMissionWaypoints(updatedWaypoints);
+  }, [missionWaypoints, setMissionWaypoints]);
 
   const handleAddWaypoints = (coords: { latitude: number; longitude: number }[]) => {
     if (coords.length === 0) {
@@ -785,6 +820,7 @@ export default function PathPlanScreen() {
         block: item.block ?? '',
         row: item.row ?? '',
         pile: item.pile ?? String(idx + 1),
+        mark: typeof item.mark === 'boolean' ? item.mark : undefined,
       });
     });
 
@@ -1122,6 +1158,7 @@ export default function PathPlanScreen() {
             block: String(wp.block ?? wp.block_id ?? ''),
             row: String(wp.row ?? wp.row_no ?? ''),
             pile: String(wp.pile ?? wp.pile_no ?? idx + 1),
+            mark: typeof wp.mark === 'boolean' ? wp.mark : undefined,
           });
         } catch (wpError) {
           errors.push(`Waypoint ${idx + 1}: ${wpError instanceof Error ? wpError.message : 'Parse error'}`);
@@ -1230,6 +1267,7 @@ export default function PathPlanScreen() {
         row: wp.row || '',
         block: wp.block || '',
         pile: wp.pile || String(idx + 1),
+        ...(wp.mark !== undefined && { mark: wp.mark }),
       }));
 
       // Show progress UI and subscribe to progress events
@@ -1465,10 +1503,25 @@ export default function PathPlanScreen() {
       // Calculate distances between waypoints
       const waypointsWithDistances = calculateDistances(parsed);
 
-      if (DEBUG_LOG) console.log('[PathPlan] Waypoints with distances:', waypointsWithDistances.length);
+      // Auto-set mark based on global servo_enabled setting
+      let globalServoEnabled = true;
+      try {
+        const response: any = await services.getMissionServoConfig();
+        // Backend returns config in 'message' field
+        const config = response.message || response.config || response.data || response;
+        globalServoEnabled = config.servo_enabled ?? true;
+      } catch (e) {
+        console.warn('[PathPlan] Could not fetch servo config for mark defaults');
+      }
+      const waypointsWithMark = waypointsWithDistances.map(wp => ({
+        ...wp,
+        mark: wp.mark ?? globalServoEnabled,
+      }));
+
+      if (DEBUG_LOG) console.log('[PathPlan] Waypoints with distances:', waypointsWithMark.length);
 
       // Validate waypoints and get errors/warnings
-      const validationErrors = validateWaypoints(waypointsWithDistances);
+      const validationErrors = validateWaypoints(waypointsWithMark);
       const criticalErrors = getCriticalErrors(validationErrors);
       const warnings = getWarnings(validationErrors);
 
@@ -1476,7 +1529,7 @@ export default function PathPlanScreen() {
 
       // Show preview modal instead of immediately replacing waypoints
       if (DEBUG_LOG) console.log('[PathPlan] Setting upload preview state and showing modal...');
-      setUploadPreviewWaypoints(waypointsWithDistances);
+      setUploadPreviewWaypoints(waypointsWithMark);
       setUploadPreviewName(name);
       setUploadPreviewValidationErrors(validationErrors);
 
@@ -1579,6 +1632,8 @@ export default function PathPlanScreen() {
                 onSelectWaypoint={setSelectedWaypoint}
                 onDeleteWaypoint={handleDeleteWaypoint}
                 onUpdateWaypoints={handleUpdateWaypoints}
+                onToggleMark={handleToggleMark}
+                globalServoEnabled={globalServoEnabled}
                 missionName={missionName}
                 onMissionNameChange={setMissionName}
               />

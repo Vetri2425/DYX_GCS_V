@@ -95,7 +95,7 @@ const WebDraggableRow: React.FC<{
             {/* Delete Button */}
             {onDelete && (
                 <RNTouchableOpacity style={styles.deleteBtn} onPress={() => onDelete(item.id)}>
-                    <Ionicons name="trash-outline" size={22} color="#F87171" />
+                    <Text style={{ color: '#F87171', fontSize: 14, fontWeight: '600' }}>Delete</Text>
                 </RNTouchableOpacity>
             )}
         </div>
@@ -221,7 +221,7 @@ const NativeWaypointRow = memo((
                         disabled={isActive}
                         hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
                     >
-                        <Ionicons name="trash-outline" size={22} color="#F87171" />
+                        <Text style={{ color: '#F87171', fontSize: 14, fontWeight: '600' }}>Delete</Text>
                     </TouchableOpacity>
                 )}
             </View>

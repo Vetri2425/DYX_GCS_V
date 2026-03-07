@@ -20,13 +20,13 @@ const DEFAULT_BACKEND_URL =
   process.env.REACT_APP_ROS_HTTP_BASE ||
   process.env.EXPO_PUBLIC_ROS_HTTP_BASE ||
   process.env.VITE_ROS_HTTP_BASE ||
-  'http://192.168.0.212:5001';
+  'http://192.168.1.242:5001';
 
 const DEFAULT_WS_URL =
   process.env.REACT_APP_ROS_WS_URL ||
   process.env.EXPO_PUBLIC_ROS_WS_URL ||
   process.env.VITE_ROS_WS_URL ||
-  'ws://192.168.0.212:5001/socket.io';
+  'ws://192.168.1.242:5001/socket.io';
 
 // Dynamic backend URL (can be changed at runtime)
 let dynamicBackendURL: string | null = null;

@@ -220,19 +220,22 @@ export const MissionProgressCard: React.FC<Props> = ({
         <Text style={styles.distanceValue}>{distanceText}</Text>
       </View>
 
-      {/* Counters Row - Numbers Only */}
+      {/* Counters Row */}
       <View style={styles.counterRow}>
         <View style={[styles.counter, styles.markedCounter]}>
+          <Text style={styles.counterLabel}>LAST</Text>
           <Text style={[styles.counterValue, { color: '#C084FC' }]}>{markedCount}</Text>
         </View>
 
         <View style={[styles.counter, styles.currentCounter]}>
+          <Text style={styles.counterLabel}>CURRENT</Text>
           <Text style={[styles.counterValue, { color: '#67E8F9' }]}>
             {currentWp ? currentWp.sn : '0'}
           </Text>
         </View>
 
         <View style={[styles.counter, styles.nextCounter]}>
+          <Text style={styles.counterLabel}>NEXT</Text>
           <Text style={[styles.counterValue, { color: '#6EE7B7' }]}>
             {nextWp ? nextWp.sn : '0'}
           </Text>

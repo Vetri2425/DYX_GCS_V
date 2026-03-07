@@ -36,7 +36,6 @@ const MissionControlCard: React.FC<MissionControlCardProps> = ({
   onLoadMission,
   mode,
   onSetMode,
-  isMissionActive = false,
 }) => {
   const { services, telemetry } = useRover();
   const [isLoadingMission, setIsLoadingMission] = React.useState(false);
@@ -56,9 +55,6 @@ const MissionControlCard: React.FC<MissionControlCardProps> = ({
   const [isPausing, setIsPausing] = React.useState(false);
   const [isResuming, setIsResuming] = React.useState(false);
   
-  // 🔧 NEW: REST API mission status polling (primary source)
-  const [apiMissionStatus, setApiMissionStatus] = React.useState<string | null>(null);
-  const [apiStatusLoading, setApiStatusLoading] = React.useState(false);
   const [confirmAction, setConfirmAction] = React.useState<null | {
     action: string;
     onConfirm: () => void
@@ -88,120 +84,30 @@ const MissionControlCard: React.FC<MissionControlCardProps> = ({
     setTimeout(() => setToast({ visible: false, type: 'info', message: undefined }), duration);
   };
 
-  // 🔧 NEW: Poll REST API for mission status (primary source)
-  // This ensures reliable state even if WebSocket has inconsistencies
+  // Primary sync: WebSocket telemetry.mission.status drives button state (~300ms latency)
+  // Backend states: running, paused, idle, stopped, completed, error, ready, loading
   React.useEffect(() => {
-    let isMounted = true;
-    let pollInterval: NodeJS.Timeout | null = null;
+    const s = (telemetry?.mission?.status ?? '').toLowerCase().trim();
+    const shouldBeRunning = s === 'running' || s === 'paused';
+    const shouldBePaused  = s === 'paused';
+    if (shouldBeRunning !== isRunning) setIsRunning(shouldBeRunning);
+    if (shouldBePaused  !== isPaused)  setIsPaused(shouldBePaused);
+  }, [telemetry?.mission?.status]);
 
-    const fetchMissionStatus = async () => {
-      if (!isMounted || apiStatusLoading) return;
-      
-      try {
-        setApiStatusLoading(true);
-        const response = await services.getMissionStatus();
-        
-        console.log(`[MissionControlCard] 📡 REST API Response:`, response);
-        
-        if (isMounted && response) {
-          // API returns JSON directly, not HTTP response wrapper
-          // Check response.data directly
-          const responseData = response.data || response;
-          console.log(`[MissionControlCard] 📡 REST API responseData:`, responseData);
-          
-          // Extract mission_state from various possible locations
-          // 1. response.status.mission_state (nested)
-          // 2. response.latest_update.mission_state
-          // 3. response.mission_state (flat)
-          const missionState = 
-            responseData.status?.mission_state ||
-            responseData.latest_update?.mission_state ||
-            responseData.mission_state ||
-            responseData.state;
-          
-          console.log(`[MissionControlCard] 📡 Extracted missionState: "${missionState}"`);
-          
-          if (missionState) {
-            // Normalize: convert to lowercase for consistency
-            const normalizedState = missionState.toString().toLowerCase();
-            console.log(`[MissionControlCard] 📡 REST API mission status: "${missionState}" (normalized: "${normalizedState}")`);
-            setApiMissionStatus(normalizedState);
-          }
-        }
-      } catch (error) {
-        // Silently fail - WebSocket will be backup
-        console.log('[MissionControlCard] ⚠️ REST API poll failed, using WebSocket backup');
-      } finally {
-        if (isMounted) {
-          setApiStatusLoading(false);
-        }
-      }
-    };
-
-    // Initial fetch
-    fetchMissionStatus();
-
-    // Poll every 3000ms for faster button updates
-    pollInterval = setInterval(fetchMissionStatus, 3000);
-
-    return () => {
-      isMounted = false;
-      if (pollInterval) {
-        clearInterval(pollInterval);
-      }
-    };
-  }, [services]);
-
-  // Sync internal isRunning state with backend mission status
-  // USE ONLY REST API (primary source) - WebSocket removed due to inconsistent state values
+  // Recovery fetch on mount — restores state when app opens mid-mission or WebSocket reconnects
   React.useEffect(() => {
-    // Get REST API status (only source now)
-    const apiStatus = apiMissionStatus || '';
-    
-    // Use only REST API status
-    const primaryStatus = apiStatus;
-    const statusSource = apiStatus ? 'REST API' : 'none';
-    
-    console.log(`[MissionControlCard] 📊 Mission Status: Primary="${primaryStatus}" (${statusSource})`);
-    
-    // Normalize status - handle case variations
-    // Backend states: idle, loading, ready, running, paused, completed, error, stopped
-    const normalizedStatus = primaryStatus.toLowerCase().trim();
-    
-    // Determine if mission is running
-    // Only "running" state means mission is actively executing
-    const isMissionRunning = normalizedStatus === 'running';
-    const isMissionPaused = normalizedStatus === 'paused';
-    const isMissionReady = normalizedStatus === 'ready' || normalizedStatus === 'loading' || normalizedStatus === 'active';
-    const isMissionIdle = normalizedStatus === 'idle' || normalizedStatus === 'stopped' || normalizedStatus === 'completed' || normalizedStatus === 'error' || normalizedStatus === '';
-    
-    console.log(`[MissionControlCard] 🔍 Status Analysis: running=${isMissionRunning}, paused=${isMissionPaused}, ready=${isMissionReady}, idle=${isMissionIdle}`);
-
-    // PRIMARY SYNC: Use REST API status only
-    // Note: "paused" means mission is active but paused - keep STOP button, show RESUME
-    const shouldBeRunning = isMissionRunning || isMissionPaused;  // paused = still running (just paused)
-    const shouldBePaused = isMissionPaused;
-    
-    if (shouldBeRunning !== isRunning) {
-      if (shouldBeRunning) {
-        console.log(`[MissionControlCard] 🟢 Mission is RUNNING/PAUSED (${statusSource}) - updating button to STOP`);
-      } else {
-        console.log(`[MissionControlCard] 🔴 Mission is NOT RUNNING (${statusSource}) - updating button to START`);
-      }
-      setIsRunning(shouldBeRunning);
-      // Don't reset paused state when running state changes
-    }
-    
-    // Sync pause state
-    if (shouldBePaused !== isPaused) {
-      if (shouldBePaused) {
-        console.log(`[MissionControlCard] ⏸️ Mission is PAUSED (${statusSource}) - showing RESUME button`);
-      } else {
-        console.log(`[MissionControlCard] ▶️ Mission is NOT PAUSED (${statusSource}) - showing PAUSE button`);
-      }
-      setIsPaused(shouldBePaused);
-    }
-  }, [isMissionActive, apiMissionStatus]);
+    let mounted = true;
+    services.getMissionStatus().then((response) => {
+      if (!mounted || !response) return;
+      const rd = response.data || response;
+      const raw = rd.status?.mission_state || rd.latest_update?.mission_state || rd.mission_state || rd.state || '';
+      const s = raw.toString().toLowerCase().trim();
+      if (!s) return;
+      setIsRunning(s === 'running' || s === 'paused');
+      setIsPaused(s === 'paused');
+    }).catch(() => {});
+    return () => { mounted = false; };
+  }, []);
 
   // Mission control handlers with action guard protection
   const handleStart = preventAction(async () => {
@@ -421,18 +327,20 @@ const MissionControlCard: React.FC<MissionControlCardProps> = ({
             </Text>
           </TouchableOpacity>
 
+          {/* NEXT MARK — only active in MANUAL mode */}
           <TouchableOpacity
             style={[
               styles.controlButton,
               styles.nextButton,
-              (!isRunning || isNexting) && styles.buttonDisabled,
+              (!isRunning || isNexting || mode !== 'MANUAL') && styles.buttonDisabled,
             ]}
             onPress={handleNext}
-            disabled={!isRunning || isNexting}
+            disabled={!isRunning || isNexting || mode !== 'MANUAL'}
           >
             <Text style={styles.buttonText}>NEXT MARK</Text>
           </TouchableOpacity>
 
+          {/* SKIP — always enabled while mission is running, regardless of mode */}
           <View style={styles.skipRow}>
             <TouchableOpacity
               style={[
@@ -443,7 +351,6 @@ const MissionControlCard: React.FC<MissionControlCardProps> = ({
               ]}
               onPress={async () => {
                 if (isBulkMode) {
-                  // open the bulk input modal pre-filled from telemetry
                   const current = telemetry?.mission?.current_wp ?? 1;
                   const total = telemetry?.mission?.total_wp ?? 1;
                   setBulkFrom(String(Math.max(1, current)));
@@ -460,7 +367,7 @@ const MissionControlCard: React.FC<MissionControlCardProps> = ({
                 {isSkipping ? '⏳ Skipping...' : (isBulkMode ? 'BULK SKIP' : 'SKIP MARK')}
               </Text>
 
-              {/* Inline toggle in top-right corner of the skip button */}
+              {/* Inline bulk toggle in top-right corner */}
               <TouchableOpacity
                 style={[styles.bulkToggleInside, isBulkMode ? styles.bulkToggleActive : {}]}
                 onPress={() => setIsBulkMode((v) => !v)}
@@ -473,22 +380,21 @@ const MissionControlCard: React.FC<MissionControlCardProps> = ({
             </TouchableOpacity>
           </View>
 
-          {/* Mode Toggle */}
+          {/* AUTO / MANUAL — DGPS marking mode toggle */}
           <View style={styles.modeToggle}>
             <TouchableOpacity
               style={[
                 styles.modeButton,
-                mode === 'AUTO' && styles.modeButtonActive,
+                !isTogglingMode && mode === 'AUTO' && styles.modeButtonActive,
+                isTogglingMode && styles.buttonDisabled,
               ]}
               onPress={() => handleModeToggle('AUTO')}
               disabled={isTogglingMode}
             >
-              <Text
-                style={[
-                  styles.modeText,
-                  mode === 'AUTO' && styles.modeTextActive,
-                ]}
-              >
+              <Text style={[
+                styles.modeText,
+                !isTogglingMode && mode === 'AUTO' && styles.modeTextActive,
+              ]}>
                 AUTO
               </Text>
             </TouchableOpacity>
@@ -496,17 +402,16 @@ const MissionControlCard: React.FC<MissionControlCardProps> = ({
             <TouchableOpacity
               style={[
                 styles.modeButton,
-                mode === 'MANUAL' && styles.modeButtonActive,
+                !isTogglingMode && mode === 'MANUAL' && styles.modeButtonActive,
+                isTogglingMode && styles.buttonDisabled,
               ]}
               onPress={() => handleModeToggle('MANUAL')}
               disabled={isTogglingMode}
             >
-              <Text
-                style={[
-                  styles.modeText,
-                  mode === 'MANUAL' && styles.modeTextActive,
-                ]}
-              >
+              <Text style={[
+                styles.modeText,
+                !isTogglingMode && mode === 'MANUAL' && styles.modeTextActive,
+              ]}>
                 MANUAL
               </Text>
             </TouchableOpacity>

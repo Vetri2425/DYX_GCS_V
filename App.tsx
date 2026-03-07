@@ -17,8 +17,8 @@ import { Ionicons } from '@expo/vector-icons';
 // Initialize global crash handler ONCE at module load
 GlobalCrashHandler.initialize();
 
-// Fallback rover IPs in priority order - 192.168.0.212 is primary (working IP)
-const FALLBACK_IPS = ['192.168.0.212', '192.168.0.212', '192.168.1.103'];
+// Fallback rover IPs in priority order - 192.168.1.242 is primary (working IP)
+const FALLBACK_IPS = ['192.168.1.242', '192.168.1.242', '192.168.1.103'];
 
 /**
  * Test if a backend URL is reachable with graceful retry probing.
@@ -118,7 +118,7 @@ function AppContent() {
 
     // SKIP HTTP TEST - Just set the backend URL and let Socket.IO handle connection
     // Socket.IO is more reliable for React Native and handles reconnection automatically
-    const primaryURL = 'http://192.168.0.212:5001';
+    const primaryURL = 'http://192.168.1.242:5001';
 
     console.log('✅ Setting backend URL:', primaryURL);
     setConnectionStatus('✅ Backend configured. Connecting via Socket.IO...');
@@ -214,7 +214,7 @@ function AppContent() {
               <Text style={styles.inputLabel}>Backend IP Address</Text>
               <TextInput
                 style={styles.textInput}
-                placeholder="e.g., 192.168.0.212 or 10.23.61.50"
+                placeholder="e.g., 192.168.1.242 or 10.23.61.50"
                 placeholderTextColor="#999"
                 value={manualIP}
                 onChangeText={setManualIP}
@@ -286,7 +286,7 @@ function AppContent() {
         <Text style={styles.errorTitle}>Backend Not Reachable</Text>
         <Text style={styles.errorMessage}>
           Could not connect to rover backend.{'\n'}
-          Tried: 192.168.0.212 (primary) and 192.168.0.212 (fallback)
+          Tried: 192.168.1.242 (primary) and 192.168.1.242 (fallback)
         </Text>
         <Text style={styles.errorHint}>
           • Check rover is powered on{'\n'}

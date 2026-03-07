@@ -52,7 +52,7 @@ const MissionOpsPanel: React.FC<Props> = ({
     onRequestUpload,
     onManualControlOpen,
 }) => {
-    const { missionMode, setMissionMode, telemetry } = useRover();
+    const { missionMode, setMissionMode } = useRover();
     const [showExportDialog, setShowExportDialog] = useState(false);
     const [selectedExportFormat, setSelectedExportFormat] = useState<'qgc' | 'json' | 'kml' | 'csv' | 'dxf'>('qgc');
     const [showModeDialog, setShowModeDialog] = useState(false);
@@ -64,27 +64,6 @@ const MissionOpsPanel: React.FC<Props> = ({
 
     // Check if manual control mode is active
     const isManualControlMode = missionMode === 'Manual Control';
-
-    // Get RTK status color for the text
-    const rtkStatusColor = React.useMemo(() => {
-        if (!telemetry) return colors.danger;
-        const fixType = telemetry.rtk?.fix_type;
-        if (fixType >= 5) return colors.success; // RTK Float/Fixed = Green
-        if (fixType >= 3) return colors.warning; // 3D Fix = Orange
-        return colors.danger; // No Fix = Red
-    }, [telemetry]);
-
-    // Get GPS status text
-    const gpsStatusText = React.useMemo(() => {
-        if (!telemetry) return 'No Fix';
-        const fixType = telemetry.rtk?.fix_type;
-        if (fixType >= 5) return 'RTK Fixed';
-        if (fixType >= 4) return 'RTK Float';
-        if (fixType >= 3) return '3D Fix';
-        if (fixType >= 2) return '2D Fix';
-        if (fixType >= 1) return 'No Fix';
-        return 'No Fix';
-    }, [telemetry]);
 
     // Export generators (adapted for PathPlanWaypoint: uses `lon` field)
     const toQGCWPL110 = (wps: PathPlanWaypoint[]): string => {
@@ -208,7 +187,7 @@ const MissionOpsPanel: React.FC<Props> = ({
         console.log('[MissionOpsPanel] 🚀 Load Mission button clicked');
         console.log('[MissionOpsPanel] Waypoints count:', waypoints.length);
         console.log('[MissionOpsPanel] Current mission mode:', missionMode);
-
+        
         if (waypoints.length === 0) {
             console.log('[MissionOpsPanel] ❌ No waypoints to load');
             Alert.alert('No Data', 'No marking points to load');
@@ -237,7 +216,7 @@ const MissionOpsPanel: React.FC<Props> = ({
             console.log('[MissionOpsPanel] 📡 Setting mission mode on backend...');
             const modeResult = await setBackendMissionMode({ mode: backendMode, ...modeConfig });
             console.log('[MissionOpsPanel] Mode result:', modeResult);
-
+            
             if (!modeResult.success) {
                 console.log('[MissionOpsPanel] ⚠️ Failed to set mission mode:', modeResult.error);
                 // Continue anyway - the mode might be set later
@@ -258,8 +237,8 @@ const MissionOpsPanel: React.FC<Props> = ({
         console.log('[MissionOpsPanel] 📋 Showing confirmation alert...');
         Alert.alert('Load Mission', `Load mission with ${waypoints.length} marking points in ${missionMode} mode?`, [
             { text: 'Cancel', style: 'cancel', onPress: () => console.log('[MissionOpsPanel] User cancelled load') },
-            {
-                text: 'Load',
+            { 
+                text: 'Load', 
                 onPress: () => {
                     console.log('[MissionOpsPanel] ✅ User confirmed load, calling onLoadMission...');
                     onLoadMission?.();
@@ -427,13 +406,38 @@ const MissionOpsPanel: React.FC<Props> = ({
                                 </View>
                             </>
                         ) : (
-                            <View style={[styles.gpsRtkBubble, { borderColor: rtkStatusColor + '55' }]}>
-                                <Text style={styles.gpsRtkBubbleLabel}>GPS / RTK</Text>
-                                <View style={styles.gpsRtkRight}>
-                                    <View style={[styles.gpsRtkDot, { backgroundColor: rtkStatusColor }]} />
-                                    <Text style={[styles.gpsRtkBubbleStatus, { color: rtkStatusColor }]}>{gpsStatusText}</Text>
+                            <>
+                                <View>
+                                    <Text style={styles.coordsText}>X:{lastWaypoint ? lastWaypoint.lat.toFixed(7) : ''} Y:{lastWaypoint ? (lastWaypoint as any).lon.toFixed(7) : ''}</Text>
                                 </View>
-                            </View>
+                                <TouchableOpacity
+                                    style={styles.trashIcon}
+                                    onPress={() => {
+                                        if (waypoints.length === 0) return;
+                                        if (onUpdateWaypoints) {
+                                            // Show confirmation alert
+                                            Alert.alert(
+                                                'Delete All Marking Points',
+                                                `Are you sure you want to delete all ${waypoints.length} marking points? This action cannot be undone.`,
+                                                [
+                                                    {
+                                                        text: 'Cancel',
+                                                        style: 'cancel'
+                                                    },
+                                                    {
+                                                        text: 'Delete All',
+                                                        style: 'destructive',
+                                                        onPress: () => onUpdateWaypoints([])
+                                                    }
+                                                ]
+                                            );
+                                        }
+                                    }}
+                                    disabled={waypoints.length === 0}
+                                >
+                                    <Text style={{ color: waypoints.length === 0 ? '#555' : colors.accent, fontSize: 18 }}>🗑️</Text>
+                                </TouchableOpacity>
+                            </>
                         )}
                     </View>
                 </>
@@ -498,7 +502,7 @@ const styles = StyleSheet.create({
     },
     button: {
         flex: 1,
-        paddingVertical: 18,
+        paddingVertical: 12,
         borderRadius: 10,
         alignItems: 'center',
         justifyContent: 'center',
@@ -515,13 +519,12 @@ const styles = StyleSheet.create({
     },
     buttonText: {
         color: colors.text,
-        fontWeight: '700',
-        fontSize: 15,
+        fontWeight: '600',
     },
     loadButton: {
         marginTop: 8,
         borderRadius: 10,
-        paddingVertical: 20,
+        paddingVertical: 14,
         alignItems: 'center',
         justifyContent: 'center',
     },
@@ -530,8 +533,7 @@ const styles = StyleSheet.create({
     },
     loadText: {
         color: colors.text,
-        fontWeight: '800',
-        fontSize: 16,
+        fontWeight: '700',
     },
     footerRow: {
         marginTop: 8,
@@ -543,37 +545,6 @@ const styles = StyleSheet.create({
         color: colors.textSecondary,
         fontFamily: 'monospace',
         fontSize: 12,
-    },
-    gpsRtkBubble: {
-        flex: 1,
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        backgroundColor: colors.cardBg,
-        borderRadius: 10,
-        paddingVertical: 10,
-        paddingHorizontal: 18,
-        borderWidth: 1,
-    },
-    gpsRtkRight: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 6,
-    },
-    gpsRtkDot: {
-        width: 8,
-        height: 8,
-        borderRadius: 4,
-    },
-    gpsRtkBubbleLabel: {
-        color: colors.textSecondary,
-        fontSize: 12,
-        fontWeight: '600',
-        letterSpacing: 0.5,
-    },
-    gpsRtkBubbleStatus: {
-        fontSize: 13,
-        fontWeight: '700',
     },
     trashIcon: {
         padding: 6,

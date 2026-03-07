@@ -69,16 +69,30 @@ export const ManualPathConnectionCanvas: React.FC<Props> = ({
     return { minLat, maxLat, minLon, maxLon, latRange, lonRange };
   }, [waypoints]);
 
-  // Convert lat/lng to canvas coordinates (accepts bounds as parameter)
+  // Convert lat/lng to canvas coordinates using Web Mercator projection (preserves shapes)
   const latLngToCanvas = useCallback((lat: number, lon: number, bounds: Bounds, canvasSize: { width: number; height: number }): Point => {
     if (canvasSize.width === 0) {
       return { x: 0, y: 0 };
     }
     const padding = 0.1;
-    const normalizedLat = (lat - bounds.minLat) / bounds.latRange;
-    const normalizedLon = (lon - bounds.minLon) / bounds.lonRange;
-    const x = (normalizedLon * (1 - 2 * padding) + padding) * canvasSize.width;
-    const y = ((1 - normalizedLat) * (1 - 2 * padding) + padding) * canvasSize.height;
+    
+    // Convert to Web Mercator projection (preserves shapes locally)
+    const toWebMercator = (lat: number, lon: number) => {
+      const x = lon * 20037508.34 / 180;
+      const y = Math.log(Math.tan((90 + lat) * Math.PI / 360)) * 20037508.34 / Math.PI;
+      return { x, y };
+    };
+    
+    const min = toWebMercator(bounds.minLat, bounds.minLon);
+    const max = toWebMercator(bounds.maxLat, bounds.maxLon);
+    const current = toWebMercator(lat, lon);
+    
+    const normalizedX = (current.x - min.x) / (max.x - min.x);
+    const normalizedY = (current.y - min.y) / (max.y - min.y);
+    
+    const x = (normalizedX * (1 - 2 * padding) + padding) * canvasSize.width;
+    const y = ((1 - normalizedY) * (1 - 2 * padding) + padding) * canvasSize.height;
+    
     return { x, y };
   }, []);
 

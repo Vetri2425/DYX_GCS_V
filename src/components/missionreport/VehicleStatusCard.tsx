@@ -1,33 +1,14 @@
-import React, { useMemo, useState, useCallback, useEffect, useRef } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Modal, TextInput, ScrollView, Alert } from 'react-native';
+import React, { useState, useEffect, useRef } from 'react';
+import { View, Text, StyleSheet, ScrollView } from 'react-native';
 import { colors } from '../../theme/colors';
 import { VehicleStatus } from './types';
 import { RoverTelemetry } from '../../types/telemetry';
-import { NTRIPProfile } from '../../types/ntrip';
-import { NTRIPProfileList } from './NTRIPProfileList';
-import { NTRIPProfileEditor } from './NTRIPProfileEditor';
 
 interface Props {
   status: VehicleStatus;
   telemetry?: RoverTelemetry;
   isConnected: boolean;
-  services?: {
-    injectRTK: (url: string) => Promise<{ success: boolean; message?: string }>;
-    stopRTK: () => Promise<{ success: boolean; message?: string }>;
-    getRTKStatus: () => Promise<{ success: boolean; running?: boolean; total_bytes?: number; caster?: string }>;
-  };
-  onOpenRTKInjection?: () => void;
 }
-
-interface RTKConfig {
-  casterAddress: string;
-  port: string;
-  mountpoint: string;
-  username: string;
-  password: string;
-}
-
-type ModalScreen = 'list' | 'editor';
 
 // Layout constants for quick adjustments
 // Edit these values to change the card size without touching the StyleSheet below.
@@ -37,219 +18,77 @@ const VEHICLE_CARD_LAYOUT: { height?: number | string; minHeight?: number; width
   width: '100%',
 };
 
-export const VehicleStatusCard: React.FC<Props> = ({ status, telemetry, isConnected, services, onOpenRTKInjection }) => {
-  // RTK Modal State
-  const [showRTKModal, setShowRTKModal] = useState(false);
-  const [modalScreen, setModalScreen] = useState<ModalScreen>('list');
-  const [selectedProfile, setSelectedProfile] = useState<NTRIPProfile | null>(null);
-  const [activeProfileId, setActiveProfileId] = useState<string | null>(null);
-  
-  // Legacy RTK config state (kept for backward compatibility if needed)
-  const [config, setConfig] = useState<RTKConfig>({
-    casterAddress: '',
-    port: '2101',
-    mountpoint: '',
-    username: '',
-    password: '',
-  });
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [isStreamRunning, setIsStreamRunning] = useState(false);
-  const [totalBytes, setTotalBytes] = useState(0);
-  const [feedback, setFeedback] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+// Compute colors from raw telemetry values (pure functions, no side effects)
+const getRtkColor = (telemetry: any): string => {
+  if (!telemetry) return colors.danger;
+  const fixType = telemetry.rtk.fix_type;
+  if (fixType >= 5) return colors.success;
+  if (fixType >= 3) return colors.warning;
+  return colors.danger;
+};
 
-  const monitorRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const lastBytesRef = useRef<number>(0);
-  const lastTsRef = useRef<number>(0);
+const getBatteryColor = (telemetry: any): string => {
+  if (!telemetry) return colors.danger;
+  const pct = telemetry.battery.percentage;
+  if (pct > 50) return colors.success;
+  if (pct > 20) return colors.warning;
+  return colors.danger;
+};
 
-  // Get status dot color based on connection status
+const getAccuracyColor = (value: number): string => {
+  if (value < 0.1) return colors.success;
+  if (value < 5) return colors.warning;
+  if (value < 10) return '#3B82F6';
+  return colors.danger;
+};
+
+const getSatelliteColor = (telemetry: any): string => {
+  if (!telemetry) return colors.danger;
+  const satCount = telemetry.global.satellites_visible;
+  if (satCount >= 14) return colors.success;
+  if (satCount >= 6) return colors.warning;
+  if (satCount >= 2) return '#3B82F6';
+  return colors.danger;
+};
+
+// Hook: debounces a color value to prevent rapid flickering while keeping text values instant
+function useDebouncedColor(computeColor: () => string, dep: any, delay = 350): string {
+  const [color, setColor] = useState(computeColor);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const isFirstRender = useRef(true);
+
+  useEffect(() => {
+    const next = computeColor();
+    // Apply immediately on first render so initial state is correct
+    if (isFirstRender.current) {
+      isFirstRender.current = false;
+      setColor(next);
+      return;
+    }
+    if (timerRef.current) clearTimeout(timerRef.current);
+    timerRef.current = setTimeout(() => setColor(next), delay);
+    return () => {
+      if (timerRef.current) clearTimeout(timerRef.current);
+    };
+  }, [dep]);
+
+  return color;
+}
+
+export const VehicleStatusCard: React.FC<Props> = ({ status, telemetry, isConnected }) => {
+
   const connectionStatusColor = isConnected ? colors.success : colors.danger;
 
-  // Get RTK status color for the text
-  const rtkStatusColor = useMemo(() => {
-    if (!telemetry) return colors.danger;
-    const fixType = telemetry.rtk.fix_type;
-    if (fixType >= 5) return colors.success; // RTK Float/Fixed = Green
-    if (fixType >= 3) return colors.warning; // 3D Fix = Orange
-    return colors.danger; // No Fix = Red
-  }, [telemetry]);
+  // Colors are debounced to prevent flickering; text values from `status` update instantly
+  const rtkStatusColor   = useDebouncedColor(() => getRtkColor(telemetry),      telemetry?.rtk?.fix_type);
+  const batteryColor     = useDebouncedColor(() => getBatteryColor(telemetry),   telemetry?.battery?.percentage);
+  const hrmsColor        = useDebouncedColor(() => getAccuracyColor((telemetry as any)?.hrms ?? 0),  (telemetry as any)?.hrms);
+  const vrmsColor        = useDebouncedColor(() => getAccuracyColor((telemetry as any)?.vrms ?? 0),  (telemetry as any)?.vrms);
+  const satelliteColor   = useDebouncedColor(() => getSatelliteColor(telemetry), telemetry?.global?.satellites_visible);
 
-  // Get battery color based on percentage
-  const batteryColor = useMemo(() => {
-    if (!telemetry) return colors.danger;
-    const pct = telemetry.battery.percentage;
-    if (pct > 50) return colors.success;
-    if (pct > 20) return colors.warning;
-    return colors.danger;
-  }, [telemetry]);
 
-  // Get HRMS/VRMS color based on accuracy value (in meters)
-  const getAccuracyColor = (value: number): string => {
-    if (value < 0.1) return colors.success; // < 10cm = Green
-    if (value < 5) return colors.warning;   // 10cm to < 5m = Orange
-    if (value < 10) return '#3B82F6';       // 5m to < 10m = Blue
-    return colors.danger;                    // >= 10m = Red
-  };
 
-  // Get HRMS and VRMS colors
-  const hrmsColor = useMemo(() => {
-    if (!telemetry) return colors.danger;
-    return getAccuracyColor(telemetry.hrms);
-  }, [telemetry]);
-
-  const vrmsColor = useMemo(() => {
-    if (!telemetry) return colors.danger;
-    return getAccuracyColor(telemetry.vrms);
-  }, [telemetry]);
-
-  // Get satellite count color
-  const satelliteColor = useMemo(() => {
-    if (!telemetry) return colors.danger;
-    const satCount = telemetry.global.satellites_visible;
-    if (satCount >= 14) return colors.success;  // 14+ = Green
-    if (satCount >= 6) return colors.warning;   // 6-13 = Orange
-    if (satCount >= 2) return '#3B82F6';        // 2-6 = Blue
-    return colors.danger;                        // 0-2 = Red
-  }, [telemetry]);
-
-  // RTK Monitor Functions
-  const stopMonitor = useCallback(() => {
-    if (monitorRef.current) {
-      clearInterval(monitorRef.current);
-      monitorRef.current = null;
-    }
-  }, []);
-
-  const startMonitor = useCallback(() => {
-    if (monitorRef.current || !services) return;
-    lastBytesRef.current = 0;
-    lastTsRef.current = Date.now();
-    monitorRef.current = setInterval(async () => {
-      try {
-        const rtk_status = await services.getRTKStatus();
-        if (rtk_status.success) {
-          const now = Date.now();
-          const bytes = rtk_status.total_bytes ?? 0;
-          setTotalBytes(bytes);
-          lastBytesRef.current = bytes;
-          lastTsRef.current = now;
-          // Always sync running state from backend
-          setIsStreamRunning(Boolean(rtk_status.running));
-          if (!rtk_status.running) {
-            stopMonitor();
-          }
-        }
-      } catch (e) {
-        console.error('RTK monitor error:', e);
-      }
-    }, 250);
-  }, [services, stopMonitor]);
-
-  // Check RTK status on component mount
-  useEffect(() => {
-    if (services) {
-      const checkInitialStatus = async () => {
-        try {
-          const rtk_status = await services.getRTKStatus();
-          if (rtk_status.success) {
-            setIsStreamRunning(rtk_status.running || false);
-            setTotalBytes(rtk_status.total_bytes || 0);
-            if (rtk_status.running) {
-              startMonitor();
-            }
-          }
-        } catch (err) {
-          console.error('Failed to get initial RTK status:', err);
-        }
-      };
-      checkInitialStatus();
-    }
-  }, [services, startMonitor]);
-
-  // Check RTK status on modal open
-  useEffect(() => {
-    if (showRTKModal && services) {
-      const checkStatus = async () => {
-        try {
-          const rtk_status = await services.getRTKStatus();
-          if (rtk_status.success) {
-            setIsStreamRunning(rtk_status.running || false);
-            setTotalBytes(rtk_status.total_bytes || 0);
-            if (rtk_status.running) {
-              startMonitor();
-            }
-          }
-        } catch (err) {
-          console.error('Failed to get RTK status:', err);
-        }
-      };
-      checkStatus();
-    }
-  }, [showRTKModal, services, startMonitor]);
-  useEffect(() => {
-    if (showRTKModal && services) {
-      const checkStatus = async () => {
-        try {
-          const rtk_status = await services.getRTKStatus();
-          if (rtk_status.success) {
-            setIsStreamRunning(rtk_status.running || false);
-            setTotalBytes(rtk_status.total_bytes || 0);
-            if (rtk_status.running) {
-              startMonitor();
-            }
-          }
-        } catch (err) {
-          console.error('Failed to get RTK status:', err);
-        }
-      };
-      checkStatus();
-    }
-  }, [showRTKModal, services, startMonitor]);
-
-  // Stop RTK on rover disconnect
-  useEffect(() => {
-    if (!isConnected && isStreamRunning && services) {
-      const stopStream = async () => {
-        try {
-          await services.stopRTK();
-          setIsStreamRunning(false);
-          stopMonitor();
-        } catch (err) {
-          console.error('Failed to stop RTK on disconnect:', err);
-        }
-      };
-      stopStream();
-    }
-  }, [isConnected, isStreamRunning, services, stopMonitor]);
-
-  useEffect(() => {
-    return () => {
-      stopMonitor();
-    };
-  }, [stopMonitor]);
-
-  const handleInputChange = (field: keyof RTKConfig) => (value: string) => {
-    setConfig((prev) => ({
-      ...prev,
-      [field]: value,
-    }));
-  };
-
-  // Profile Management Handlers
-  const handleOpenRTKModal = () => {
-    setModalScreen('list');
-    setSelectedProfile(null);
-    setShowRTKModal(true);
-  };
-
-  const handleRTKPress = () => {
-    if (onOpenRTKInjection) {
-      onOpenRTKInjection();
-    } else {
-      handleOpenRTKModal();
-    }
-  };
-
+  /*
   const handleSelectProfile = async (profile: NTRIPProfile) => {
     if (!services) {
       Alert.alert('Error', 'RTK services not available');
@@ -269,10 +108,10 @@ export const VehicleStatusCard: React.FC<Props> = ({ status, telemetry, isConnec
         setFeedback(response.message ?? 'RTK stream started successfully.');
         setIsStreamRunning(true);
         setActiveProfileId(profile.id);
-        
+
         // Immediately start monitoring to sync state from backend
         startMonitor();
-        
+
         // Wait a moment then verify actual connection status
         setTimeout(async () => {
           try {
@@ -356,7 +195,7 @@ export const VehicleStatusCard: React.FC<Props> = ({ status, telemetry, isConnec
       if (response.success) {
         setFeedback(response.message ?? 'RTK stream started successfully.');
         setIsStreamRunning(true);
-        
+
         // Wait a moment then verify actual connection status
         setTimeout(async () => {
           try {
@@ -416,6 +255,7 @@ export const VehicleStatusCard: React.FC<Props> = ({ status, telemetry, isConnec
       setIsSubmitting(false);
     }
   };
+  */
 
   return (
     <View style={styles.card}>
@@ -437,21 +277,13 @@ export const VehicleStatusCard: React.FC<Props> = ({ status, telemetry, isConnec
           </View>
         </View>
 
-        {/* GPS/RTK - Now a button */}
-        <TouchableOpacity
-          key="gps-rtk"
-          style={styles.statusRow}
-          onPress={handleRTKPress}
-          activeOpacity={0.7}
-        >
+        {/* GPS/RTK - Status display only (button moved to Settings) */}
+        <View key="gps-rtk" style={styles.statusRow}>
           <Text style={styles.label}>GPS/RTK</Text>
-          <View style={styles.valueRow}>
-            <View style={[styles.accuracyBox, { backgroundColor: rtkStatusColor }]}>
-              <Text style={styles.accuracyValue}>{status.gps}</Text>
-            </View>
-            <Text style={styles.gearIcon}> ⚙</Text>
+          <View style={[styles.accuracyBox, { backgroundColor: rtkStatusColor }]}>
+            <Text style={styles.accuracyValue}>{status.gps}</Text>
           </View>
-        </TouchableOpacity>
+        </View>
 
         <View key="satellites" style={styles.statusRow}>
           <Text style={styles.label}>Satellites</Text>
@@ -497,77 +329,6 @@ export const VehicleStatusCard: React.FC<Props> = ({ status, telemetry, isConnec
         )}
       </ScrollView>
 
-      {/* RTK Profile Manager Modal */}
-      <Modal
-        visible={showRTKModal}
-        transparent
-        animationType="slide"
-        onRequestClose={() => {
-          setShowRTKModal(false);
-          setModalScreen('list');
-          setSelectedProfile(null);
-        }}
-      >
-        <View style={styles.modalOverlay}>
-          <View style={styles.profileModalContainer}>
-            {/* Header with Stop Button */}
-            <View style={styles.profileModalHeader}>
-              <View>
-                <Text style={styles.profileModalTitle}>
-                  {modalScreen === 'list' ? '📡 NTRIP Profiles' : (selectedProfile ? '✏️ Edit Profile' : '➕ New Profile')}
-                </Text>
-                {isStreamRunning && modalScreen === 'list' && (
-                  <View style={styles.streamingBadge}>
-                    <View style={styles.streamingDot} />
-                    <Text style={styles.streamingText}>Streaming</Text>
-                    <Text style={styles.streamingBytes}>
-                      {(totalBytes / 1024).toFixed(1)} KB
-                    </Text>
-                  </View>
-                )}
-              </View>
-              <View style={styles.headerActions}>
-                {isStreamRunning && modalScreen === 'list' && (
-                  <TouchableOpacity
-                    style={styles.stopStreamButton}
-                    onPress={handleStopStream}
-                    disabled={isSubmitting}
-                  >
-                    <Text style={styles.stopStreamText}>⏹️ Stop</Text>
-                  </TouchableOpacity>
-                )}
-                <TouchableOpacity
-                  onPress={() => {
-                    setShowRTKModal(false);
-                    setModalScreen('list');
-                    setSelectedProfile(null);
-                  }}
-                >
-                  <Text style={styles.closeButton}>✕</Text>
-                </TouchableOpacity>
-              </View>
-            </View>
-
-            {/* Modal Content */}
-            {modalScreen === 'list' ? (
-              <NTRIPProfileList
-                onSelectProfile={handleSelectProfile}
-                onAddNew={handleAddNewProfile}
-                onEditProfile={handleEditProfile}
-                isConnecting={isSubmitting}
-                activeProfileId={activeProfileId}
-                isStreamRunning={isStreamRunning}
-              />
-            ) : (
-              <NTRIPProfileEditor
-                profile={selectedProfile}
-                onSave={handleProfileSaved}
-                onCancel={handleCancelEdit}
-              />
-            )}
-          </View>
-        </View>
-      </Modal>
     </View>
   );
 };

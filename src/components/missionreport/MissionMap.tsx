@@ -245,6 +245,9 @@ export const MissionMap: React.FC<Props> = ({
     let missionPolyline = null;
     const waypointMarkers = [];
 
+    // Live rover position — updated via injected JS so centerOnRover always uses current coords
+    let liveRoverPos = roverData.hasPosition ? { lat: roverData.lat, lon: roverData.lon } : null;
+
     // TRAIL DISABLED: Single trail polyline commented out
     // window.roverTrail = null;
 
@@ -463,26 +466,20 @@ export const MissionMap: React.FC<Props> = ({
     }, 100);
     
     function centerOnRover() {
-      if (roverData.hasPosition) {
-        map.setView([roverData.lat, roverData.lon], 17, { animate: true });
+      if (liveRoverPos) {
+        map.setView([liveRoverPos.lat, liveRoverPos.lon], 17, { animate: true });
       }
     }
 
     function toggleFullscreen() {
-      // Send message to React Native to toggle fullscreen
-      window.ReactNativeWebView.postMessage(JSON.stringify({
-        type: 'TOGGLE_FULLSCREEN'
-      }));
+      window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'TOGGLE_FULLSCREEN' }));
     }
 
     function fitToMission() {
       const bounds = [];
       waypoints.forEach(wp => bounds.push([wp.lat, wp.lon]));
-      if (roverData.hasPosition) bounds.push([roverData.lat, roverData.lon]);
-      
-      if (bounds.length > 0) {
-        map.fitBounds(bounds, { padding: [50, 50], animate: true });
-      }
+      if (liveRoverPos) bounds.push([liveRoverPos.lat, liveRoverPos.lon]);
+      if (bounds.length > 0) map.fitBounds(bounds, { padding: [50, 50], animate: true });
     }
     
     // Notify React Native that map is ready
@@ -657,6 +654,7 @@ export const MissionMap: React.FC<Props> = ({
           // Update rover position
           if (roverMarker) {
             roverMarker.setLatLng([${roverLat}, ${roverLon}]);
+            liveRoverPos = { lat: ${roverLat}, lon: ${roverLon} };
 
             // Update position display
             document.getElementById('rover-lat').textContent = 'Lat: ${roverLat.toFixed(7)}';
@@ -791,6 +789,23 @@ export const MissionMap: React.FC<Props> = ({
             const message = JSON.parse(event.nativeEvent.data);
             if (message.type === 'mapReady') {
               setMapReady(true);
+              // Fix: Leaflet initializes before WebView layout finalizes.
+              // invalidateSize() forces Leaflet to re-measure its container,
+              // then fitBounds re-centers correctly at actual dimensions.
+              setTimeout(() => {
+                webViewRef.current?.injectJavaScript(`
+                  (function() {
+                    try {
+                      map.invalidateSize();
+                      const b = [];
+                      waypoints.forEach(wp => b.push([wp.lat, wp.lon]));
+                      if (liveRoverPos) b.push([liveRoverPos.lat, liveRoverPos.lon]);
+                      if (b.length > 0) map.fitBounds(b, { padding: [50, 50] });
+                    } catch(e) {}
+                  })();
+                  true;
+                `);
+              }, 300);
             } else if (message.type === 'TOGGLE_FULLSCREEN') {
               onToggleFullscreen?.();
             }

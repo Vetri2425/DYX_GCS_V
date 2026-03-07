@@ -160,7 +160,7 @@ export default function RoverDiscoveryScreen({ onRoverSelected }: RoverDiscovery
       let errorMessage = 'Could not reach the backend server.\n\n';
 
       if (error.message?.includes('Invalid URL')) {
-        errorMessage += 'Invalid URL format. Use: http://IP:PORT\nExample: http://192.168.0.212:5001';
+        errorMessage += 'Invalid URL format. Use: http://IP:PORT\nExample: http://192.168.1.242:5001';
       } else if (error.code === 'ECONNREFUSED') {
         errorMessage += '✗ Connection refused\n✓ Check backend is running\n✓ Verify port is correct';
       } else if (error.code === 'ETIMEDOUT' || error.message?.includes('timeout')) {
@@ -337,12 +337,12 @@ export default function RoverDiscoveryScreen({ onRoverSelected }: RoverDiscovery
             <Text style={styles.modalTitle}>Enter Backend URL</Text>
             <Text style={styles.modalSubtitle}>
               Will connect to /api/status endpoint{"\n"}
-              Example: http://192.168.0.212:5001
+              Example: http://192.168.1.242:5001
             </Text>
 
             <TextInput
               style={styles.urlInput}
-              placeholder="http://192.168.0.212:5001"
+              placeholder="http://192.168.1.242:5001"
               placeholderTextColor="#666"
               value={manualUrl}
               onChangeText={setManualUrl}

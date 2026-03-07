@@ -14,6 +14,8 @@ import { TextAnnotationDialog } from '../components/pathplan/TextAnnotationDialo
 import { FreeDrawDialog, DrawSettings } from '../components/pathplan/FreeDrawDialog';
 import { DrawingCanvas } from '../components/pathplan/DrawingCanvas';
 import { ManualPathConnectionCanvas } from '../components/pathplan/ManualPathConnectionCanvas';
+import { ManualMapConnection } from '../components/pathplan/ManualMapConnection';
+import { ManualConnectionChoice } from '../components/pathplan/ManualConnectionChoice';
 import { ManualControlPanel } from '../components/pathplan/ManualControlPanel';
 import { FailsafeModeSelector } from '../components/pathplan/FailsafeModeSelector';
 import { FailsafeStrictPopup } from '../components/pathplan/FailsafeStrictPopup';
@@ -198,6 +200,8 @@ export default function PathPlanScreen() {
   const [pathAssignmentMode, setPathAssignmentMode] = useState<'auto' | 'manual'>('auto');
   const [manualPathConnections, setManualPathConnections] = useState<number[]>([]);
   const [isConnectingPath, setIsConnectingPath] = useState<boolean>(false);
+  const [showConnectionChoice, setShowConnectionChoice] = useState<boolean>(false);
+  const [useMapForConnection, setUseMapForConnection] = useState<boolean>(false);
 
   // Drawing tools state
   const [activeDrawingTool, setActiveDrawingTool] = useState<string | null>(null);
@@ -215,6 +219,9 @@ export default function PathPlanScreen() {
 
   // Full screen map state
   const [isMapFullscreen, setIsMapFullscreen] = useState(false);
+
+  // Drawing tools panel collapse state
+  const [isDrawingToolsCollapsed, setIsDrawingToolsCollapsed] = useState(false);
 
   // Load persisted PathPlan state on mount
   useEffect(() => {
@@ -253,6 +260,10 @@ export default function PathPlanScreen() {
           if (savedUIState.selectedWaypoint !== undefined) {
             setSelectedWaypoint(savedUIState.selectedWaypoint);
             console.log('[PathPlanScreen] 📂 Restored selected waypoint:', savedUIState.selectedWaypoint);
+          }
+          if (savedUIState.isDrawingToolsCollapsed !== undefined) {
+            setIsDrawingToolsCollapsed(savedUIState.isDrawingToolsCollapsed);
+            console.log('[PathPlanScreen] 📂 Restored drawing tools collapsed:', savedUIState.isDrawingToolsCollapsed);
           }
           // Map center and zoom are restored by the map component itself
         }
@@ -352,11 +363,12 @@ export default function PathPlanScreen() {
     autoSaveTimersRef.current.uiState = setTimeout(() => {
       PersistentStorage.savePathPlanUIState({
         selectedWaypoint,
+        isDrawingToolsCollapsed,
       }).catch(error => {
         console.error('[PathPlanScreen] Failed to persist UI state:', error);
       });
     }, 300);
-  }, [homePosition, drawSettings, isDrawingMode, activeDrawingTool, selectedWaypoint]);
+  }, [homePosition, drawSettings, isDrawingMode, activeDrawingTool, selectedWaypoint, isDrawingToolsCollapsed]);
 
   // Single consolidated useEffect for all auto-saves
   useEffect(() => {
@@ -745,7 +757,7 @@ export default function PathPlanScreen() {
     const headers = lines[0].split(',').map(h => h.trim().toLowerCase());
     const latIndex = headers.findIndex(h => h === 'latitude' || h === 'lat');
     const lonIndex = headers.findIndex(h => h === 'longitude' || h === 'lon' || h === 'lng');
-    const altIndex = headers.findIndex(h => h === 'altitude' || h === 'alt');
+    const altIndex = headers.findIndex(h => h === 'altitude' || h === 'alt' || h === 'elevation' || h === 'ellipsoidal height');
 
     // Optional field indices
     const blockIndex = headers.findIndex(h => h === 'block');
@@ -1504,15 +1516,24 @@ export default function PathPlanScreen() {
       const waypointsWithDistances = calculateDistances(parsed);
 
       // Auto-set mark based on global servo_enabled setting
+      // Wrapped in a 3s timeout — getMissionServoConfig() hangs indefinitely when
+      // the backend is unreachable, silently blocking the entire upload flow.
       let globalServoEnabled = true;
       try {
-        const response: any = await services.getMissionServoConfig();
-        // Backend returns config in 'message' field
+        const response: any = await Promise.race([
+          services.getMissionServoConfig(),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 1500)),
+        ]);
         const config = response.message || response.config || response.data || response;
         globalServoEnabled = config.servo_enabled ?? true;
       } catch (e) {
-        console.warn('[PathPlan] Could not fetch servo config for mark defaults');
+        console.warn('[PathPlan] Could not fetch servo config for mark defaults, using default (true)');
       }
+
+      // Guard: component may have unmounted during the async call above
+      // (e.g. socket error causes context reset → screen unmount)
+      if (!mountedRef.current) return;
+
       const waypointsWithMark = waypointsWithDistances.map(wp => ({
         ...wp,
         mark: wp.mark ?? globalServoEnabled,
@@ -1621,8 +1642,11 @@ export default function PathPlanScreen() {
                   onShowSurveyGridTool={() => setShowSurveyGridDialog(true)}
                   onShowTextTool={() => setShowTextDialog(true)}
                   onShowDrawTool={() => setShowDrawDialog(true)}
+                  isCollapsed={isDrawingToolsCollapsed}
+                  onToggleCollapse={() => setIsDrawingToolsCollapsed(!isDrawingToolsCollapsed)}
                 />
               </View>
+              {/* PathSequenceSidebar - Always shown; collapses the DrawingToolsPanel to free up vertical space */}
               <PathSequenceSidebar
                 waypoints={isConnectingPath && manualPathConnections.length > 0
                   ? [...new Set(manualPathConnections)].map(id => waypoints.find(wp => wp.id === id)).filter(Boolean) as PathPlanWaypoint[]
@@ -2058,11 +2082,11 @@ export default function PathPlanScreen() {
                               if (DEBUG_LOG) console.log('[PathPlan] Importing waypoints in MANUAL mode (with warnings):', sanitized.length);
                               updateWaypoints(sanitized);
                               setManualPathConnections([]);
-                              setIsConnectingPath(true);
+                              setShowConnectionChoice(true);
                               Alert.alert(
                                 '✏️ Manual Path Mode',
-                                `${sanitized.length} marking points imported. Click marking points in order to create your custom path. Tap a marking point to start, then tap others to connect them.`,
-                                [{ text: 'Start Connecting' }]
+                                `${sanitized.length} marking points imported. Choose your preferred connection method.`,
+                                [{ text: 'Choose Method' }]
                               );
                               setShowUploadPreview(false);
                             } else {
@@ -2084,13 +2108,27 @@ export default function PathPlanScreen() {
                       if (DEBUG_LOG) console.log('[PathPlan] Importing waypoints in MANUAL mode:', sanitized.length);
                       updateWaypoints(sanitized);
                       setManualPathConnections([]);
-                      setIsConnectingPath(true);
                       Alert.alert(
                         '✏️ Manual Path Mode',
-                        `${sanitized.length} marking points imported. Click marking points in order to create your custom path. Tap a marking point to start, then tap others to connect them.`,
-                        [{ text: 'Start Connecting' }]
-                      );
-                      setShowUploadPreview(false);
+                        `${sanitized.length} marking points imported. Choose your preferred connection method.`,
+                        [
+                          { text: 'Connect Manually' },
+                          { text: 'Connect Automatically' }
+                        ]
+                      ).then((choice) => {
+                          if (choice === 'Connect Manually') {
+                            setIsConnectingPath(true);
+                            Alert.alert(
+                              '✏️ Manual Path Mode',
+                              `${sanitized.length} marking points imported. Click marking points in order to create your custom path. Tap a marking point to start, then tap others to connect them.`,
+                              [{ text: 'Start Connecting' }]
+                            );
+                          } else if (choice === 'Connect Automatically') {
+                            updateWaypoints(sanitized);
+                            Alert.alert('✓ Import Complete', `Successfully imported ${sanitized.length} marking points.`);
+                          }
+                          setShowUploadPreview(false);
+                        });
                     } else {
                       // Auto mode: Sequential import as usual
                       const sanitized = sanitizeWaypointsForUpload(uploadPreviewWaypoints);

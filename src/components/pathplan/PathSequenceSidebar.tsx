@@ -202,7 +202,7 @@ export const PathSequenceSidebar: React.FC<Props> = ({
                             <Text style={styles.editHint}>Tap to edit</Text>
                         </TouchableOpacity>
                     )}
-                    <TouchableOpacity onPress={() => setIsFullScreenTable(true)} style={{ marginLeft: 8, width: 40, height: 40, justifyContent: 'center', alignItems: 'center', padding: 0, backgroundColor: '#FFD600', borderRadius: 12 }}> 
+                    <TouchableOpacity onPress={() => setIsFullScreenTable(true)} style={{ marginLeft: 8, width: 40, height: 40, justifyContent: 'center', alignItems: 'center', padding: 0, backgroundColor: '#FFD600', borderRadius: 12 }}>
                         <Text style={{ fontSize: 24, color: '#222' }}>↗</Text>
                     </TouchableOpacity>
                 </View>
@@ -211,8 +211,8 @@ export const PathSequenceSidebar: React.FC<Props> = ({
 
             {/* Waypoints List */}
             <ScrollView style={styles.waypointsList} showsVerticalScrollIndicator={true}>
-                 {/* Table Header */}
-                 <View style={styles.tableHeaderRow}>
+                {/* Table Header */}
+                <View style={styles.tableHeaderRow}>
                     <Text style={[styles.tableHeaderText, { flex: 0.4 }]}>Seq</Text>
                     <Text style={[styles.tableHeaderText, { flex: 1.2 }]}>Latitude</Text>
                     <Text style={[styles.tableHeaderText, { flex: 1.2 }]}>Longitude</Text>
@@ -273,79 +273,79 @@ export const PathSequenceSidebar: React.FC<Props> = ({
             {/* Full Screen Modal for Waypoint Table */}
             <Modal visible={isFullScreenTable} animationType="slide" transparent={false}>
                 <GestureHandlerRootView style={{ flex: 1 }}>
-                <View style={{ flex: 1, backgroundColor: colors.panelBg, padding: 18 }}>
-                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 24, backgroundColor: colors.cardBg, borderRadius: 16 }}>
-                        <Text style={{ fontSize: 28, fontWeight: 'bold', color: colors.text }}>Marking Points Table</Text>
-                        <View style={{ flexDirection: 'row', gap: 12 }}>
-                            <TouchableOpacity 
-                                onPress={() => {
-                                    if (waypoints.length === 0) return;
-                                    if (onUpdateWaypoints) {
-                                        // Show confirmation alert
-                                        Alert.alert(
-                                            'Delete All Marking Points',
-                                            `Are you sure you want to delete all ${waypoints.length} marking points? This action cannot be undone.`,
-                                            [
-                                                {
-                                                    text: 'Cancel',
-                                                    style: 'cancel'
-                                                },
-                                                {
-                                                    text: 'Delete All',
-                                                    style: 'destructive',
-                                                    onPress: () => onUpdateWaypoints([])
-                                                }
-                                            ]
-                                        );
-                                    }
-                                }}
-                                disabled={waypoints.length === 0}
-                                style={{ 
-                                    paddingHorizontal: 20, 
-                                    paddingVertical: 14, 
-                                    backgroundColor: waypoints.length === 0 ? '#555' : '#dc2626', 
-                                    borderRadius: 12,
-                                    opacity: waypoints.length === 0 ? 0.5 : 1
-                                }}
-                            > 
-                                <Text style={{ fontSize: 16, color: '#fff', fontWeight: '700' }}>🗑️ Delete All</Text>
-                            </TouchableOpacity>
-                            <TouchableOpacity onPress={() => setIsFullScreenTable(false)} style={{ width: 56, height: 56, justifyContent: 'center', alignItems: 'center', padding: 0, backgroundColor: '#FFD600', borderRadius: 16 }}> 
-                                <Text style={{ fontSize: 32, color: '#222' }}>↩</Text>
-                            </TouchableOpacity>
+                    <View style={{ flex: 1, backgroundColor: colors.panelBg, padding: 18 }}>
+                        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 24, backgroundColor: colors.cardBg, borderRadius: 16 }}>
+                            <Text style={{ fontSize: 28, fontWeight: 'bold', color: colors.text }}>Marking Points Table</Text>
+                            <View style={{ flexDirection: 'row', gap: 12 }}>
+                                <TouchableOpacity
+                                    onPress={() => {
+                                        if (waypoints.length === 0) return;
+                                        if (onUpdateWaypoints) {
+                                            // Show confirmation alert
+                                            Alert.alert(
+                                                'Delete All Marking Points',
+                                                `Are you sure you want to delete all ${waypoints.length} marking points? This action cannot be undone.`,
+                                                [
+                                                    {
+                                                        text: 'Cancel',
+                                                        style: 'cancel'
+                                                    },
+                                                    {
+                                                        text: 'Delete All',
+                                                        style: 'destructive',
+                                                        onPress: () => onUpdateWaypoints([])
+                                                    }
+                                                ]
+                                            );
+                                        }
+                                    }}
+                                    disabled={waypoints.length === 0}
+                                    style={{
+                                        paddingHorizontal: 20,
+                                        paddingVertical: 14,
+                                        backgroundColor: waypoints.length === 0 ? '#555' : '#dc2626',
+                                        borderRadius: 12,
+                                        opacity: waypoints.length === 0 ? 0.5 : 1
+                                    }}
+                                >
+                                    <Text style={{ fontSize: 16, color: '#fff', fontWeight: '700' }}>🗑️ Delete All</Text>
+                                </TouchableOpacity>
+                                <TouchableOpacity onPress={() => setIsFullScreenTable(false)} style={{ width: 56, height: 56, justifyContent: 'center', alignItems: 'center', padding: 0, backgroundColor: '#FFD600', borderRadius: 16 }}>
+                                    <Text style={{ fontSize: 32, color: '#222' }}>↩</Text>
+                                </TouchableOpacity>
+                            </View>
+                        </View>
+                        {/* Table Header */}
+                        <View style={{ flex: 1, marginTop: 12, borderRadius: 16 }}>
+                            <View style={{ flexDirection: 'row', backgroundColor: '#0a2540', paddingVertical: 10, borderBottomWidth: 2, borderBottomColor: colors.border, width: '100%', alignItems: 'center', borderTopLeftRadius: 16, borderTopRightRadius: 16 }}>
+                                <View style={{ width: 36 }} />
+                                <Text style={{ flex: 0.7, color: '#67E8F9', fontWeight: 'bold', textAlign: 'center', fontSize: 20 }}>S/No</Text>
+                                <TouchableOpacity style={{ flex: 1.2 }} onPress={() => setShowBlockDialog(true)}>
+                                    <Text style={{ color: '#67E8F9', fontWeight: 'bold', textAlign: 'center', fontSize: 20 }}>Block</Text>
+                                </TouchableOpacity>
+                                <TouchableOpacity style={{ flex: 1.2 }} onPress={() => setShowRowDialog(true)}>
+                                    <Text style={{ color: '#67E8F9', fontWeight: 'bold', textAlign: 'center', fontSize: 20 }}>Row</Text>
+                                </TouchableOpacity>
+                                <TouchableOpacity style={{ flex: 1.2 }} onPress={() => setShowPileDialog(true)}>
+                                    <Text style={{ color: '#67E8F9', fontWeight: 'bold', textAlign: 'center', fontSize: 20 }}>Pile</Text>
+                                </TouchableOpacity>
+                                <Text style={{ flex: 2, color: '#67E8F9', fontWeight: 'bold', textAlign: 'center', fontSize: 20 }}>Latitude</Text>
+                                <Text style={{ flex: 2, color: '#67E8F9', fontWeight: 'bold', textAlign: 'center', fontSize: 20 }}>Longitude</Text>
+                                <Text style={{ flex: 1.2, color: '#67E8F9', fontWeight: 'bold', textAlign: 'center', fontSize: 20 }}>Altitude</Text>
+                                <Text style={{ flex: 1.2, color: '#67E8F9', fontWeight: 'bold', textAlign: 'center', fontSize: 20 }}>Distance</Text>
+                                <Text style={{ flex: 0.8, color: '#67E8F9', fontWeight: 'bold', textAlign: 'center', fontSize: 20 }}>Mark</Text>
+                                <View style={{ flex: 0.8 }} />
+                            </View>
+                            {/* Draggable Table */}
+                            <DraggableWaypointsTable
+                                waypoints={waypoints}
+                                onReorder={handleReorder}
+                                onDelete={onDeleteWaypoint}
+                                onToggleMark={onToggleMark}
+                                globalServoEnabled={globalServoEnabled}
+                            />
                         </View>
                     </View>
-                    {/* Table Header */}
-                    <View style={{ flex: 1, marginTop: 12, borderRadius: 16 }}>
-                    <View style={{ flexDirection: 'row', backgroundColor: '#0a2540', paddingVertical: 10, borderBottomWidth: 2, borderBottomColor: colors.border, width: '100%', alignItems: 'center', borderTopLeftRadius: 16, borderTopRightRadius: 16 }}>
-                        <View style={{ width: 36 }} />
-                        <Text style={{ flex: 0.7, color: '#67E8F9', fontWeight: 'bold', textAlign: 'center', fontSize: 20 }}>#</Text>
-                        <TouchableOpacity style={{ flex: 1.2 }} onPress={() => setShowBlockDialog(true)}>
-                            <Text style={{ color: '#67E8F9', fontWeight: 'bold', textAlign: 'center', fontSize: 20 }}>Block</Text>
-                        </TouchableOpacity>
-                        <TouchableOpacity style={{ flex: 1.2 }} onPress={() => setShowRowDialog(true)}>
-                            <Text style={{ color: '#67E8F9', fontWeight: 'bold', textAlign: 'center', fontSize: 20 }}>Row</Text>
-                        </TouchableOpacity>
-                        <TouchableOpacity style={{ flex: 1.2 }} onPress={() => setShowPileDialog(true)}>
-                            <Text style={{ color: '#67E8F9', fontWeight: 'bold', textAlign: 'center', fontSize: 20 }}>Pile</Text>
-                        </TouchableOpacity>
-                        <Text style={{ flex: 2, color: '#67E8F9', fontWeight: 'bold', textAlign: 'center', fontSize: 20 }}>Latitude</Text>
-                        <Text style={{ flex: 2, color: '#67E8F9', fontWeight: 'bold', textAlign: 'center', fontSize: 20 }}>Longitude</Text>
-                        <Text style={{ flex: 1.2, color: '#67E8F9', fontWeight: 'bold', textAlign: 'center', fontSize: 20 }}>Altitude</Text>
-                        <Text style={{ flex: 1.2, color: '#67E8F9', fontWeight: 'bold', textAlign: 'center', fontSize: 20 }}>Dist (m)</Text>
-                        <Text style={{ flex: 0.8, color: '#67E8F9', fontWeight: 'bold', textAlign: 'center', fontSize: 20 }}>Mark</Text>
-                        <View style={{ flex: 0.8 }} />
-                    </View>
-                    {/* Draggable Table */}
-                    <DraggableWaypointsTable
-                        waypoints={waypoints}
-                        onReorder={handleReorder}
-                        onDelete={onDeleteWaypoint}
-                        onToggleMark={onToggleMark}
-                        globalServoEnabled={globalServoEnabled}
-                    />
-                    </View>
-                </View>
                 </GestureHandlerRootView>
             </Modal>
 

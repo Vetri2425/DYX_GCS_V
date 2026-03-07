@@ -44,7 +44,7 @@ export const ALLOWED_DISCOVERY_IPS: string[] = Array.from(
 // Priority order within allowed IPs
 export const PRIORITY_BACKEND_IPS: string[] = [
   '192.168.1.102',
-  '192.168.0.212',
+  '192.168.1.242',
   '192.168.1.213',
   '192.168.1.100',
   '192.168.1.101',

@@ -781,12 +781,6 @@ export function useRoverTelemetry(): UseRoverTelemetryResult {
   const missionStatusDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const gpsFixTypeDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastStableFixTypeRef = useRef<number>(0);
-  const hrmsDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const lastStableHrmsRef = useRef<number>(0);
-  const vrmsDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const lastStableVrmsRef = useRef<number>(0);
-  const satellitesDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const lastStableSatellitesRef = useRef<number>(0);
   const connectSocketRef = useRef<() => void>(() => { });
   const mountedRef = useRef(true);
 
@@ -840,80 +834,11 @@ export function useRoverTelemetry(): UseRoverTelemetryResult {
     if (envelope.network) {
       next.network = { ...next.network, ...envelope.network };
     }
-    // ✅ HRMS DEBOUNCING: Prevent color flickering on accuracy changes
-    // Only debounce flicker between two non-zero values; apply 0→nonzero immediately
     if ((envelope as any).hrms !== undefined) {
-      const newHrms = (envelope as any).hrms;
-      const currentHrms = (mutable.telemetry as any).hrms;
-
-      if (newHrms !== currentHrms) {
-        // If current value is 0 (initial/stale), apply new real value immediately
-        if (currentHrms === 0 || newHrms === 0) {
-          if (hrmsDebounceRef.current) {
-            clearTimeout(hrmsDebounceRef.current);
-            hrmsDebounceRef.current = null;
-          }
-          (next as any).hrms = newHrms;
-          lastStableHrmsRef.current = newHrms;
-        } else {
-          // Both values are non-zero: debounce to avoid flickering
-          if (hrmsDebounceRef.current) {
-            clearTimeout(hrmsDebounceRef.current);
-          }
-          hrmsDebounceRef.current = setTimeout(() => {
-            if (!mountedRef.current) return;
-            lastStableHrmsRef.current = newHrms;
-            const debouncedNext = { ...mutableRef.current.telemetry };
-            (debouncedNext as any).hrms = newHrms;
-            mutableRef.current.telemetry = debouncedNext;
-            mutableRef.current.lastEnvelopeTs = Date.now();
-            setTelemetrySnapshot(debouncedNext);
-            hrmsDebounceRef.current = null;
-          }, 500); // 500ms debounce
-          // Keep current stable value until debounce completes
-          (next as any).hrms = currentHrms;
-        }
-      } else {
-        (next as any).hrms = newHrms;
-      }
+      (next as any).hrms = (envelope as any).hrms;
     }
-
-    // ✅ VRMS DEBOUNCING: Prevent color flickering on accuracy changes
-    // Only debounce flicker between two non-zero values; apply 0→nonzero immediately
     if ((envelope as any).vrms !== undefined) {
-      const newVrms = (envelope as any).vrms;
-      const currentVrms = (mutable.telemetry as any).vrms;
-
-      if (newVrms !== currentVrms) {
-        // If current value is 0 (initial/stale), apply new real value immediately
-        if (currentVrms === 0 || newVrms === 0) {
-          if (vrmsDebounceRef.current) {
-            clearTimeout(vrmsDebounceRef.current);
-            vrmsDebounceRef.current = null;
-          }
-          (next as any).vrms = newVrms;
-          lastStableVrmsRef.current = newVrms;
-        } else {
-          // Both values are non-zero: debounce to avoid flickering
-          if (vrmsDebounceRef.current) {
-            clearTimeout(vrmsDebounceRef.current);
-          }
-          vrmsDebounceRef.current = setTimeout(() => {
-            if (!mountedRef.current) return;
-            lastStableVrmsRef.current = newVrms;
-            const debouncedNext = { ...mutableRef.current.telemetry };
-            (debouncedNext as any).vrms = newVrms;
-            mutableRef.current.telemetry = debouncedNext;
-            mutableRef.current.lastEnvelopeTs = Date.now();
-            setTelemetrySnapshot(debouncedNext);
-            vrmsDebounceRef.current = null;
-          }, 500); // 500ms debounce
-          // Keep current stable value until debounce completes
-          (next as any).vrms = currentVrms;
-        }
-      } else {
-        (next as any).vrms = newVrms;
-      }
+      (next as any).vrms = (envelope as any).vrms;
     }
     if ((envelope as any).imu_status !== undefined) {
       (next as any).imu_status = (envelope as any).imu_status;
@@ -1633,18 +1558,6 @@ export function useRoverTelemetry(): UseRoverTelemetryResult {
       if (gpsFixTypeDebounceRef.current) {
         clearTimeout(gpsFixTypeDebounceRef.current);
         gpsFixTypeDebounceRef.current = null;
-      }
-      if (hrmsDebounceRef.current) {
-        clearTimeout(hrmsDebounceRef.current);
-        hrmsDebounceRef.current = null;
-      }
-      if (vrmsDebounceRef.current) {
-        clearTimeout(vrmsDebounceRef.current);
-        vrmsDebounceRef.current = null;
-      }
-      if (satellitesDebounceRef.current) {
-        clearTimeout(satellitesDebounceRef.current);
-        satellitesDebounceRef.current = null;
       }
       if (missionStatusDebounceRef.current) {
         clearTimeout(missionStatusDebounceRef.current);
