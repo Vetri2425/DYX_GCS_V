@@ -1,7 +1,6 @@
 import React, { useState, useRef, useMemo, useEffect } from 'react';
 import { View, StyleSheet, TouchableOpacity, Text, Alert } from 'react-native';
 import { WebView } from 'react-native-webview';
-import { Fontisto } from '@expo/vector-icons';
 import { colors } from '../../theme/colors';
 import { PathPlanWaypoint, DrawingMode } from '../../types/pathplan';
 
@@ -690,16 +689,12 @@ export const PathPlanMap: React.FC<Props> = ({
                         tempIndicator: null,
                         waypoints: [],
                         connections: [],
-                        localConnections: [],
                         isManualMode: false,
                         connectionMode: 'tap'
                     };
                 }
                 window.dragConnectionState.waypoints = newWaypoints;
                 window.dragConnectionState.connections = manualConnections;
-                if (!window.dragConnectionState.isDragging) {
-                    window.dragConnectionState.localConnections = [...manualConnections];
-                }
                 window.dragConnectionState.isManualMode = isManualMode;
                 window.dragConnectionState.connectionMode = connectionMode;
 
@@ -726,13 +721,7 @@ export const PathPlanMap: React.FC<Props> = ({
                                 state.isDragging = true;
                                 state.startWaypointId = closest.id;
                                 state.startLatLng = L.latLng(closest.lat, closest.lon);
-
-                                // Mirror connectedWaypointsRef from Canvas mode — update locally
-                                // so updateDragVisuals sees it immediately without React roundtrip
-                                if (!state.localConnections.includes(closest.id)) {
-                                    state.localConnections.push(closest.id);
-                                }
-
+                                
                                 // In drag mode, tapping a node should select it like in Canvas Mode
                                 // Sending 'waypointConnect' fromId=toId handles this on the React Native side
                                 window.ReactNativeWebView.postMessage(JSON.stringify({
@@ -753,14 +742,12 @@ export const PathPlanMap: React.FC<Props> = ({
                             // Only activate snap logic if dragged more than 10px from start
                             if (currentPoint.distanceTo(startPoint) > 10) {
                                 if (window.dragConnectionState.waypoints && window.dragConnectionState.waypoints.length > 0) {
-                                    // Use localConnections (sync, like connectedWaypointsRef in Canvas)
-                                    // NOT connections (stale — only updates after React re-render roundtrip)
-                                    const conns = window.dragConnectionState.localConnections;
-
+                                    const conns = window.dragConnectionState.connections || [];
+                                    
                                     for (const wp of window.dragConnectionState.waypoints) {
                                         if (wp.id === window.dragConnectionState.startWaypointId) continue;
                                         if (conns.includes(wp.id)) continue;
-
+                                        
                                         const wpPoint = map.latLngToContainerPoint(L.latLng(wp.lat, wp.lon));
                                         if (currentPoint.distanceTo(wpPoint) < 50) {
                                             window.ReactNativeWebView.postMessage(JSON.stringify({
@@ -768,13 +755,10 @@ export const PathPlanMap: React.FC<Props> = ({
                                                 fromId: window.dragConnectionState.startWaypointId,
                                                 toId: wp.id
                                             }));
-
-                                            // Push to localConnections immediately so next touchmove
-                                            // iteration sees this waypoint as already connected
-                                            window.dragConnectionState.localConnections.push(wp.id);
+                                            
                                             window.dragConnectionState.startWaypointId = wp.id;
                                             window.dragConnectionState.startLatLng = L.latLng(wp.lat, wp.lon);
-
+                                            
                                             if (window.dragConnectionState.tempLine) {
                                                 map.removeLayer(window.dragConnectionState.tempLine);
                                                 window.dragConnectionState.tempLine = null;
@@ -822,48 +806,34 @@ export const PathPlanMap: React.FC<Props> = ({
                         window.dragConnectionState.startWaypointId = null;
                     };
 
-                    // Desktop: Leaflet map events (mousemove/mousedown/mouseup work reliably)
                     map.on('mousemove', updateDragVisuals);
+                    map.on('touchmove', function(e) {
+                        if (e.originalEvent && e.originalEvent.touches && e.originalEvent.touches[0]) {
+                            const touch = e.originalEvent.touches[0];
+                            const rect = map.getContainer().getBoundingClientRect();
+                            const point = L.point(touch.clientX - rect.left, touch.clientY - rect.top);
+                            e.latlng = map.containerPointToLatLng(point);
+                            updateDragVisuals(e);
+                        }
+                    });
+                    
                     map.on('mousedown', function(e) {
                         startDrag(e.latlng, map.latLngToContainerPoint(e.latlng));
                     });
+                    
+                    map.on('touchstart', function(e) {
+                        if (e.originalEvent && e.originalEvent.touches && e.originalEvent.touches[0]) {
+                            const touch = e.originalEvent.touches[0];
+                            const rect = map.getContainer().getBoundingClientRect();
+                            const point = L.point(touch.clientX - rect.left, touch.clientY - rect.top);
+                            startDrag(map.containerPointToLatLng(point), point);
+                        }
+                    });
+
                     map.on('mouseup', function() {
                         setTimeout(clearDragVisuals, 50);
                     });
-
-                    // Mobile: Direct DOM event listeners on the container.
-                    // Leaflet does NOT fire touchstart/touchmove/touchend as map events,
-                    // so map.on('touchmove') never fires — this was why drag mode
-                    // only worked as tap (startDrag ran from synthetic mousedown,
-                    // but updateDragVisuals never ran during continuous finger movement).
-                    var container = map.getContainer();
-
-                    container.addEventListener('touchstart', function(e) {
-                        if (e.touches && e.touches[0]) {
-                            var touch = e.touches[0];
-                            var rect = container.getBoundingClientRect();
-                            var point = L.point(touch.clientX - rect.left, touch.clientY - rect.top);
-                            startDrag(map.containerPointToLatLng(point), point);
-                        }
-                    }, { passive: true });
-
-                    container.addEventListener('touchmove', function(e) {
-                        var state = window.dragConnectionState;
-                        if (!state || !state.isDragging) return;
-
-                        // Prevent map scroll/pan while drag-connecting
-                        e.preventDefault();
-
-                        if (e.touches && e.touches[0]) {
-                            var touch = e.touches[0];
-                            var rect = container.getBoundingClientRect();
-                            var point = L.point(touch.clientX - rect.left, touch.clientY - rect.top);
-                            var latlng = map.containerPointToLatLng(point);
-                            updateDragVisuals({ latlng: latlng });
-                        }
-                    }, { passive: false });
-
-                    container.addEventListener('touchend', function() {
+                    map.on('touchend', function() {
                         setTimeout(clearDragVisuals, 50);
                     });
                 }
@@ -1187,21 +1157,6 @@ export const PathPlanMap: React.FC<Props> = ({
         scalesPageToFit={false}
       />
 
-      {/* Compass with heading */}
-      <View style={styles.compassOverlay}>
-        {/* Heading indicator arrow (red triangle pointing rover direction) */}
-        <View style={[
-          styles.headingArrow,
-          { transform: [{ rotate: `${heading ?? 0}deg` }] }
-        ]} />
-        {/* Compass icon rotates opposite to heading so N stays north */}
-        <View style={{ transform: [{ rotate: `${-(heading ?? 0)}deg` }] }}>
-          <Fontisto name="compass" color="#67e8f9" size={20} />
-        </View>
-        {/* N label fixed at top */}
-        <Text style={styles.compassN}>N</Text>
-      </View>
-
       {/* Context Menu Overlay */}
       {contextMenu && (
         <View
@@ -1269,44 +1224,5 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#1e293b',
-  },
-  compassOverlay: {
-    position: 'absolute',
-    bottom: 12,
-    left: 12,
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: 'rgba(30, 41, 59, 0.95)',
-    borderWidth: 2,
-    borderColor: 'rgba(103, 232, 249, 0.3)',
-    alignItems: 'center',
-    justifyContent: 'center',
-    elevation: 5,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.3,
-    shadowRadius: 4,
-  },
-  headingArrow: {
-    position: 'absolute',
-    top: 2,
-    width: 0,
-    height: 0,
-    borderLeftWidth: 5,
-    borderRightWidth: 5,
-    borderBottomWidth: 10,
-    borderLeftColor: 'transparent',
-    borderRightColor: 'transparent',
-    borderBottomColor: '#ef4444',
-    zIndex: 1,
-  },
-  compassN: {
-    position: 'absolute',
-    top: -1,
-    fontSize: 8,
-    fontWeight: '900',
-    color: '#67e8f9',
-    zIndex: 2,
   },
 });

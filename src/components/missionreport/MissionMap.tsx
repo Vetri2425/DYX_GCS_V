@@ -1,6 +1,7 @@
 import React, { useMemo, useRef, useState, useEffect } from 'react';
-import { View, StyleSheet } from 'react-native';
+import { View, StyleSheet, Text } from 'react-native';
 import { WebView } from 'react-native-webview';
+import { Fontisto } from '@expo/vector-icons';
 import type { Waypoint } from './types';
 
 interface Props {
@@ -157,41 +158,6 @@ export const MissionMap: React.FC<Props> = ({
       color: rgba(148, 163, 184, 1);
     }
 
-    .compass-container {
-      position: absolute;
-      bottom: 10px;
-      left: 10px;
-      z-index: 1000;
-      width: 30px;
-      height: 30px;
-      background: rgba(30, 41, 59, 0.95);
-      border-radius: 50%;
-      border: 2px solid rgba(103, 232, 249, 0.3);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
-    }
-
-    .compass-arrow {
-      position: absolute;
-      width: 0;
-      height: 0;
-      border-left: 8px solid transparent;
-      border-right: 8px solid transparent;
-      border-bottom: 15px solid #ef4444;
-      transform-origin: center 12px;
-      transition: transform 150ms linear;
-      filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.5));
-    }
-
-    .compass-label {
-      position: absolute;
-      font-size: 11px;
-      font-weight: 700;
-      color: rgba(103, 232, 249, 1);
-      top: 4px;
-    }
   </style>
 </head>
 <body>
@@ -214,10 +180,6 @@ export const MissionMap: React.FC<Props> = ({
     <div class="position-coord" id="rover-lon">Lon: 0.0000000</div>
   </div>
 
-  <div class="compass-container">
-    <div class="compass-label">N</div>
-    <div class="compass-arrow" id="compass-arrow"></div>
-  </div>
 
   <script>
     const waypoints = ${waypointsJSON};
@@ -414,14 +376,6 @@ export const MissionMap: React.FC<Props> = ({
       }).addTo(map);
       
       roverMarker.bindPopup(\`<strong>Rover</strong><br>Heading: \${roverData.heading !== null ? roverData.heading.toFixed(1) + '°' : 'N/A'}<br>Lat: \${roverData.lat.toFixed(7)}<br>Lon: \${roverData.lon.toFixed(7)}\`);
-
-      // Update compass arrow
-      if (roverData.heading !== null) {
-        const compassArrow = document.getElementById('compass-arrow');
-        if (compassArrow) {
-          compassArrow.style.transform = \`rotate(\${roverData.heading}deg)\`;
-        }
-      }
 
       // Heading line (short arrow - 8 meters)
       if (roverData.heading !== null) {
@@ -668,13 +622,6 @@ export const MissionMap: React.FC<Props> = ({
             // WEB APP STYLE: Dynamic status colors (armed=green, RTK=blue, disarmed=yellow)
             roverMarker.setStatus('${status}');
 
-            // Update compass arrow
-            ${heading !== null ? `
-            const compassArrow = document.getElementById('compass-arrow');
-            if (compassArrow) {
-              compassArrow.style.transform = 'rotate(${heading || 0}deg)';
-            }
-            ` : ''}
           }
 
           // Update heading line
@@ -819,6 +766,18 @@ export const MissionMap: React.FC<Props> = ({
         scalesPageToFit={false}
       />
 
+      {/* Compass with heading */}
+      <View style={styles.compassOverlay}>
+        <View style={[
+          styles.headingArrow,
+          { transform: [{ rotate: `${heading ?? 0}deg` }] }
+        ]} />
+        <View style={{ transform: [{ rotate: `${-(heading ?? 0)}deg` }] }}>
+          <Fontisto name="compass" color="#67e8f9" size={20} />
+        </View>
+        <Text style={styles.compassN}>N</Text>
+      </View>
+
     </View>
   );
 };
@@ -829,5 +788,44 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     overflow: 'hidden',
     backgroundColor: '#1e293b',
+  },
+  compassOverlay: {
+    position: 'absolute',
+    bottom: 12,
+    left: 12,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: 'rgba(30, 41, 59, 0.95)',
+    borderWidth: 2,
+    borderColor: 'rgba(103, 232, 249, 0.3)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    elevation: 5,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.3,
+    shadowRadius: 4,
+  },
+  headingArrow: {
+    position: 'absolute',
+    top: 2,
+    width: 0,
+    height: 0,
+    borderLeftWidth: 5,
+    borderRightWidth: 5,
+    borderBottomWidth: 10,
+    borderLeftColor: 'transparent',
+    borderRightColor: 'transparent',
+    borderBottomColor: '#ef4444',
+    zIndex: 1,
+  },
+  compassN: {
+    position: 'absolute',
+    top: -1,
+    fontSize: 8,
+    fontWeight: '900',
+    color: '#67e8f9',
+    zIndex: 2,
   },
 });

@@ -23,29 +23,6 @@ export const ManualMapConnection: React.FC<Props> = ({
   const [isDragging, setIsDragging] = useState(false);
   const mapRef = useRef<any>(null);
 
-  // Haversine distance in meters
-  const haversineDistance = (lat1: number, lon1: number, lat2: number, lon2: number): number => {
-    const R = 6371000; // Earth radius in meters
-    const toRad = (deg: number) => deg * Math.PI / 180;
-    const dLat = toRad(lat2 - lat1);
-    const dLon = toRad(lon2 - lon1);
-    const a = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
-    return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-  };
-
-  const nearestWaypoint = React.useMemo(() => {
-    if (roverPosition == null || waypoints.length === 0) return null;
-    let nearest = waypoints[0];
-    let minDist = haversineDistance(roverPosition.lat, roverPosition.lng, nearest.lat, nearest.lon);
-    for (let i = 1; i < waypoints.length; i++) {
-      const dist = haversineDistance(roverPosition.lat, roverPosition.lng, waypoints[i].lat, waypoints[i].lon);
-      if (dist < minDist) {
-        minDist = dist;
-        nearest = waypoints[i];
-      }
-    }
-    return { waypoint: nearest, distance: minDist };
-  }, [roverPosition, waypoints]);
 
   // Reset connections when waypoints change
   useEffect(() => {
@@ -128,38 +105,18 @@ export const ManualMapConnection: React.FC<Props> = ({
 
   return (
     <View style={styles.container}>
-      {/* Header */}
+      {/* Compact Header */}
       <View style={styles.header}>
-        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 8 }}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
           <View style={{ flex: 1 }}>
-            <Text style={styles.title}>🗺️ Map Connection Mode</Text>
-            <Text style={styles.subtitle}>
-              {connectionMode === 'tap' ? 'Tap marking points in order to connect them' :
-                connectionMode === 'drag' ? 'Drag through marking points to connect them' :
-                  'Pan/move the map to navigate'}
-            </Text>
+            <Text style={styles.title}>🗺️ Map Connection</Text>
             <Text style={styles.info}>
-              Connected: {manualConnections.length} / {waypoints.length} marking points
-            </Text>
-            {nearestWaypoint && roverPosition && (
-              <View style={{ marginTop: 2, marginBottom: 4 }}>
-                <Text style={[styles.info, { color: '#60A5FA', marginBottom: 2 }]}>
-                  📍 {roverPosition.lat.toFixed(6)}, {roverPosition.lng.toFixed(6)} {roverPosition.heading != null ? `| 🧭 ${Math.round(roverPosition.heading)}°` : ''}
-                </Text>
-                <Text style={[styles.info, { color: '#60A5FA' }]}>
-                  Nearest: #{nearestWaypoint.waypoint.id} ({Math.round(nearestWaypoint.distance)}m)
-                </Text>
-              </View>
-            )}
-            <Text style={styles.hint}>
-              💡 {connectionMode === 'tap' ? 'Tap waypoints to add them to your path.' :
-                connectionMode === 'drag' ? 'Drag between waypoints to create connections.' :
-                  'Use this mode to pan and zoom the map without creating connections.'} The map preserves exact shapes and distances.
+              {manualConnections.length}/{waypoints.length} connected
             </Text>
           </View>
 
-          {/* Mode Toggle Button */}
-          <View style={{ gap: 6 }}>
+          {/* Mode Toggle - Row layout */}
+          <View style={{ flexDirection: 'row', gap: 6 }}>
             <TouchableOpacity
               style={[
                 styles.modeToggleButton,
@@ -170,7 +127,7 @@ export const ManualMapConnection: React.FC<Props> = ({
               <Text style={[
                 styles.modeToggleText,
                 connectionMode === 'tap' && styles.modeToggleTextActive
-              ]}>👆 Tap Mode</Text>
+              ]}>👆 Tap</Text>
             </TouchableOpacity>
             <TouchableOpacity
               style={[
@@ -182,7 +139,7 @@ export const ManualMapConnection: React.FC<Props> = ({
               <Text style={[
                 styles.modeToggleText,
                 connectionMode === 'drag' && styles.modeToggleTextActive
-              ]}>✍️ Drag Mode</Text>
+              ]}>✍️ Drag</Text>
             </TouchableOpacity>
             <TouchableOpacity
               style={[
@@ -194,7 +151,7 @@ export const ManualMapConnection: React.FC<Props> = ({
               <Text style={[
                 styles.modeToggleText,
                 connectionMode === 'pan' && styles.modeToggleTextActive
-              ]}>🤚 Pan Mode</Text>
+              ]}>🤚 Pan</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -208,6 +165,7 @@ export const ManualMapConnection: React.FC<Props> = ({
             lat: roverPosition.lat,
             lon: roverPosition.lng,
           } : { lat: 13.0827, lon: 80.2707 }}
+          heading={roverPosition?.heading ?? null}
           isManualConnectionMode={true}
           manualConnections={manualConnections}
           manualConnectionMode={connectionMode}
@@ -291,32 +249,22 @@ const styles = StyleSheet.create({
   },
   header: {
     backgroundColor: '#1e40af',
-    paddingVertical: 16,
-    paddingHorizontal: 20,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
     borderBottomWidth: 2,
     borderBottomColor: '#1e3a8a',
   },
   title: {
     color: '#fff',
-    fontSize: 20,
+    fontSize: 16,
     fontWeight: 'bold',
-    marginBottom: 4,
-  },
-  subtitle: {
-    color: 'rgba(255,255,255,0.9)',
-    fontSize: 14,
-    marginBottom: 4,
+    marginBottom: 2,
   },
   info: {
     color: '#4ADE80',
     fontSize: 13,
     fontWeight: '600',
     marginBottom: 4,
-  },
-  hint: {
-    color: 'rgba(255,255,255,0.8)',
-    fontSize: 12,
-    fontStyle: 'italic',
   },
   modeToggleButton: {
     backgroundColor: 'rgba(255,255,255,0.2)',
@@ -342,7 +290,7 @@ const styles = StyleSheet.create({
   },
   mapContainer: {
     flex: 1,
-    margin: 12,
+    margin: 6,
     borderRadius: 12,
     overflow: 'hidden',
     borderWidth: 2,
