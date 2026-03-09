@@ -19,6 +19,7 @@ export const ManualMapConnection: React.FC<Props> = ({
   roverPosition,
 }) => {
   const [manualConnections, setManualConnections] = useState<number[]>([]);
+  const [connectionMode, setConnectionMode] = useState<'tap' | 'drag' | 'pan'>('tap');
   const [isDragging, setIsDragging] = useState(false);
   const mapRef = useRef<any>(null);
 
@@ -44,12 +45,38 @@ export const ManualMapConnection: React.FC<Props> = ({
     });
   };
 
+  const handleWaypointTap = (waypointId: number) => {
+    if (connectionMode === 'tap') {
+      setManualConnections(prev => {
+        if (!prev.includes(waypointId)) {
+          return [...prev, waypointId];
+        }
+        return prev;
+      });
+    }
+    // In pan mode, don't add to connections - just allow map interaction
+  };
+
   const handleMapMessage = (event: any) => {
     const data = JSON.parse(event.nativeEvent.data);
     
     switch (data.type) {
       case 'waypointConnect':
-        handleWaypointConnect(data.fromId, data.toId);
+        if (connectionMode === 'drag') {
+          handleWaypointConnect(data.fromId, data.toId);
+        }
+        break;
+      case 'waypointClick':
+        // Only handle clicks in tap mode, ignore in pan mode
+        if (connectionMode === 'tap') {
+          handleWaypointTap(data.waypointId);
+        }
+        break;
+      case 'waypointContextMenu':
+        // Disable context menu in manual connection modes
+        if (connectionMode === 'tap' || connectionMode === 'drag') {
+          return; // Don't show context menu
+        }
         break;
       case 'TOGGLE_FULLSCREEN':
         // Handle fullscreen if needed
@@ -59,7 +86,7 @@ export const ManualMapConnection: React.FC<Props> = ({
 
   const handleFinish = () => {
     if (manualConnections.length < 2) {
-      Alert.alert('Connection Required', 'Please connect at least 2 marking points by dragging between them');
+      Alert.alert('Connection Required', `Please connect at least 2 marking points by ${connectionMode === 'tap' ? 'tapping' : 'dragging between'} them. Switch to Tap or Drag mode to create connections.`);
       return;
     }
     onConnectionsComplete(manualConnections);
@@ -79,16 +106,64 @@ export const ManualMapConnection: React.FC<Props> = ({
     <View style={styles.container}>
       {/* Header */}
       <View style={styles.header}>
-        <Text style={styles.title}>🗺️ Map Connection Mode</Text>
-        <Text style={styles.subtitle}>
-          Drag from one waypoint to another to connect them in order
-        </Text>
-        <Text style={styles.info}>
-          Connected: {manualConnections.length} / {waypoints.length} marking points
-        </Text>
-        <Text style={styles.hint}>
-          💡 Drag between waypoints to create connections. The map preserves exact shapes and distances.
-        </Text>
+        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 8 }}>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.title}>🗺️ Map Connection Mode</Text>
+            <Text style={styles.subtitle}>
+              {connectionMode === 'tap' ? 'Tap marking points in order to connect them' : 
+               connectionMode === 'drag' ? 'Drag through marking points to connect them' : 
+               'Pan/move the map to navigate'}
+            </Text>
+            <Text style={styles.info}>
+              Connected: {manualConnections.length} / {waypoints.length} marking points
+            </Text>
+            <Text style={styles.hint}>
+              💡 {connectionMode === 'tap' ? 'Tap waypoints to add them to your path.' : 
+                  connectionMode === 'drag' ? 'Drag between waypoints to create connections.' : 
+                  'Use this mode to pan and zoom the map without creating connections.'} The map preserves exact shapes and distances.
+            </Text>
+          </View>
+
+          {/* Mode Toggle Button */}
+          <View style={{ gap: 6 }}>
+            <TouchableOpacity
+              style={[
+                styles.modeToggleButton,
+                connectionMode === 'tap' && styles.modeToggleButtonActive
+              ]}
+              onPress={() => setConnectionMode('tap')}
+            >
+              <Text style={[
+                styles.modeToggleText,
+                connectionMode === 'tap' && styles.modeToggleTextActive
+              ]}>👆 Tap Mode</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[
+                styles.modeToggleButton,
+                connectionMode === 'drag' && styles.modeToggleButtonActive
+              ]}
+              onPress={() => setConnectionMode('drag')}
+            >
+              <Text style={[
+                styles.modeToggleText,
+                connectionMode === 'drag' && styles.modeToggleTextActive
+              ]}>✍️ Drag Mode</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[
+                styles.modeToggleButton,
+                connectionMode === 'pan' && styles.modeToggleButtonActive
+              ]}
+              onPress={() => setConnectionMode('pan')}
+            >
+              <Text style={[
+                styles.modeToggleText,
+                connectionMode === 'pan' && styles.modeToggleTextActive
+              ]}>🤚 Pan Mode</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
       </View>
 
       {/* Map View */}
@@ -101,7 +176,12 @@ export const ManualMapConnection: React.FC<Props> = ({
           } : { lat: 13.0827, lon: 80.2707 }}
           isManualConnectionMode={true}
           manualConnections={manualConnections}
-          onWaypointClick={() => {}} // Handled by map internally
+          manualConnectionMode={connectionMode}
+          onWaypointClick={(waypointId: number) => {
+            if (connectionMode === 'tap') {
+              handleWaypointTap(waypointId);
+            }
+          }}
           onToggleFullscreen={() => {}} // Can be implemented if needed
         />
       </View>
@@ -179,6 +259,28 @@ const styles = StyleSheet.create({
     color: 'rgba(255,255,255,0.8)',
     fontSize: 12,
     fontStyle: 'italic',
+  },
+  modeToggleButton: {
+    backgroundColor: 'rgba(255,255,255,0.2)',
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.3)',
+    minWidth: 90,
+  },
+  modeToggleButtonActive: {
+    backgroundColor: '#4ADE80',
+    borderColor: '#4ADE80',
+  },
+  modeToggleText: {
+    color: 'rgba(255,255,255,0.8)',
+    fontSize: 11,
+    fontWeight: '600',
+    textAlign: 'center',
+  },
+  modeToggleTextActive: {
+    color: '#000',
   },
   mapContainer: {
     flex: 1,

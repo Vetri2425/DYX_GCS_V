@@ -8,25 +8,25 @@ interface Props {
     waypoints: PathPlanWaypoint[];
     onMapPress?: (coordinate: { latitude: number; longitude: number }) => void;
     onWaypointDrag?: (id: number, coordinate: { latitude: number; longitude: number }) => void;
+    onWaypointClick?: (id: number) => void;
     onAddWaypoints?: (coordinates: { latitude: number; longitude: number }[]) => void;
     onDeleteWaypoint?: (id: number) => void;
     onInsertWaypoint?: (afterId: number, coordinate: { latitude: number; longitude: number }) => void;
-    onWaypointClick?: (id: number) => void;
     roverPosition?: { lat: number; lon: number };
     selectedWaypoint?: number | null;
     heading?: number | null;
     activeDrawingTool?: string | null;
-    onDrawingComplete?: (coordinates: { latitude: number; longitude: number }[]) => void;
+    onDrawingComplete?: (points: { latitude: number; longitude: number }[]) => void;
     isDrawingMode?: boolean;
     drawSettings?: {
-        drawingWidth: number;
-        drawingHeight: number;
-        waypointSpacing: number;
-        startPosition: { lat: number; lng: number };
+      startPosition: { lat: number; lng: number };
+      drawingWidth: number;
+      drawingHeight: number;
     } | null;
     onToggleFullscreen?: () => void;
     isManualConnectionMode?: boolean;
     manualConnections?: number[];
+    manualConnectionMode?: 'tap' | 'drag' | 'pan';
 }
 
 export const PathPlanMap: React.FC<Props> = ({
@@ -47,6 +47,7 @@ export const PathPlanMap: React.FC<Props> = ({
     onToggleFullscreen,
     isManualConnectionMode = false,
     manualConnections = [],
+    manualConnectionMode = 'tap',
 }) => {
     const webViewRef = useRef<WebView | null>(null);
     const [mapReady, setMapReady] = useState(false);
@@ -660,6 +661,7 @@ export const PathPlanMap: React.FC<Props> = ({
                 const newWaypoints = ${waypointsData};
                 const isManualMode = ${isManualConnectionMode};
                 const manualConnections = ${manualConnectionsData};
+                const connectionMode = ${JSON.stringify(manualConnectionMode)};
 
                 // Update global waypoints reference for fitToMission
                 window.currentWaypoints = newWaypoints;
@@ -671,6 +673,15 @@ export const PathPlanMap: React.FC<Props> = ({
                         startWaypointId: null,
                         tempLine: null
                     };
+                }
+
+                // Control map dragging based on mode
+                if (isManualMode && connectionMode === 'drag') {
+                    map.dragging.disable();
+                    console.log('Map dragging disabled for drag connection mode');
+                } else {
+                    map.dragging.enable();
+                    console.log('Map dragging enabled for', connectionMode, 'mode');
                 }
 
                 // Clear existing waypoint markers
@@ -685,7 +696,6 @@ export const PathPlanMap: React.FC<Props> = ({
 
                 // Add polyline based on mode
                 if (isManualMode && manualConnections.length > 1) {
-                    // Manual mode: draw polyline only for manually connected waypoints
                     const connectedWaypoints = manualConnections.map(id =>
                         newWaypoints.find(wp => wp.id === id)
                     ).filter(wp => wp !== undefined);
@@ -698,8 +708,9 @@ export const PathPlanMap: React.FC<Props> = ({
                             dashArray: '5, 10',
                         }).addTo(map);
                     }
+                } else if (isManualMode && manualConnections.length === 1) {
+                    // Show single connected waypoint (no line yet)
                 } else if (!isManualMode && newWaypoints.length > 1) {
-                    // Auto mode: draw polyline for all waypoints sequentially
                     const pathCoords = newWaypoints.map(wp => [wp.lat, wp.lon]);
                     missionPolyline = L.polyline(pathCoords, {
                         color: '#f97316',
@@ -709,49 +720,102 @@ export const PathPlanMap: React.FC<Props> = ({
 
                 // Add new waypoint markers
                 newWaypoints.forEach((wp, index) => {
+                    const isConnected = isManualMode && manualConnections.includes(wp.id);
+                    const connectionIndex = manualConnections.indexOf(wp.id);
+                    
+                    let markerIcon;
+                    if (isManualMode && isConnected) {
+                        markerIcon = L.divIcon({
+                            html: \`<div style="position: relative;"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="32" height="32" fill="#4ADE80"><path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z"/><text x="12" y="10.5" font-family="sans-serif" font-size="8" font-weight="bold" fill="white" text-anchor="middle" dy=".3em">\${wp.id}</text></svg><div style="position: absolute; top: -8px; right: -8px; background: #22c55e; color: white; border-radius: 50%; width: 20px; height: 20px; display: flex; align-items: center; justify-content: center; font-size: 10px; font-weight: bold; border: 2px solid white;">\${connectionIndex + 1}</div></div>\`,
+                            className: 'custom-marker',
+                            iconSize: [32, 32],
+                            iconAnchor: [16, 32],
+                        });
+                    } else {
+                        markerIcon = getWaypointIcon(wp, index);
+                    }
+                    
                     const marker = L.marker([wp.lat, wp.lon], {
-                        icon: getWaypointIcon(wp, index),
-                        draggable: !isManualMode, // Disable position dragging in manual mode
+                        icon: markerIcon,
+                        draggable: !isManualMode,
                     }).addTo(map);
 
-                    marker.bindPopup(\`
-                        <strong>WP \${wp.id}</strong><br>
-                        Row: \${wp.row || '-'}<br>
-                        Block: \${wp.block || '-'}<br>
-                        Pile: \${wp.pile || '-'}<br>
-                        Alt: \${wp.alt}m
-                    \`);
+                    if (!isManualMode || connectionMode === 'pan') {
+                        marker.bindPopup(\`
+                            <strong>WP \${wp.id}</strong><br>
+                            Row: \${wp.row || '-'}<br>
+                            Block: \${wp.block || '-'}<br>
+                            Pile: \${wp.pile || '-'}<br>
+                            Alt: \${wp.alt}m
+                        \`);
+                    }
 
-                    // In manual mode: implement drag-to-connect
-                    if (isManualMode) {
+                    // In manual mode: implement drag-to-connect only in drag mode
+                    if (isManualMode && connectionMode === 'drag') {
+                        console.log('Setting up drag events for waypoint', wp.id);
+                        
+                        // Mouse events (desktop)
                         marker.on('mousedown', function(e) {
+                            console.log('Drag started on waypoint', wp.id, 'mouse');
                             L.DomEvent.stopPropagation(e);
+                            L.DomEvent.preventDefault(e);
                             window.dragConnectionState.isDragging = true;
                             window.dragConnectionState.startWaypointId = wp.id;
                             window.dragConnectionState.startLatLng = marker.getLatLng();
-                            map.dragging.disable();
                         });
 
                         marker.on('mouseup', function(e) {
+                            console.log('Drag ended on waypoint', wp.id, 'from', window.dragConnectionState.startWaypointId, 'mouse');
                             L.DomEvent.stopPropagation(e);
+                            L.DomEvent.preventDefault(e);
                             if (window.dragConnectionState.isDragging &&
                                 window.dragConnectionState.startWaypointId !== null &&
                                 window.dragConnectionState.startWaypointId !== wp.id) {
-                                // Send connection message
+                                console.log('Sending connection from', window.dragConnectionState.startWaypointId, 'to', wp.id);
                                 window.ReactNativeWebView.postMessage(JSON.stringify({
                                     type: 'waypointConnect',
                                     fromId: window.dragConnectionState.startWaypointId,
                                     toId: wp.id
                                 }));
                             }
-                            // Reset drag state
                             if (window.dragConnectionState.tempLine) {
                                 map.removeLayer(window.dragConnectionState.tempLine);
                                 window.dragConnectionState.tempLine = null;
                             }
                             window.dragConnectionState.isDragging = false;
                             window.dragConnectionState.startWaypointId = null;
-                            map.dragging.enable();
+                        });
+
+                        // Touch events (mobile)
+                        marker.on('touchstart', function(e) {
+                            console.log('Drag started on waypoint', wp.id, 'touch');
+                            L.DomEvent.stopPropagation(e);
+                            L.DomEvent.preventDefault(e);
+                            window.dragConnectionState.isDragging = true;
+                            window.dragConnectionState.startWaypointId = wp.id;
+                            window.dragConnectionState.startLatLng = marker.getLatLng();
+                        });
+
+                        marker.on('touchend', function(e) {
+                            console.log('Drag ended on waypoint', wp.id, 'from', window.dragConnectionState.startWaypointId, 'touch');
+                            L.DomEvent.stopPropagation(e);
+                            L.DomEvent.preventDefault(e);
+                            if (window.dragConnectionState.isDragging &&
+                                window.dragConnectionState.startWaypointId !== null &&
+                                window.dragConnectionState.startWaypointId !== wp.id) {
+                                console.log('Sending connection from', window.dragConnectionState.startWaypointId, 'to', wp.id);
+                                window.ReactNativeWebView.postMessage(JSON.stringify({
+                                    type: 'waypointConnect',
+                                    fromId: window.dragConnectionState.startWaypointId,
+                                    toId: wp.id
+                                }));
+                            }
+                            if (window.dragConnectionState.tempLine) {
+                                map.removeLayer(window.dragConnectionState.tempLine);
+                                window.dragConnectionState.tempLine = null;
+                            }
+                            window.dragConnectionState.isDragging = false;
+                            window.dragConnectionState.startWaypointId = null;
                         });
 
                         marker.on('mouseover', function(e) {
@@ -773,13 +837,32 @@ export const PathPlanMap: React.FC<Props> = ({
                                 }).addTo(map);
                             }
                         });
-                    } else {
-                        // Auto mode: normal click behavior
+                    }
+
+                    // Click handling - only for tap mode in manual connection, or normal mode
+                    if (connectionMode === 'tap' || !isManualMode) {
                         marker.on('click', function(e) {
                             L.DomEvent.stopPropagation(e);
+                            console.log('Waypoint clicked', wp.id, 'mode:', connectionMode);
                             window.ReactNativeWebView.postMessage(JSON.stringify({
                                 type: 'waypointClick',
                                 id: wp.id
+                            }));
+                        });
+                    }
+                    if (!isManualMode || connectionMode === 'pan') {
+                        marker.on('contextmenu', function(e) {
+                            L.DomEvent.preventDefault(e);
+                            L.DomEvent.stopPropagation(e);
+                            const mapContainer = map.getContainer();
+                            const rect = mapContainer.getBoundingClientRect();
+                            window.ReactNativeWebView.postMessage(JSON.stringify({
+                                type: 'waypointContextMenu',
+                                id: wp.id,
+                                x: e.originalEvent.clientX - rect.left,
+                                y: e.originalEvent.clientY - rect.top,
+                                lat: wp.lat,
+                                lon: wp.lon
                             }));
                         });
                     }
@@ -796,20 +879,6 @@ export const PathPlanMap: React.FC<Props> = ({
                         });
                     }
 
-                    marker.on('contextmenu', function(e) {
-                        L.DomEvent.preventDefault(e);
-                        const mapContainer = map.getContainer();
-                        const rect = mapContainer.getBoundingClientRect();
-                        window.ReactNativeWebView.postMessage(JSON.stringify({
-                            type: 'waypointContextMenu',
-                            id: wp.id,
-                            x: e.originalEvent.clientX - rect.left,
-                            y: e.originalEvent.clientY - rect.top,
-                            lat: wp.lat,
-                            lon: wp.lon
-                        }));
-                    });
-
                     waypointMarkers.push(marker);
                 });
 
@@ -819,7 +888,7 @@ export const PathPlanMap: React.FC<Props> = ({
         `;
 
         webViewRef.current.injectJavaScript(updateWaypointsScript);
-    }, [waypoints, selectedWaypoint, mapReady, isManualConnectionMode, manualConnections]);
+    }, [waypoints, selectedWaypoint, mapReady, isManualConnectionMode, manualConnections, manualConnectionMode]);
 
     // TRAIL DISABLED: Update rover position without trail
     useEffect(() => {
@@ -957,7 +1026,10 @@ export const PathPlanMap: React.FC<Props> = ({
                         } else if (message.type === 'waypointDrag') {
                             onWaypointDrag?.(message.id, { latitude: message.lat, longitude: message.lng });
                         } else if (message.type === 'waypointContextMenu') {
-                            setContextMenu({ x: message.x, y: message.y, waypointId: message.id });
+                            // Only show context menu in pan mode or when not in manual connection mode
+                            if (!isManualConnectionMode || manualConnectionMode === 'pan') {
+                                setContextMenu({ x: message.x, y: message.y, waypointId: message.id });
+                            }
                         } else if (message.type === 'drawingComplete') {
                             // Convert drawing points to waypoint coordinates
                             const coords = message.points

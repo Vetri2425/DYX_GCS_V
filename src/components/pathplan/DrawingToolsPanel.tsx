@@ -71,8 +71,8 @@ export const DrawingToolsPanel: React.FC<DrawingToolsPanelProps> = ({
     onPress: () => void;
   };
   const generatorTools: GeneratorTool[] = [
-    { name: 'auto-circle', icon: '🌀', title: 'Auto Circle', color: colors.blueBtn, onPress: onShowCircleTool },
-    { name: 'survey-grid', icon: '📐', title: 'Survey Grid', color: colors.blueBtn, onPress: onShowSurveyGridTool },
+    { name: 'auto-circle', icon: '🌀', title: 'Auto Circle', color: '#9333ea', onPress: onShowCircleTool },
+    { name: 'survey-grid', icon: '📐', title: 'Survey Grid', color: '#dc2626', onPress: onShowSurveyGridTool },
   ];
 
   return (
@@ -107,14 +107,14 @@ export const DrawingToolsPanel: React.FC<DrawingToolsPanelProps> = ({
                     styles.toolBtn,
                     activeDrawingTool === tool.name && styles.toolBtnActive,
                     activeDrawingTool === tool.name && { borderColor: tool.color },
-                    isGenerator && styles.generatorBtn,
+                    isGenerator && { backgroundColor: tool.color + '20', borderWidth: 2, borderColor: tool.color },
                   ]}
                   onPress={() => isGenerator ? (tool as GeneratorTool).onPress() : handleToolPress(tool.name)}
                   activeOpacity={0.7}
                 >
-                  <Text style={styles.toolIcon}>{tool.icon}</Text>
+                  <Text style={[styles.toolIcon, isGenerator && styles.generatorIcon, isGenerator && { color: tool.color }]}>{tool.icon}</Text>
                   <Text
-                    style={[styles.toolLabel, activeDrawingTool === tool.name && styles.toolLabelActive]}
+                    style={[styles.toolLabel, activeDrawingTool === tool.name && styles.toolLabelActive, isGenerator && styles.generatorLabel]}
                   >
                     {tool.title}
                   </Text>
@@ -219,10 +219,15 @@ const styles = StyleSheet.create({
   },
   generatorBtn: {
     backgroundColor: colors.cardBg,
-    borderWidth: 1,
+    borderWidth: 2,
     borderColor: colors.border,
   },
   toolIcon: {
+    fontSize: 24,
+    textAlign: 'center',
+    marginBottom: 4,
+  },
+  generatorIcon: {
     fontSize: 24,
     textAlign: 'center',
     marginBottom: 4,
@@ -231,6 +236,14 @@ const styles = StyleSheet.create({
     fontSize: 10,
     fontWeight: '600',
     color: colors.textSecondary,
+    textAlign: 'center',
+    marginTop: 2,
+    lineHeight: 12,
+  },
+  generatorLabel: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: colors.text,
     textAlign: 'center',
     marginTop: 2,
     lineHeight: 12,

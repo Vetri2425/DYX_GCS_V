@@ -1692,212 +1692,121 @@ export default function PathPlanScreen() {
                 drawSettings={drawSettings}
                 onDrawingComplete={handleDrawingComplete}
                 onCancel={() => {
-                  setIsDrawingMode(false);
-                  setDrawSettings(null);
+                  setIsConnectingPath(false);
+                  setManualPathConnections([]);
                 }}
               />
             )}
 
-            {/* Manual Path Connection Drawing Canvas */}
-            <ManualPathConnectionCanvas
-              visible={isConnectingPath}
-              waypoints={waypoints}
-              roverPosition={telemetry.global?.lat ? {
-                lat: telemetry.global.lat,
-                lng: telemetry.global.lon,
-                heading: telemetry.attitude?.yaw_deg
-              } : null}
-              onConnectionsComplete={(connectedIds) => {
-                // Remove duplicates to prevent React key errors
-                const uniqueConnectedIds = [...new Set(connectedIds)];
-                setManualPathConnections(uniqueConnectedIds);
-
-                // ONLY keep connected waypoints in order (remove unconnected ones)
-                const connectedWaypoints = uniqueConnectedIds.map(id =>
-                  waypoints.find(wp => wp.id === id)
-                ).filter(Boolean) as PathPlanWaypoint[];
-
-                // Recalculate distances between connected waypoints
-                const waypointsWithDistances = connectedWaypoints.map((wp, idx) => {
-                  if (idx === 0) {
-                    return { ...wp, distance: 0 };
-                  }
-                  const prevWp = connectedWaypoints[idx - 1];
-                  const dist = haversineDistance(
-                    { lat: prevWp.lat, lon: prevWp.lon },
-                    { lat: wp.lat, lon: wp.lon }
-                  );
-                  return { ...wp, distance: dist };
-                });
-
-                // Update waypoints to ONLY show connected ones with recalculated distances
-                updateWaypoints(waypointsWithDistances);
-                setIsConnectingPath(false);
-                Alert.alert('✓ Path Created', `Path created with ${uniqueConnectedIds.length} marking points. Unconnected marking points removed.`);
+            {/* Manual Connection Choice Dialog */}
+            <ManualConnectionChoice
+              visible={showConnectionChoice}
+              onSelectCanvas={() => {
+                setShowConnectionChoice(false);
+                setIsConnectingPath(true);
+                setUseMapForConnection(false);
+              }}
+              onSelectMap={() => {
+                setShowConnectionChoice(false);
+                setIsConnectingPath(true);
+                setUseMapForConnection(true);
               }}
               onCancel={() => {
-                setIsConnectingPath(false);
+                setShowConnectionChoice(false);
                 setManualPathConnections([]);
               }}
             />
 
-            {/* Old Manual Path Connection Mode Panel - REPLACED BY CANVAS */}
-            {false && isConnectingPath && (
-              <View style={{
-                position: 'absolute',
-                top: 16,
-                left: '50%',
-                transform: [{ translateX: -175 }],
-                width: 350,
-                backgroundColor: colors.panelBg,
-                borderRadius: 12,
-                padding: 16,
-                borderWidth: 2,
-                borderColor: '#4ADE80',
-                shadowColor: '#000',
-                shadowOffset: { width: 0, height: 4 },
-                shadowOpacity: 0.3,
-                shadowRadius: 8,
-                elevation: 10,
-                zIndex: 1000
-              }}>
-                <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 10 }}>
-                  <Text style={{ fontSize: 16, fontWeight: '700', color: '#4ADE80', flex: 1 }}>
-                    ✏️ Manual Path Connection
-                  </Text>
-                  <TouchableOpacity
-                    onPress={() => {
-                      Alert.alert(
-                        'Exit Manual Mode?',
-                        'Your current connections will be saved. Continue?',
-                        [
-                          { text: 'Cancel', style: 'cancel' },
-                          {
-                            text: 'Exit', style: 'destructive', onPress: () => {
-                              setIsConnectingPath(false);
-                              if (manualPathConnections.length > 0) {
-                                // Reorder waypoints based on connections
-                                const reorderedWaypoints = manualPathConnections.map(id =>
-                                  waypoints.find(wp => wp.id === id)
-                                ).filter(Boolean) as PathPlanWaypoint[];
+            {/* Manual Path Connection Drawing Canvas */}
+            {isConnectingPath && !useMapForConnection && (
+              <ManualPathConnectionCanvas
+                visible={isConnectingPath}
+                waypoints={waypoints}
+                roverPosition={telemetry.global?.lat ? {
+                  lat: telemetry.global.lat,
+                  lng: telemetry.global.lon,
+                  heading: telemetry.attitude?.yaw_deg
+                } : null}
+                onConnectionsComplete={(connectedIds) => {
+                  // Remove duplicates to prevent React key errors
+                  const uniqueConnectedIds = [...new Set(connectedIds)];
+                  setManualPathConnections(uniqueConnectedIds);
 
-                                // Add any unconnected waypoints at the end
-                                const connectedIds = new Set(manualPathConnections);
-                                const unconnectedWaypoints = waypoints.filter(wp => !connectedIds.has(wp.id));
+                  // ONLY keep connected waypoints in order (remove unconnected ones)
+                  const connectedWaypoints = uniqueConnectedIds.map(id =>
+                    waypoints.find(wp => wp.id === id)
+                  ).filter(Boolean) as PathPlanWaypoint[];
 
-                                const finalWaypoints = [...reorderedWaypoints, ...unconnectedWaypoints];
-                                updateWaypoints(finalWaypoints);
-                                Alert.alert('✓ Path Saved', `Connected ${manualPathConnections.length} marking points in custom order.`);
-                              }
-                            }
-                          }
-                        ]
-                      );
-                    }}
-                    style={{ padding: 6, backgroundColor: colors.inputBg, borderRadius: 6 }}>
-                    <Text style={{ color: colors.text, fontSize: 12, fontWeight: '600' }}>✕</Text>
-                  </TouchableOpacity>
-                </View>
+                  // Recalculate distances between connected waypoints
+                  const waypointsWithDistances = connectedWaypoints.map((wp, idx) => {
+                    if (idx === 0) {
+                      return { ...wp, distance: 0 };
+                    }
+                    const prevWp = connectedWaypoints[idx - 1];
+                    const dist = haversineDistance(
+                      { lat: prevWp.lat, lon: prevWp.lon },
+                      { lat: wp.lat, lon: wp.lon }
+                    );
+                    return { ...wp, distance: dist };
+                  });
 
-                <Text style={{ color: colors.textSecondary, fontSize: 12, marginBottom: 12 }}>
-                  Tap waypoints in order to connect them. Each tap adds the waypoint to your path.
-                </Text>
+                  // Update waypoints to ONLY show connected ones with recalculated distances
+                  updateWaypoints(waypointsWithDistances);
+                  setIsConnectingPath(false);
+                  Alert.alert('✓ Path Created', `Path created with ${uniqueConnectedIds.length} marking points. Unconnected marking points removed.`);
+                }}
+                onCancel={() => {
+                  setIsConnectingPath(false);
+                  setManualPathConnections([]);
+                }}
+              />
+            )}
 
-                <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
-                  <Text style={{ color: colors.accent, fontSize: 11, fontWeight: '600' }}>
-                    Connected: {manualPathConnections.length}/{waypoints.length}
-                  </Text>
-                  {manualPathConnections.length > 0 && (
-                    <TouchableOpacity
-                      onPress={() => {
-                        const lastId = manualPathConnections[manualPathConnections.length - 1];
-                        setManualPathConnections(prev => prev.slice(0, -1));
-                        Alert.alert('Undo', `Removed marking point #${lastId} from path.`);
-                      }}
-                      style={{ paddingVertical: 4, paddingHorizontal: 10, backgroundColor: colors.blueBtn, borderRadius: 6 }}>
-                      <Text style={{ color: colors.text, fontSize: 10, fontWeight: '700' }}>↶ Undo</Text>
-                    </TouchableOpacity>
-                  )}
-                </View>
+            {/* Manual Map Connection */}
+            {isConnectingPath && useMapForConnection && (
+              <ManualMapConnection
+                visible={true}
+                waypoints={waypoints}
+                roverPosition={telemetry.global?.lat ? {
+                  lat: telemetry.global.lat,
+                  lng: telemetry.global.lon,
+                  heading: telemetry.attitude?.yaw_deg
+                } : null}
+                onConnectionsComplete={(connectedIds) => {
+                  // Remove duplicates to prevent React key errors
+                  const uniqueConnectedIds = [...new Set(connectedIds)];
+                  setManualPathConnections(uniqueConnectedIds);
 
-                {/* Connection Sequence Display */}
-                {manualPathConnections.length > 0 && (
-                  <View style={{
-                    maxHeight: 80,
-                    backgroundColor: colors.cardBg,
-                    borderRadius: 8,
-                    padding: 8,
-                    borderWidth: 1,
-                    borderColor: colors.border
-                  }}>
-                    <Text style={{ color: colors.accent, fontSize: 10, fontWeight: '600', marginBottom: 4 }}>
-                      Connection Sequence:
-                    </Text>
-                    <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-                      <View style={{ flexDirection: 'row', gap: 6 }}>
-                        {manualPathConnections.map((id, idx) => (
-                          <View key={`manual-path-${id}-${idx}`} style={{ flexDirection: 'row', alignItems: 'center' }}>
-                            <View style={{
-                              backgroundColor: '#4ADE80',
-                              paddingHorizontal: 8,
-                              paddingVertical: 4,
-                              borderRadius: 6
-                            }}>
-                              <Text style={{ color: '#000', fontSize: 10, fontWeight: '700' }}>#{id}</Text>
-                            </View>
-                            {idx < manualPathConnections.length - 1 && (
-                              <Text style={{ color: colors.textSecondary, marginHorizontal: 4 }}>→</Text>
-                            )}
-                          </View>
-                        ))}
-                      </View>
-                    </ScrollView>
-                  </View>
-                )}
+                  // ONLY keep connected waypoints in order (remove unconnected ones)
+                  const connectedWaypoints = uniqueConnectedIds.map(id =>
+                    waypoints.find(wp => wp.id === id)
+                  ).filter(Boolean) as PathPlanWaypoint[];
 
-                <View style={{ flexDirection: 'row', gap: 8, marginTop: 12 }}>
-                  <TouchableOpacity
-                    onPress={() => {
-                      setManualPathConnections([]);
-                      Alert.alert('Reset', 'All connections cleared.');
-                    }}
-                    style={{ flex: 1, paddingVertical: 8, backgroundColor: colors.inputBg, borderRadius: 8 }}>
-                    <Text style={{ color: colors.text, textAlign: 'center', fontSize: 11, fontWeight: '700' }}>Clear All</Text>
-                  </TouchableOpacity>
+                  // Recalculate distances between connected waypoints
+                  const waypointsWithDistances = connectedWaypoints.map((wp, idx) => {
+                    if (idx === 0) {
+                      return { ...wp, distance: 0 };
+                    }
+                    const prev = connectedWaypoints[idx - 1];
+                    const dist = haversineDistance(
+                      { lat: prev.lat, lon: prev.lon },
+                      { lat: wp.lat, lon: wp.lon }
+                    );
+                    return { ...wp, distance: dist };
+                  });
 
-                  <TouchableOpacity
-                    onPress={() => {
-                      if (manualPathConnections.length < 2) {
-                        Alert.alert('Not Enough Marking Points', 'Connect at least 2 marking points to create a path.');
-                        return;
-                      }
-
-                      // Reorder waypoints based on connections
-                      const reorderedWaypoints = manualPathConnections.map(id =>
-                        waypoints.find(wp => wp.id === id)
-                      ).filter(Boolean) as PathPlanWaypoint[];
-
-                      // Add any unconnected waypoints at the end
-                      const connectedIds = new Set(manualPathConnections);
-                      const unconnectedWaypoints = waypoints.filter(wp => !connectedIds.has(wp.id));
-
-                      const finalWaypoints = [...reorderedWaypoints, ...unconnectedWaypoints];
-                      updateWaypoints(finalWaypoints);
-                      setIsConnectingPath(false);
-                      Alert.alert('✓ Path Created', `Successfully connected ${manualPathConnections.length} marking points in custom order.`);
-                    }}
-                    disabled={manualPathConnections.length < 2}
-                    style={{
-                      flex: 1,
-                      paddingVertical: 8,
-                      backgroundColor: manualPathConnections.length >= 2 ? colors.greenBtn : colors.inputBg,
-                      borderRadius: 8,
-                      opacity: manualPathConnections.length >= 2 ? 1 : 0.5
-                    }}>
-                    <Text style={{ color: colors.text, textAlign: 'center', fontSize: 11, fontWeight: '700' }}>✓ Finish</Text>
-                  </TouchableOpacity>
-                </View>
-              </View>
+                  // Update waypoints to ONLY show connected ones with recalculated distances
+                  updateWaypoints(waypointsWithDistances);
+                  setIsConnectingPath(false);
+                  setUseMapForConnection(false);
+                  Alert.alert('✓ Path Created', `Path created with ${uniqueConnectedIds.length} marking points. Unconnected marking points removed.`);
+                }}
+                onCancel={() => {
+                  setIsConnectingPath(false);
+                  setUseMapForConnection(false);
+                  setManualPathConnections([]);
+                }}
+              />
             )}
 
             {/* Right Sidebar - 25% width, split into ops (top) and stats (bottom) */}
@@ -2108,27 +2017,13 @@ export default function PathPlanScreen() {
                       if (DEBUG_LOG) console.log('[PathPlan] Importing waypoints in MANUAL mode:', sanitized.length);
                       updateWaypoints(sanitized);
                       setManualPathConnections([]);
+                      setShowConnectionChoice(true);
                       Alert.alert(
                         '✏️ Manual Path Mode',
                         `${sanitized.length} marking points imported. Choose your preferred connection method.`,
-                        [
-                          { text: 'Connect Manually' },
-                          { text: 'Connect Automatically' }
-                        ]
-                      ).then((choice) => {
-                          if (choice === 'Connect Manually') {
-                            setIsConnectingPath(true);
-                            Alert.alert(
-                              '✏️ Manual Path Mode',
-                              `${sanitized.length} marking points imported. Click marking points in order to create your custom path. Tap a marking point to start, then tap others to connect them.`,
-                              [{ text: 'Start Connecting' }]
-                            );
-                          } else if (choice === 'Connect Automatically') {
-                            updateWaypoints(sanitized);
-                            Alert.alert('✓ Import Complete', `Successfully imported ${sanitized.length} marking points.`);
-                          }
-                          setShowUploadPreview(false);
-                        });
+                        [{ text: 'Choose Method' }]
+                      );
+                      setShowUploadPreview(false);
                     } else {
                       // Auto mode: Sequential import as usual
                       const sanitized = sanitizeWaypointsForUpload(uploadPreviewWaypoints);
