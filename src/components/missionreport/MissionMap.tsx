@@ -305,12 +305,12 @@ export const MissionMap: React.FC<Props> = ({
       if (wp.isEnd) fill = '#dc2626';
       if (wp.isActive) fill = '#22c55e';
       
-      const size = wp.isActive ? 32 : 24;
+      const size = wp.isActive ? 48 : 36;
       
       const svgIcon = \`
         <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="\${size}" height="\${size}" fill="\${fill}">
-          <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z"/>
-          <text x="12" y="10.5" font-family="sans-serif" font-size="8" font-weight="bold" fill="white" text-anchor="middle" dy=".3em">\${wp.id}</text>
+          <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7z"/>
+          <text x="12" y="10.5" font-family="sans-serif" font-size="12" font-weight="bold" fill="white" text-anchor="middle" dy=".3em">\${index + 1}</text>
         </svg>
       \`;
       
@@ -775,7 +775,7 @@ export const MissionMap: React.FC<Props> = ({
     `;
 
     webViewRef.current.injectJavaScript(updateScript);
-  // TRAIL DISABLED: trailPoints removed from dependencies
+    // TRAIL DISABLED: trailPoints removed from dependencies
   }, [roverLat, roverLon, heading, armed, rtkFixType, /* trailPoints, */ mapReady]);
 
   return (

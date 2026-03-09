@@ -23,6 +23,30 @@ export const ManualMapConnection: React.FC<Props> = ({
   const [isDragging, setIsDragging] = useState(false);
   const mapRef = useRef<any>(null);
 
+  // Haversine distance in meters
+  const haversineDistance = (lat1: number, lon1: number, lat2: number, lon2: number): number => {
+    const R = 6371000; // Earth radius in meters
+    const toRad = (deg: number) => deg * Math.PI / 180;
+    const dLat = toRad(lat2 - lat1);
+    const dLon = toRad(lon2 - lon1);
+    const a = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
+    return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  };
+
+  const nearestWaypoint = React.useMemo(() => {
+    if (roverPosition == null || waypoints.length === 0) return null;
+    let nearest = waypoints[0];
+    let minDist = haversineDistance(roverPosition.lat, roverPosition.lng, nearest.lat, nearest.lon);
+    for (let i = 1; i < waypoints.length; i++) {
+      const dist = haversineDistance(roverPosition.lat, roverPosition.lng, waypoints[i].lat, waypoints[i].lon);
+      if (dist < minDist) {
+        minDist = dist;
+        nearest = waypoints[i];
+      }
+    }
+    return { waypoint: nearest, distance: minDist };
+  }, [roverPosition, waypoints]);
+
   // Reset connections when waypoints change
   useEffect(() => {
     if (visible) {
@@ -59,7 +83,7 @@ export const ManualMapConnection: React.FC<Props> = ({
 
   const handleMapMessage = (event: any) => {
     const data = JSON.parse(event.nativeEvent.data);
-    
+
     switch (data.type) {
       case 'waypointConnect':
         if (connectionMode === 'drag') {
@@ -110,16 +134,26 @@ export const ManualMapConnection: React.FC<Props> = ({
           <View style={{ flex: 1 }}>
             <Text style={styles.title}>🗺️ Map Connection Mode</Text>
             <Text style={styles.subtitle}>
-              {connectionMode === 'tap' ? 'Tap marking points in order to connect them' : 
-               connectionMode === 'drag' ? 'Drag through marking points to connect them' : 
-               'Pan/move the map to navigate'}
+              {connectionMode === 'tap' ? 'Tap marking points in order to connect them' :
+                connectionMode === 'drag' ? 'Drag through marking points to connect them' :
+                  'Pan/move the map to navigate'}
             </Text>
             <Text style={styles.info}>
               Connected: {manualConnections.length} / {waypoints.length} marking points
             </Text>
+            {nearestWaypoint && roverPosition && (
+              <View style={{ marginTop: 2, marginBottom: 4 }}>
+                <Text style={[styles.info, { color: '#60A5FA', marginBottom: 2 }]}>
+                  📍 {roverPosition.lat.toFixed(6)}, {roverPosition.lng.toFixed(6)} {roverPosition.heading != null ? `| 🧭 ${Math.round(roverPosition.heading)}°` : ''}
+                </Text>
+                <Text style={[styles.info, { color: '#60A5FA' }]}>
+                  Nearest: #{nearestWaypoint.waypoint.id} ({Math.round(nearestWaypoint.distance)}m)
+                </Text>
+              </View>
+            )}
             <Text style={styles.hint}>
-              💡 {connectionMode === 'tap' ? 'Tap waypoints to add them to your path.' : 
-                  connectionMode === 'drag' ? 'Drag between waypoints to create connections.' : 
+              💡 {connectionMode === 'tap' ? 'Tap waypoints to add them to your path.' :
+                connectionMode === 'drag' ? 'Drag between waypoints to create connections.' :
                   'Use this mode to pan and zoom the map without creating connections.'} The map preserves exact shapes and distances.
             </Text>
           </View>
@@ -182,9 +216,33 @@ export const ManualMapConnection: React.FC<Props> = ({
               handleWaypointTap(waypointId);
             }
           }}
-          onToggleFullscreen={() => {}} // Can be implemented if needed
+          onWaypointConnect={(fromId, toId) => {
+            if (connectionMode === 'drag') {
+              handleWaypointConnect(fromId, toId);
+            }
+          }}
+          onToggleFullscreen={() => { }} // Can be implemented if needed
         />
       </View>
+
+      {/* Connection Sequence Display */}
+      {manualConnections.length > 0 && (
+        <View style={styles.sequenceBox}>
+          <Text style={styles.sequenceTitle}>Connection Sequence:</Text>
+          <View style={styles.sequenceList}>
+            {manualConnections.map((id, index) => (
+              <View key={`seq-${index}-${id}`} style={styles.sequenceItem}>
+                <View style={styles.sequenceBadge}>
+                  <Text style={styles.sequenceBadgeText}>#{id}</Text>
+                </View>
+                {index < manualConnections.length - 1 && (
+                  <Text style={styles.sequenceArrow}>→</Text>
+                )}
+              </View>
+            ))}
+          </View>
+        </View>
+      )}
 
       {/* Action Buttons */}
       <View style={styles.buttonRow}>
@@ -328,6 +386,46 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 13,
     fontWeight: 'bold',
+  },
+  sequenceBox: {
+    backgroundColor: '#f8fafc',
+    marginHorizontal: 12,
+    marginBottom: 8,
+    padding: 12,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+  },
+  sequenceTitle: {
+    color: '#475569',
+    fontSize: 12,
+    fontWeight: '600',
+    marginBottom: 8,
+  },
+  sequenceList: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+  },
+  sequenceItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  sequenceBadge: {
+    backgroundColor: '#4ADE80',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 6,
+  },
+  sequenceBadgeText: {
+    color: '#000',
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  sequenceArrow: {
+    color: '#94a3b8',
+    fontSize: 12,
+    marginHorizontal: 4,
   },
 });
 
