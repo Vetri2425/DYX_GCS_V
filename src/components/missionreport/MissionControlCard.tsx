@@ -40,8 +40,6 @@ const MissionControlCard: React.FC<MissionControlCardProps> = ({
   const { services, telemetry } = useRover();
   const [isLoadingMission, setIsLoadingMission] = React.useState(false);
   const [isTogglingMode, setIsTogglingMode] = React.useState(false);
-  const [isRunning, setIsRunning] = React.useState(false);
-  const [isPaused, setIsPaused] = React.useState(false);
   const [isStarting, setIsStarting] = React.useState(false);
   const [isStopping, setIsStopping] = React.useState(false);
   const [isNexting, setIsNexting] = React.useState(false);
@@ -54,7 +52,18 @@ const MissionControlCard: React.FC<MissionControlCardProps> = ({
   const [isBulkSubmitting, setIsBulkSubmitting] = React.useState(false);
   const [isPausing, setIsPausing] = React.useState(false);
   const [isResuming, setIsResuming] = React.useState(false);
-  
+
+  // Derive button state directly from telemetry — single source of truth
+  // Backend mission_status events set telemetry.mission.status to: running, paused, idle, stopped, completed, error, ready, loading
+  const missionStatus = (telemetry?.mission?.status ?? '').toLowerCase().trim();
+  const isRunning = missionStatus === 'running' || missionStatus === 'paused';
+  const isPaused = missionStatus === 'paused';
+
+  // Debug: log when mission status changes to trace button state issues
+  React.useEffect(() => {
+    console.log('[MissionControlCard] telemetry.mission.status =', telemetry?.mission?.status, '→ isRunning:', isRunning, 'isPaused:', isPaused);
+  }, [telemetry?.mission?.status]);
+
   const [confirmAction, setConfirmAction] = React.useState<null | {
     action: string;
     onConfirm: () => void
@@ -84,30 +93,9 @@ const MissionControlCard: React.FC<MissionControlCardProps> = ({
     setTimeout(() => setToast({ visible: false, type: 'info', message: undefined }), duration);
   };
 
-  // Primary sync: WebSocket telemetry.mission.status drives button state (~300ms latency)
-  // Backend states: running, paused, idle, stopped, completed, error, ready, loading
-  React.useEffect(() => {
-    const s = (telemetry?.mission?.status ?? '').toLowerCase().trim();
-    const shouldBeRunning = s === 'running' || s === 'paused';
-    const shouldBePaused  = s === 'paused';
-    if (shouldBeRunning !== isRunning) setIsRunning(shouldBeRunning);
-    if (shouldBePaused  !== isPaused)  setIsPaused(shouldBePaused);
-  }, [telemetry?.mission?.status]);
-
-  // Recovery fetch on mount — restores state when app opens mid-mission or WebSocket reconnects
-  React.useEffect(() => {
-    let mounted = true;
-    services.getMissionStatus().then((response) => {
-      if (!mounted || !response) return;
-      const rd = response.data || response;
-      const raw = rd.status?.mission_state || rd.latest_update?.mission_state || rd.mission_state || rd.state || '';
-      const s = raw.toString().toLowerCase().trim();
-      if (!s) return;
-      setIsRunning(s === 'running' || s === 'paused');
-      setIsPaused(s === 'paused');
-    }).catch(() => {});
-    return () => { mounted = false; };
-  }, []);
+  // No sync effects or recovery fetch needed — isRunning/isPaused are derived
+  // directly from telemetry.mission.status above. Backend mission_status events
+  // update telemetry in real time, buttons react automatically.
 
   // Mission control handlers with action guard protection
   const handleStart = preventAction(async () => {
@@ -115,20 +103,17 @@ const MissionControlCard: React.FC<MissionControlCardProps> = ({
       showLocalToast('error', 'System is initializing. Please wait...');
       return;
     }
-    
+
     setIsStarting(true);
     try {
       if (onStart) {
         const res = await onStart();
-        // Only mark running if backend acknowledged success
-        if (!res || res.success === undefined || res.success === true) {
-          setIsRunning(true);
-        } else {
-          // show failure message locally and keep isRunning false
+        if (res && res.success === false) {
           const msg = res?.message ?? (typeof res === 'string' ? res : JSON.stringify(res));
           console.warn('[MissionControlCard] Start returned failure:', msg);
           showLocalToast('error', msg);
         }
+        // No need to setIsRunning — telemetry.mission.status will update via WebSocket
       }
     } catch (error) {
       console.error('[MissionControlCard] Start Error:', error);
@@ -141,40 +126,28 @@ const MissionControlCard: React.FC<MissionControlCardProps> = ({
   const handleStop = async () => {
     setIsStopping(true);
     try {
-      console.log('[MissionControlCard] 🛑 Executing stop mission...');
-
-      // Call backend service to stop mission
+      console.log('[MissionControlCard] Executing stop mission...');
       const response = await services.stopMission();
 
-      // Check if stop was successful
       if (response && response.success) {
-        // Reset all button states when stopping successfully
-        setIsRunning(false);
-        setIsPaused(false);
-        console.log('[MissionControlCard] ✅ Mission stopped - button reset to START state');
+        console.log('[MissionControlCard] Mission stopped successfully');
         showLocalToast('success', 'Mission stopped');
       } else if (response?.message?.includes('No mission running')) {
-        // Mission is already stopped - treat as success
-        setIsRunning(false);
-        setIsPaused(false);
-        console.log('[MissionControlCard] ✅ Mission already stopped - button reset to START state');
+        console.log('[MissionControlCard] Mission already stopped');
         showLocalToast('info', 'Mission already stopped');
       } else {
-        // Stop failed - show error and let telemetry sync correct the state
-        const msg = response?.message ?? 'Stop command failed - mission may not be running';
-        console.warn('[MissionControlCard] ⚠️ Stop returned failure:', msg);
+        const msg = response?.message ?? 'Stop command failed';
+        console.warn('[MissionControlCard] Stop returned failure:', msg);
         showLocalToast('error', msg);
-        // Let telemetry sync handle state correction
       }
+      // No need to setIsRunning/setIsPaused — telemetry will update via WebSocket
 
-      // Also call the optional callback if provided
       if (onStop) {
         await onStop();
       }
     } catch (error) {
-      console.error('[MissionControlCard] ❌ Stop Error:', error);
+      console.error('[MissionControlCard] Stop Error:', error);
       showLocalToast('error', 'Failed to stop mission');
-      // Let telemetry sync handle state correction
     } finally {
       setIsStopping(false);
     }
@@ -185,7 +158,6 @@ const MissionControlCard: React.FC<MissionControlCardProps> = ({
     try {
       const response = onPause ? await onPause() : await services.pauseMission();
       if (response && response.success) {
-        setIsPaused(true);
         showLocalToast('success', 'Mission paused');
       } else {
         showLocalToast('error', response?.message || 'Failed to pause mission');
@@ -205,7 +177,6 @@ const MissionControlCard: React.FC<MissionControlCardProps> = ({
     try {
       const response = onResume ? await onResume() : await services.resumeMission();
       if (response && response.success) {
-        setIsPaused(false);
         showLocalToast('success', 'Mission resumed');
       } else {
         showLocalToast('error', response?.message || 'Failed to resume mission');

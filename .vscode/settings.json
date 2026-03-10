@@ -1,3 +1,4 @@
 {
-     "webhint.enable": false
+    "webhint.enable": false,
+    "kiroAgent.configureMCP": "Disabled"
    }

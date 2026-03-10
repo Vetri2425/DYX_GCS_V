@@ -1125,22 +1125,24 @@ const SettingsScreenComponent: React.FC<SettingsScreenProps> = ({ visible, onClo
                 </TouchableOpacity>
               </View>
 
-              {modalScreen === 'list' ? (
-                <NTRIPProfileList
-                  onSelectProfile={handleSelectRTKProfile}
-                  onAddNew={handleAddNewRTKProfile}
-                  onEditProfile={handleEditRTKProfile}
-                  isConnecting={isRTKSubmitting}
-                  activeProfileId={activeProfileId}
-                  isStreamRunning={isRTKStreamRunning}
-                />
-              ) : (
-                <NTRIPProfileEditor
-                  profile={selectedProfile}
-                  onSave={handleRTKProfileSaved}
-                  onCancel={handleCancelRTKEdit}
-                />
-              )}
+              <View style={rtkModalStyles.modalBody}>
+                {modalScreen === 'list' ? (
+                  <NTRIPProfileList
+                    onSelectProfile={handleSelectRTKProfile}
+                    onAddNew={handleAddNewRTKProfile}
+                    onEditProfile={handleEditRTKProfile}
+                    isConnecting={isRTKSubmitting}
+                    activeProfileId={activeProfileId}
+                    isStreamRunning={isRTKStreamRunning}
+                  />
+                ) : (
+                  <NTRIPProfileEditor
+                    profile={selectedProfile}
+                    onSave={handleRTKProfileSaved}
+                    onCancel={handleCancelRTKEdit}
+                  />
+                )}
+              </View>
 
               {rtkFeedback && (
                 <View style={rtkModalStyles.feedbackBox}>
@@ -1598,9 +1600,14 @@ const rtkModalStyles = StyleSheet.create({
     borderRadius: 16,
     padding: 20,
     width: '90%',
+    height: '85%',
     maxHeight: '85%',
     borderWidth: 2,
     borderColor: '#3b82f6',
+  },
+  modalBody: {
+    flex: 1,
+    minHeight: 0,
   },
   modalHeader: {
     flexDirection: 'row',

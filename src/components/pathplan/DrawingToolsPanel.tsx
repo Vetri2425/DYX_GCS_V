@@ -75,6 +75,12 @@ export const DrawingToolsPanel: React.FC<DrawingToolsPanelProps> = ({
     { name: 'survey-grid', icon: '📐', title: 'Survey Grid', color: '#dc2626', onPress: onShowSurveyGridTool },
   ];
 
+  const themedGeneratorTools: GeneratorTool[] = generatorTools.map((tool) => {
+    if (tool.name === 'auto-circle') return { ...tool, color: colors.accent };
+    if (tool.name === 'survey-grid') return { ...tool, color: colors.greenBtn };
+    return tool;
+  });
+
   return (
     <View style={styles.container}>
       {/* Header with Toggle Button */}
@@ -98,7 +104,7 @@ export const DrawingToolsPanel: React.FC<DrawingToolsPanelProps> = ({
       {!collapsed && (
         <>
           <View style={styles.toolsGrid3Cols}>
-            {[...drawingTools, ...generatorTools].map((tool, idx) => {
+            {[...drawingTools, ...themedGeneratorTools].map((tool, idx) => {
               const isGenerator = (tool as GeneratorTool).onPress !== undefined;
               return (
                 <TouchableOpacity
@@ -107,14 +113,13 @@ export const DrawingToolsPanel: React.FC<DrawingToolsPanelProps> = ({
                     styles.toolBtn,
                     activeDrawingTool === tool.name && styles.toolBtnActive,
                     activeDrawingTool === tool.name && { borderColor: tool.color },
-                    isGenerator && { backgroundColor: tool.color + '20', borderWidth: 2, borderColor: tool.color },
                   ]}
                   onPress={() => isGenerator ? (tool as GeneratorTool).onPress() : handleToolPress(tool.name)}
                   activeOpacity={0.7}
                 >
-                  <Text style={[styles.toolIcon, isGenerator && styles.generatorIcon, isGenerator && { color: tool.color }]}>{tool.icon}</Text>
+                  <Text style={styles.toolIcon}>{tool.icon}</Text>
                   <Text
-                    style={[styles.toolLabel, activeDrawingTool === tool.name && styles.toolLabelActive, isGenerator && styles.generatorLabel]}
+                    style={[styles.toolLabel, activeDrawingTool === tool.name && styles.toolLabelActive]}
                   >
                     {tool.title}
                   </Text>

@@ -362,7 +362,9 @@ const toTelemetryEnvelopeFromRoverData = (data: any): TelemetryEnvelope | null =
     envelope.mission = {
       total_wp: total,
       current_wp: currentWp,
-      status: currentWp > 0 ? 'ACTIVE' : 'IDLE',
+      // Do NOT set status here — it must come from mission_status events only.
+      // Setting 'ACTIVE'/'IDLE' based on waypoint count was overwriting the real
+      // backend mission state ('running', 'paused', etc.) on every telemetry tick.
       progress_pct: progress,
     };
     touched = true;
@@ -597,7 +599,9 @@ const toTelemetryEnvelopeFromBridge = (data: any): TelemetryEnvelope | null => {
     envelope.mission = {
       total_wp: typeof data.mission.total_wp === 'number' ? data.mission.total_wp : 0,
       current_wp: typeof data.mission.current_wp === 'number' ? data.mission.current_wp : 0,
-      status: typeof data.mission.status === 'string' ? data.mission.status : 'IDLE',
+      // CRITICAL: Only set status when explicitly provided — defaulting to 'IDLE'
+      // was overwriting the correct 'running' status set by mission_status events
+      ...(typeof data.mission.status === 'string' ? { status: data.mission.status } : {}),
       progress_pct: typeof data.mission.progress_pct === 'number' ? data.mission.progress_pct : 0,
     };
     touched = true;
@@ -1308,17 +1312,14 @@ export function useRoverTelemetry(): UseRoverTelemetryResult {
         });
 
         socket.on(SOCKET_EVENTS.MISSION_STATUS, (data: any) => {
-          // Only log important events, skip routine telemetry updates
-          const isImportantEvent = data.event_type || data.level === 'error' || data.level === 'warning' || data.level === 'success';
-
-          if (isImportantEvent) {
-            console.log('[MISSION_STATUS] Backend event:', {
-              mission_state: data.mission_state,
-              event_type: data.event_type,
-              level: data.level,
-              message: data.message,
-            });
-          }
+          // Log every mission_state change for debugging button sync
+          console.log('[MISSION_STATUS] Received:', {
+            mission_state: data.mission_state,
+            mission_mode: data.mission_mode,
+            current_waypoint: data.current_waypoint,
+            total_waypoints: data.total_waypoints,
+            event_type: data.event_type,
+          });
 
           // 🔍 CRITICAL FIX: Parse GPS telemetry data from mission_status events!
           if (data.current_position || data.pixhawk_state) {
@@ -1355,6 +1356,7 @@ export function useRoverTelemetry(): UseRoverTelemetryResult {
               clearTimeout(missionStatusDebounceRef.current);
             }
             missionStatusDebounceRef.current = setTimeout(() => {
+              console.log('[MISSION_STATUS] Applying to telemetry:', envelope.mission?.status);
               applyEnvelopeRef.current(envelope);
               missionStatusDebounceRef.current = null;
             }, 250);
