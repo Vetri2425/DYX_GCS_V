@@ -46,6 +46,14 @@ export const ServoConfigModal: React.FC<ServoConfigModalProps> = ({
   const [delayAfter, setDelayAfter] = useState(currentConfig.servo_delay_after);
   const [enabled, setEnabled] = useState(currentConfig.servo_enabled);
 
+  // Local state for input text values (can be empty for typing)
+  const [channelText, setChannelText] = useState(String(currentConfig.servo_channel));
+  const [pwmOnText, setPwmOnText] = useState(String(currentConfig.servo_pwm_on));
+  const [pwmOffText, setPwmOffText] = useState(String(currentConfig.servo_pwm_off));
+  const [delayBeforeText, setDelayBeforeText] = useState(String(currentConfig.servo_delay_before));
+  const [sprayDurationText, setSprayDurationText] = useState(String(currentConfig.servo_spray_duration));
+  const [delayAfterText, setDelayAfterText] = useState(String(currentConfig.servo_delay_after));
+
   // UI state
   const [isTesting, setIsTesting] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
@@ -62,6 +70,12 @@ export const ServoConfigModal: React.FC<ServoConfigModalProps> = ({
       setSprayDuration(currentConfig.servo_spray_duration);
       setDelayAfter(currentConfig.servo_delay_after);
       setEnabled(currentConfig.servo_enabled);
+      setChannelText(String(currentConfig.servo_channel));
+      setPwmOnText(String(currentConfig.servo_pwm_on));
+      setPwmOffText(String(currentConfig.servo_pwm_off));
+      setDelayBeforeText(String(currentConfig.servo_delay_before));
+      setSprayDurationText(String(currentConfig.servo_spray_duration));
+      setDelayAfterText(String(currentConfig.servo_delay_after));
       setTestResult(null);
       setSaveSuccess(false);
     }
@@ -128,20 +142,26 @@ export const ServoConfigModal: React.FC<ServoConfigModalProps> = ({
 
   const handleIncrement = (
     setter: React.Dispatch<React.SetStateAction<number>>,
+    textSetter: React.Dispatch<React.SetStateAction<string>>,
     value: number,
     step: number,
     max: number
   ) => {
-    setter(Math.min(max, value + step));
+    const newValue = Math.min(max, value + step);
+    setter(newValue);
+    textSetter(String(newValue));
   };
 
   const handleDecrement = (
     setter: React.Dispatch<React.SetStateAction<number>>,
+    textSetter: React.Dispatch<React.SetStateAction<string>>,
     value: number,
     step: number,
     min: number
   ) => {
-    setter(Math.max(min, value - step));
+    const newValue = Math.max(min, value - step);
+    setter(newValue);
+    textSetter(String(newValue));
   };
 
   return (
@@ -190,25 +210,24 @@ export const ServoConfigModal: React.FC<ServoConfigModalProps> = ({
               <View style={styles.inputRow}>
                 <TouchableOpacity
                   style={styles.incrementButton}
-                  onPress={() => handleDecrement(setChannel, channel, 1, 1)}
+                  onPress={() => handleDecrement(setChannel, setChannelText, channel, 1, 1)}
                 >
                   <Text style={styles.incrementText}>−</Text>
                 </TouchableOpacity>
                 <TextInput
                   style={styles.input}
-                  value={String(channel)}
+                  value={channelText}
                   onChangeText={(text) => {
-                    if (text === '') return; // Allow clearing for typing
-                    const num = parseInt(text);
-                    if (!isNaN(num)) {
-                      setChannel(Math.max(1, Math.min(16, num)));
+                    setChannelText(text);
+                    if (text !== '' && !isNaN(parseInt(text))) {
+                      setChannel(Math.max(1, Math.min(16, parseInt(text))));
                     }
                   }}
                   keyboardType="number-pad"
                 />
                 <TouchableOpacity
                   style={styles.incrementButton}
-                  onPress={() => handleIncrement(setChannel, channel, 1, 16)}
+                  onPress={() => handleIncrement(setChannel, setChannelText, channel, 1, 16)}
                 >
                   <Text style={styles.incrementText}>+</Text>
                 </TouchableOpacity>
@@ -217,30 +236,29 @@ export const ServoConfigModal: React.FC<ServoConfigModalProps> = ({
 
             {/* PWM ON */}
             <View style={styles.section}>
-              <Text style={styles.sectionTitle}>PWM ON (1000-2000)</Text>
+              <Text style={styles.sectionTitle}>PWM ON (0-3000)</Text>
               <Text style={styles.description}>Pulse width for servo ON position</Text>
               <View style={styles.inputRow}>
                 <TouchableOpacity
                   style={styles.incrementButton}
-                  onPress={() => handleDecrement(setPwmOn, pwmOn, 100, 1000)}
+                  onPress={() => handleDecrement(setPwmOn, setPwmOnText, pwmOn, 100, 0)}
                 >
                   <Text style={styles.incrementText}>−</Text>
                 </TouchableOpacity>
                 <TextInput
                   style={styles.input}
-                  value={String(pwmOn)}
+                  value={pwmOnText}
                   onChangeText={(text) => {
-                    if (text === '') return; // Allow clearing for typing
-                    const num = parseInt(text);
-                    if (!isNaN(num)) {
-                      setPwmOn(Math.max(1000, Math.min(2000, num)));
+                    setPwmOnText(text);
+                    if (text !== '' && !isNaN(parseInt(text))) {
+                      setPwmOn(Math.max(0, Math.min(3000, parseInt(text))));
                     }
                   }}
                   keyboardType="number-pad"
                 />
                 <TouchableOpacity
                   style={styles.incrementButton}
-                  onPress={() => handleIncrement(setPwmOn, pwmOn, 100, 2000)}
+                  onPress={() => handleIncrement(setPwmOn, setPwmOnText, pwmOn, 100, 3000)}
                 >
                   <Text style={styles.incrementText}>+</Text>
                 </TouchableOpacity>
@@ -249,30 +267,29 @@ export const ServoConfigModal: React.FC<ServoConfigModalProps> = ({
 
             {/* PWM OFF */}
             <View style={styles.section}>
-              <Text style={styles.sectionTitle}>PWM OFF (1000-2000)</Text>
+              <Text style={styles.sectionTitle}>PWM OFF (0-3000)</Text>
               <Text style={styles.description}>Pulse width for servo OFF position</Text>
               <View style={styles.inputRow}>
                 <TouchableOpacity
                   style={styles.incrementButton}
-                  onPress={() => handleDecrement(setPwmOff, pwmOff, 100, 1000)}
+                  onPress={() => handleDecrement(setPwmOff, setPwmOffText, pwmOff, 100, 0)}
                 >
                   <Text style={styles.incrementText}>−</Text>
                 </TouchableOpacity>
                 <TextInput
                   style={styles.input}
-                  value={String(pwmOff)}
+                  value={pwmOffText}
                   onChangeText={(text) => {
-                    if (text === '') return; // Allow clearing for typing
-                    const num = parseInt(text);
-                    if (!isNaN(num)) {
-                      setPwmOff(Math.max(1000, Math.min(2000, num)));
+                    setPwmOffText(text);
+                    if (text !== '' && !isNaN(parseInt(text))) {
+                      setPwmOff(Math.max(0, Math.min(3000, parseInt(text))));
                     }
                   }}
                   keyboardType="number-pad"
                 />
                 <TouchableOpacity
                   style={styles.incrementButton}
-                  onPress={() => handleIncrement(setPwmOff, pwmOff, 100, 2000)}
+                  onPress={() => handleIncrement(setPwmOff, setPwmOffText, pwmOff, 100, 3000)}
                 >
                   <Text style={styles.incrementText}>+</Text>
                 </TouchableOpacity>
@@ -286,18 +303,17 @@ export const ServoConfigModal: React.FC<ServoConfigModalProps> = ({
               <View style={styles.inputRow}>
                 <TouchableOpacity
                   style={styles.incrementButton}
-                  onPress={() => handleDecrement(setDelayBefore, delayBefore, 0.5, 0)}
+                  onPress={() => handleDecrement(setDelayBefore, setDelayBeforeText, delayBefore, 0.5, 0)}
                 >
                   <Text style={styles.incrementText}>−</Text>
                 </TouchableOpacity>
                 <TextInput
                   style={styles.input}
-                  value={String(delayBefore)}
+                  value={delayBeforeText}
                   onChangeText={(text) => {
-                    if (text === '' || text === '.') return; // Allow clearing and typing decimal
-                    const num = parseFloat(text);
-                    if (!isNaN(num)) {
-                      setDelayBefore(Math.max(0, Math.min(30, num)));
+                    setDelayBeforeText(text);
+                    if (text !== '' && text !== '.' && !isNaN(parseFloat(text))) {
+                      setDelayBefore(Math.max(0, Math.min(30, parseFloat(text))));
                     }
                   }}
                   keyboardType="decimal-pad"
@@ -305,7 +321,7 @@ export const ServoConfigModal: React.FC<ServoConfigModalProps> = ({
                 />
                 <TouchableOpacity
                   style={styles.incrementButton}
-                  onPress={() => handleIncrement(setDelayBefore, delayBefore, 0.5, 30)}
+                  onPress={() => handleIncrement(setDelayBefore, setDelayBeforeText, delayBefore, 0.5, 30)}
                 >
                   <Text style={styles.incrementText}>+</Text>
                 </TouchableOpacity>
@@ -314,31 +330,30 @@ export const ServoConfigModal: React.FC<ServoConfigModalProps> = ({
 
             {/* Spray Duration */}
             <View style={styles.section}>
-              <Text style={styles.sectionTitle}>Spray Duration (0.5-30s)</Text>
+              <Text style={styles.sectionTitle}>Spray Duration (0-30s)</Text>
               <Text style={styles.description}>How long to keep servo ON</Text>
               <View style={styles.inputRow}>
                 <TouchableOpacity
                   style={styles.incrementButton}
-                  onPress={() => handleDecrement(setSprayDuration, sprayDuration, 0.5, 0.5)}
+                  onPress={() => handleDecrement(setSprayDuration, setSprayDurationText, sprayDuration, 0.2, 0)}
                 >
                   <Text style={styles.incrementText}>−</Text>
                 </TouchableOpacity>
                 <TextInput
                   style={styles.input}
-                  value={String(sprayDuration)}
+                  value={sprayDurationText}
                   onChangeText={(text) => {
-                    if (text === '' || text === '.') return; // Allow clearing and typing decimal
-                    const num = parseFloat(text);
-                    if (!isNaN(num)) {
-                      setSprayDuration(Math.max(0.5, Math.min(30, num)));
+                    setSprayDurationText(text);
+                    if (text !== '' && text !== '.' && !isNaN(parseFloat(text))) {
+                      setSprayDuration(Math.max(0, Math.min(30, parseFloat(text))));
                     }
                   }}
                   keyboardType="decimal-pad"
-                  placeholder="0.5"
+                  placeholder="0.0"
                 />
                 <TouchableOpacity
                   style={styles.incrementButton}
-                  onPress={() => handleIncrement(setSprayDuration, sprayDuration, 0.5, 30)}
+                  onPress={() => handleIncrement(setSprayDuration, setSprayDurationText, sprayDuration, 0.2, 30)}
                 >
                   <Text style={styles.incrementText}>+</Text>
                 </TouchableOpacity>
@@ -352,18 +367,17 @@ export const ServoConfigModal: React.FC<ServoConfigModalProps> = ({
               <View style={styles.inputRow}>
                 <TouchableOpacity
                   style={styles.incrementButton}
-                  onPress={() => handleDecrement(setDelayAfter, delayAfter, 0.5, 0)}
+                  onPress={() => handleDecrement(setDelayAfter, setDelayAfterText, delayAfter, 0.5, 0)}
                 >
                   <Text style={styles.incrementText}>−</Text>
                 </TouchableOpacity>
                 <TextInput
                   style={styles.input}
-                  value={String(delayAfter)}
+                  value={delayAfterText}
                   onChangeText={(text) => {
-                    if (text === '' || text === '.') return; // Allow clearing and typing decimal
-                    const num = parseFloat(text);
-                    if (!isNaN(num)) {
-                      setDelayAfter(Math.max(0, Math.min(30, num)));
+                    setDelayAfterText(text);
+                    if (text !== '' && text !== '.' && !isNaN(parseFloat(text))) {
+                      setDelayAfter(Math.max(0, Math.min(30, parseFloat(text))));
                     }
                   }}
                   keyboardType="decimal-pad"
@@ -371,7 +385,7 @@ export const ServoConfigModal: React.FC<ServoConfigModalProps> = ({
                 />
                 <TouchableOpacity
                   style={styles.incrementButton}
-                  onPress={() => handleIncrement(setDelayAfter, delayAfter, 0.5, 30)}
+                  onPress={() => handleIncrement(setDelayAfter, setDelayAfterText, delayAfter, 0.5, 30)}
                 >
                   <Text style={styles.incrementText}>+</Text>
                 </TouchableOpacity>

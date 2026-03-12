@@ -70,20 +70,21 @@ const MissionOpsPanel: React.FC<Props> = ({
         if (!telemetry) return colors.danger;
         const fixType = telemetry.rtk?.fix_type;
         if (fixType >= 5) return colors.success; // RTK Float/Fixed = Green
-        if (fixType >= 3) return colors.warning; // 3D Fix = Orange
-        return colors.danger; // No Fix = Red
+        if (fixType >= 4) return colors.warning; // 3D Fix = Orange
+        return colors.danger; // No GPS = Red
     }, [telemetry]);
 
     // Get GPS status text
     const gpsStatusText = React.useMemo(() => {
         if (!telemetry) return 'No Fix';
         const fixType = telemetry.rtk?.fix_type;
-        if (fixType >= 5) return 'RTK Fixed';
-        if (fixType >= 4) return 'RTK Float';
+        if (fixType >= 6) return 'RTK Fixed';
+        if (fixType >= 5) return 'RTK Float';
+        if (fixType >= 4) return 'DGPS';
         if (fixType >= 3) return '3D Fix';
         if (fixType >= 2) return '2D Fix';
         if (fixType >= 1) return 'No Fix';
-        return 'No Fix';
+        return 'No GPS';
     }, [telemetry]);
 
     // Export generators (adapted for PathPlanWaypoint: uses `lon` field)
@@ -215,6 +216,22 @@ const MissionOpsPanel: React.FC<Props> = ({
             return;
         }
 
+        // Load Mission uploads waypoint data only. Backend execution mode is set
+        // separately through the explicit mode selection flow.
+        console.log('[MissionOpsPanel] Showing load mission confirmation');
+        Alert.alert('Load Mission', `Load mission with ${waypoints.length} marking points?\n\nCurrent selected mode: ${missionMode}\nBackend mode will not be changed by this action.`, [
+            { text: 'Cancel', style: 'cancel', onPress: () => console.log('[MissionOpsPanel] User cancelled load') },
+            {
+                text: 'Load',
+                onPress: () => {
+                    console.log('[MissionOpsPanel] User confirmed load, calling onLoadMission...');
+                    onLoadMission?.();
+                }
+            },
+        ]);
+        return;
+
+        /*
         // Map frontend mode to backend mode
         let backendMode: 'auto' | 'continuous' | 'dash' = 'auto';
         let modeConfig = {};
@@ -266,6 +283,7 @@ const MissionOpsPanel: React.FC<Props> = ({
                 }
             },
         ]);
+        */
     };
 
     const lastWaypoint = waypoints.length ? waypoints[waypoints.length - 1] : null;

@@ -40,8 +40,6 @@ export const DrawingToolsPanel: React.FC<DrawingToolsPanelProps> = ({
     { name: 'line', icon: '📍', title: 'Points', color: colors.greenBtn },
     { name: 'draw', icon: '✏️', title: 'Draw', color: colors.greenBtn },
     { name: 'rectangle', icon: '⬜', title: 'Rectangle', color: colors.blueBtn },
-    { name: 'circle', icon: '⭕', title: 'Circle', color: colors.blueBtn },
-    { name: 'hexagon', icon: '⬡', title: 'Hexagon', color: colors.blueBtn },
     { name: 'text', icon: '📝', title: 'Text', color: colors.accent },
     { name: 'measure', icon: '📏', title: 'Measure', color: colors.accent },
   ];
@@ -135,9 +133,7 @@ export const DrawingToolsPanel: React.FC<DrawingToolsPanelProps> = ({
                 {activeDrawingTool === 'line' && '📍 Click to place points. Double-tap to finish.'}
                 {activeDrawingTool === 'draw' && '✏️ Click and drag to draw freehand path.'}
                 {activeDrawingTool === 'rectangle' && '📍 Click first corner, then drag to second corner.'}
-                {activeDrawingTool === 'circle' && '📍 Click center, then drag to set radius.'}
-                {activeDrawingTool === 'hexagon' && '📍 Click center, then drag to set size.'}
-                {activeDrawingTool === 'text' && '📝 Click to place text annotation on map.'}
+                {activeDrawingTool === 'text' && '� Click to place text annotation on map.'}
                 {activeDrawingTool === 'measure' && '📍 Click points to measure distance.'}
               </Text>
               <TouchableOpacity

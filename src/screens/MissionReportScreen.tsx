@@ -54,6 +54,12 @@ export default function MissionReportScreen() {
   const missionLog = (...args: any[]) => {
     if (DEBUG_MISSION_LOGS) console.log(...args);
   };
+  const mapBackendMissionModeToUiMode = (backendMode: unknown): Mode | null => {
+    const normalized = String(backendMode ?? '').trim().toLowerCase();
+    if (normalized === 'auto') return 'AUTO';
+    if (normalized === 'manual') return 'MANUAL';
+    return null;
+  };
   const { telemetry, roverPosition, services, onMissionEvent, connectionState, missionWaypoints, setMissionWaypoints, clearMissionWaypoints, missionMode, setMissionMode } = useRover();
   const [mode, setMode] = useState<Mode>('AUTO');
   const [currentIndex, setCurrentIndex] = useState<number | null>(null);
@@ -158,6 +164,7 @@ export default function MissionReportScreen() {
   const missionStartTimeRef = useRef(missionStartTime);
   const missionEndTimeRef = useRef(missionEndTime);
   const isMissionActiveRef = useRef(isMissionActive);
+  const modeRef = useRef(mode);
   const missionModeRef = useRef(missionMode);
   const telemetryRef = useRef(telemetry);
 
@@ -181,6 +188,10 @@ export default function MissionReportScreen() {
   useEffect(() => {
     isMissionActiveRef.current = isMissionActive;
   }, [isMissionActive]);
+
+  useEffect(() => {
+    modeRef.current = mode;
+  }, [mode]);
   
   useEffect(() => {
     missionModeRef.current = missionMode;
@@ -1274,7 +1285,18 @@ export default function MissionReportScreen() {
     const unsubscribe = onMissionEvent((event: any) => {
       if (!mountedRef.current) return;
       
-      const eventType = event.type || event.event || 'unknown';
+      const eventType =
+        event.type ||
+        event.event ||
+        event.event_type ||
+        (
+          event.mission_state !== undefined ||
+          event.mission_mode !== undefined ||
+          event.current_waypoint !== undefined ||
+          event.total_waypoints !== undefined
+            ? 'mission_status'
+            : 'unknown'
+        );
 
       // WORKAROUND: Check if this is a spray suppressed message from SERVER_ACTIVITY
       // Backend logs "Mission: Spray suppressed: accuracy XXmm > YYmm" but doesn't send proper events
@@ -1700,13 +1722,19 @@ export default function MissionReportScreen() {
           });
         }
         
-        // Mission mode is now controlled by user selection in Mission Ops Panel
-        // Backend mission_mode events are logged but don't override user selection
         if (event.mission_mode) {
           const backendMode = String(event.mission_mode).toLowerCase();
-          console.log(`[MissionReportScreen] ℹ️ Backend reported mission mode: ${backendMode} (current user mode: ${missionModeRef.current})`);
+          const nextMode = mapBackendMissionModeToUiMode(event.mission_mode);
+          console.log(`[MissionReportScreen] Backend reported mission mode: ${backendMode} (current UI mode: ${modeRef.current}, mission type: ${missionModeRef.current})`);
+
+          if (nextMode && nextMode !== modeRef.current) {
+            console.log(`[MissionReportScreen] Syncing Mission Control mode from backend: ${modeRef.current} -> ${nextMode}`);
+            modeRef.current = nextMode;
+            setMode(nextMode);
+            statusUpdated = true;
+          }
         }
-        
+
         // Check if mission_status contains waypoint completion info
         if (event.waypoint_status && event.current_waypoint) {
           const wpId = event.current_waypoint;

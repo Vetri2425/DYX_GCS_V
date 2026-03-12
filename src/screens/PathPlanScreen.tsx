@@ -20,7 +20,7 @@ import { ManualControlPanel } from '../components/pathplan/ManualControlPanel';
 import { FailsafeModeSelector } from '../components/pathplan/FailsafeModeSelector';
 import { FailsafeStrictPopup } from '../components/pathplan/FailsafeStrictPopup';
 import { FailsafeRelaxNotification } from '../components/pathplan/FailsafeRelaxNotification';
-import { haversineDistance } from '../utils/missionCalculator';
+import { haversineDistance, recalculateWaypointDistances } from '../utils/missionCalculator';
 import { textToWaypointPath } from '../utils/textToPath';
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system/legacy';
@@ -671,6 +671,19 @@ export default function PathPlanScreen() {
   const handleUpdateWaypoints = (updatedWaypoints: PathPlanWaypoint[]) => {
     updateWaypoints(updatedWaypoints);
   };
+
+  const reverseWaypointOrder = useCallback((inputWaypoints: PathPlanWaypoint[]): PathPlanWaypoint[] => {
+    const reversed = [...inputWaypoints].reverse().map((wp, index) => ({
+      ...wp,
+      id: index + 1,
+    }));
+
+    return recalculateWaypointDistances(reversed);
+  }, []);
+
+  const handleReverseUploadPreviewWaypoints = useCallback(() => {
+    setUploadPreviewWaypoints(prev => (prev ? reverseWaypointOrder(prev) : prev));
+  }, [reverseWaypointOrder]);
 
   // File type validation
   const ACCEPTED_EXTENSIONS = ['waypoint', 'waypoints', 'csv', 'dxf', 'json', 'kml'];
@@ -1877,6 +1890,23 @@ export default function PathPlanScreen() {
                   <Text style={{ color: colors.textSecondary, textAlign: 'center', fontSize: 9, marginTop: 2 }}>Draw connections</Text>
                 </TouchableOpacity>
               </View>
+              {pathAssignmentMode === 'auto' && (
+                <TouchableOpacity
+                  onPress={handleReverseUploadPreviewWaypoints}
+                  disabled={!uploadPreviewWaypoints || uploadPreviewWaypoints.length < 2}
+                  style={{
+                    marginTop: 10,
+                    paddingVertical: 10,
+                    paddingHorizontal: 14,
+                    backgroundColor: (!uploadPreviewWaypoints || uploadPreviewWaypoints.length < 2) ? '#475569' : colors.blueBtn,
+                    borderRadius: 8,
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    opacity: (!uploadPreviewWaypoints || uploadPreviewWaypoints.length < 2) ? 0.5 : 1,
+                  }}>
+                  <Text style={{ color: colors.text, fontWeight: '700', fontSize: 12 }}>Reverse Coordinates</Text>
+                </TouchableOpacity>
+              )}
               {pathAssignmentMode === 'manual' && (
                 <View style={{ marginTop: 10, padding: 8, backgroundColor: 'rgba(74, 222, 128, 0.1)', borderRadius: 6, borderLeftWidth: 3, borderLeftColor: '#4ADE80' }}>
                   <Text style={{ color: colors.textSecondary, fontSize: 11 }}>

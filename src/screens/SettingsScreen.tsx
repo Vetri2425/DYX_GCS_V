@@ -764,7 +764,152 @@ const SettingsScreenComponent: React.FC<SettingsScreenProps> = ({ visible, onClo
 
           {/* Content */}
           <ScrollView style={styles.content} contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
-            {/* Voice Settings Section */}
+            {/* 1. RTK Injection Section */}
+            <View style={styles.section}>
+              <View style={styles.sectionHeader}>
+                <Text style={styles.sectionIcon}>�</Text>
+                <Text style={styles.sectionTitle}>RTK Injection</Text>
+              </View>
+
+              <View style={styles.settingRow}>
+                <View style={styles.settingInfo}>
+                  <Text style={styles.settingLabel}>NTRIP Connection</Text>
+                  <Text style={styles.settingDescription}>
+                    {isRTKStreamRunning ? `Connected • ${rtkTotalBytes} bytes received` : 'Not connected - Configure NTRIP caster'}
+                  </Text>
+                </View>
+                <View style={[styles.statusBadge, isRTKStreamRunning ? styles.statusBadgeOn : styles.statusBadgeOff]}>
+                  <Text style={styles.statusBadgeText}>
+                    {isRTKStreamRunning ? 'ACTIVE' : 'INACTIVE'}
+                  </Text>
+                </View>
+              </View>
+
+              <View style={styles.divider} />
+
+              {/* Configure RTK Button */}
+              <TouchableOpacity
+                style={[styles.configureButton, isRTKSubmitting && { opacity: 0.6 }]}
+                onPress={handleOpenRTKModal}
+                disabled={isRTKSubmitting}
+              >
+                <Text style={styles.configureButtonIcon}>{isRTKSubmitting ? '⏳' : '⚙️'}</Text>
+                <View style={styles.configureButtonContent}>
+                  <Text style={styles.configureButtonTitle}>
+                    {isRTKStreamRunning ? 'Manage RTK Connection' : 'Configure RTK Injection'}
+                  </Text>
+                  <Text style={styles.configureButtonDescription}>
+                    {isRTKSubmitting ? 'Processing...' : 'Set up NTRIP caster profiles and start RTK stream'}
+                  </Text>
+                </View>
+                <Text style={styles.configureButtonArrow}>›</Text>
+              </TouchableOpacity>
+
+              {isRTKStreamRunning && (
+                <TouchableOpacity
+                  style={[styles.configureButton, { backgroundColor: '#dc2626', marginTop: 12 }]}
+                  onPress={handleStopRTKStream}
+                  disabled={isRTKSubmitting}
+                >
+                  <Text style={styles.configureButtonIcon}>⏹️</Text>
+                  <View style={styles.configureButtonContent}>
+                    <Text style={[styles.configureButtonTitle, { color: '#fff' }]}>Stop RTK Stream</Text>
+                    <Text style={[styles.configureButtonDescription, { color: '#fca5a5' }]}>
+                      Disconnect from NTRIP caster
+                    </Text>
+                  </View>
+                </TouchableOpacity>
+              )}
+            </View>
+
+            {/* 2. GPS Failsafe Section */}
+            <View style={styles.section}>
+              <View style={styles.sectionHeader}>
+                <Text style={styles.sectionIcon}>🛡️</Text>
+                <Text style={styles.sectionTitle}>GPS Failsafe Mode</Text>
+              </View>
+
+              <View style={styles.settingRow}>
+                <View style={styles.settingInfo}>
+                  <Text style={styles.settingLabel}>Current Mode</Text>
+                  <Text style={styles.settingDescription}>
+                    {gpsFailsafeMode === 'disable'
+                      ? 'Disabled - No GPS accuracy checks'
+                      : gpsFailsafeMode === 'strict'
+                        ? 'Strict - Pause on low accuracy'
+                        : 'Relax - Warning only'}
+                  </Text>
+                </View>
+                <TouchableOpacity
+                  style={styles.changeButton}
+                  onPress={() => setShowFailsafeSelector(true)}
+                  disabled={isMissionActive}
+                >
+                  <Text style={styles.changeButtonText}>
+                    {gpsFailsafeMode.toUpperCase()}
+                  </Text>
+                </TouchableOpacity>
+              </View>
+
+              {isMissionActive && (
+                <View style={styles.warningBox}>
+                  <Text style={styles.warningText}>
+                    ⚠️ Cannot change failsafe mode during active mission
+                  </Text>
+                </View>
+              )}
+            </View>
+
+            {/* 3. Servo Configuration Section */}
+            <View style={styles.section}>
+              <View style={styles.sectionHeader}>
+                <Text style={styles.sectionIcon}>⚡</Text>
+                <Text style={styles.sectionTitle}>Servo Configuration</Text>
+              </View>
+
+              {/* Read-only status toggle */}
+              <View style={styles.settingRow}>
+                <View style={styles.settingInfo}>
+                  <Text style={styles.settingLabel}>Servo Status</Text>
+                  <Text style={styles.settingDescription}>
+                    Current servo state (read-only)
+                  </Text>
+                </View>
+                <View style={[styles.statusBadge, servoEnabled ? styles.statusBadgeOn : styles.statusBadgeOff]}>
+                  <Text style={styles.statusBadgeText}>
+                    {servoEnabled ? 'ENABLED' : 'DISABLED'}
+                  </Text>
+                </View>
+              </View>
+
+              <View style={styles.divider} />
+
+              {/* Configure Servo Button */}
+              <TouchableOpacity
+                style={[styles.configureButton, isLoadingServoModal && { opacity: 0.6 }]}
+                onPress={handleOpenServoConfigModal}
+                disabled={isLoadingServoModal}
+              >
+                <Text style={styles.configureButtonIcon}>{isLoadingServoModal ? '⏳' : '⚙️'}</Text>
+                <View style={styles.configureButtonContent}>
+                  <Text style={styles.configureButtonTitle}>Configure Servo Settings</Text>
+                  <Text style={styles.configureButtonDescription}>
+                    {isLoadingServoModal ? 'Loading config...' : 'Adjust channel, PWM values, timing parameters'}
+                  </Text>
+                </View>
+                <Text style={styles.configureButtonArrow}>›</Text>
+              </TouchableOpacity>
+
+              {servoConfigLoaded && (
+                <View style={styles.infoBox}>
+                  <Text style={styles.infoText}>
+                    📊 Current Config: CH{servoChannel} | PWM ON:{servoPwmOn} OFF:{servoPwmOff} | Delays: {servoDelayBefore.toFixed(1)}s / {servoSprayDuration.toFixed(1)}s / {servoDelayAfter.toFixed(1)}s
+                  </Text>
+                </View>
+              )}
+            </View>
+
+            {/* 4. Voice Settings Section */}
             <View style={styles.section}>
               <View style={styles.sectionHeader}>
                 <Text style={styles.sectionIcon}>🔊</Text>
@@ -858,104 +1003,37 @@ const SettingsScreenComponent: React.FC<SettingsScreenProps> = ({ visible, onClo
               )}
             </View>
 
-            {/* GPS Failsafe Section */}
+            {/* 5. LED Controller Section */}
             <View style={styles.section}>
               <View style={styles.sectionHeader}>
-                <Text style={styles.sectionIcon}>🛡️</Text>
-                <Text style={styles.sectionTitle}>GPS Failsafe Mode</Text>
+                <Text style={styles.sectionIcon}>💡</Text>
+                <Text style={styles.sectionTitle}>LED Controller</Text>
               </View>
 
               <View style={styles.settingRow}>
                 <View style={styles.settingInfo}>
-                  <Text style={styles.settingLabel}>Current Mode</Text>
+                  <Text style={styles.settingLabel}>Enable LED Controller</Text>
                   <Text style={styles.settingDescription}>
-                    {gpsFailsafeMode === 'disable'
-                      ? 'Disabled - No GPS accuracy checks'
-                      : gpsFailsafeMode === 'strict'
-                        ? 'Strict - Pause on low accuracy'
-                        : 'Relax - Warning only'}
+                    Control LED indicator lights for system status
                   </Text>
                 </View>
-                <TouchableOpacity
-                  style={styles.changeButton}
-                  onPress={() => setShowFailsafeSelector(true)}
-                  disabled={isMissionActive}
-                >
-                  <Text style={styles.changeButtonText}>
-                    {gpsFailsafeMode.toUpperCase()}
-                  </Text>
-                </TouchableOpacity>
+                <Switch
+                  value={ledEnabled}
+                  onValueChange={handleLedToggle}
+                  disabled={isLoadingLed}
+                  trackColor={{ false: '#4a5568', true: '#fbbf24' }}
+                  thumbColor={ledEnabled ? '#ffffff' : '#d1d5db'}
+                />
               </View>
 
-              {isMissionActive && (
-                <View style={styles.warningBox}>
-                  <Text style={styles.warningText}>
-                    ⚠️ Cannot change failsafe mode during active mission
-                  </Text>
-                </View>
+              {lastLedUpdate && (
+                <Text style={styles.timestampText}>
+                  Last updated: {lastLedUpdate}
+                </Text>
               )}
             </View>
 
-            {/* Servo Configuration Section */}
-            <View style={styles.section}>
-              <View style={styles.sectionHeader}>
-                <Text style={styles.sectionIcon}>⚡</Text>
-                <Text style={styles.sectionTitle}>Servo Configuration</Text>
-              </View>
-
-              {/* Read-only status toggle */}
-              <View style={styles.settingRow}>
-                <View style={styles.settingInfo}>
-                  <Text style={styles.settingLabel}>Servo Status</Text>
-                  <Text style={styles.settingDescription}>
-                    Current servo state (read-only)
-                  </Text>
-                </View>
-                <View style={[styles.statusBadge, servoEnabled ? styles.statusBadgeOn : styles.statusBadgeOff]}>
-                  <Text style={styles.statusBadgeText}>
-                    {servoEnabled ? 'ENABLED' : 'DISABLED'}
-                  </Text>
-                </View>
-              </View>
-
-              <View style={styles.divider} />
-
-              {/* Configure Servo Button */}
-              <TouchableOpacity
-                style={[styles.configureButton, isLoadingServoModal && { opacity: 0.6 }]}
-                onPress={handleOpenServoConfigModal}
-                disabled={isLoadingServoModal}
-              >
-                <Text style={styles.configureButtonIcon}>{isLoadingServoModal ? '⏳' : '⚙️'}</Text>
-                <View style={styles.configureButtonContent}>
-                  <Text style={styles.configureButtonTitle}>Configure Servo Settings</Text>
-                  <Text style={styles.configureButtonDescription}>
-                    {isLoadingServoModal ? 'Loading config...' : 'Adjust channel, PWM values, timing parameters'}
-                  </Text>
-                </View>
-                <Text style={styles.configureButtonArrow}>›</Text>
-              </TouchableOpacity>
-
-              {servoConfigLoaded && (
-                <View style={styles.infoBox}>
-                  <Text style={styles.infoText}>
-                    📊 Current Config: CH{servoChannel} | PWM ON:{servoPwmOn} OFF:{servoPwmOff} | Delays: {servoDelayBefore.toFixed(1)}s / {servoSprayDuration.toFixed(1)}s / {servoDelayAfter.toFixed(1)}s
-                  </Text>
-                </View>
-              )}
-            </View>
-
-            <View style={[styles.section, styles.sectionDisabled]}>
-              <View style={styles.sectionHeader}>
-                <Text style={styles.sectionIcon}>💧</Text>
-                <Text style={styles.sectionTitle}>Sprayer Configuration</Text>
-                <View style={styles.comingSoonBadge}>
-                  <Text style={styles.comingSoonText}>Coming Soon</Text>
-                </View>
-              </View>
-            </View>
-
-            {/* Obstacle Detection Section */}
+            {/* 6. Obstacle Detection Section */}
             <View style={styles.section}>
               <View style={styles.sectionHeader}>
                 <Text style={styles.sectionIcon}>🚫</Text>
@@ -994,92 +1072,15 @@ const SettingsScreenComponent: React.FC<SettingsScreenProps> = ({ visible, onClo
               )}
             </View>
 
-            {/* LED Controller Section */}
-            <View style={styles.section}>
+            {/* 7. Sprayer Configuration Section */}
+            <View style={[styles.section, styles.sectionDisabled]}>
               <View style={styles.sectionHeader}>
-                <Text style={styles.sectionIcon}>💡</Text>
-                <Text style={styles.sectionTitle}>LED Controller</Text>
-              </View>
-
-              <View style={styles.settingRow}>
-                <View style={styles.settingInfo}>
-                  <Text style={styles.settingLabel}>Enable LED Controller</Text>
-                  <Text style={styles.settingDescription}>
-                    Control LED indicator lights for system status
-                  </Text>
-                </View>
-                <Switch
-                  value={ledEnabled}
-                  onValueChange={handleLedToggle}
-                  disabled={isLoadingLed}
-                  trackColor={{ false: '#4a5568', true: '#fbbf24' }}
-                  thumbColor={ledEnabled ? '#ffffff' : '#d1d5db'}
-                />
-              </View>
-
-              {lastLedUpdate && (
-                <Text style={styles.timestampText}>
-                  Last updated: {lastLedUpdate}
-                </Text>
-              )}
-            </View>
-
-            {/* RTK Injection Section */}
-            <View style={styles.section}>
-              <View style={styles.sectionHeader}>
-                <Text style={styles.sectionIcon}>📡</Text>
-                <Text style={styles.sectionTitle}>RTK Injection</Text>
-              </View>
-
-              <View style={styles.settingRow}>
-                <View style={styles.settingInfo}>
-                  <Text style={styles.settingLabel}>NTRIP Connection</Text>
-                  <Text style={styles.settingDescription}>
-                    {isRTKStreamRunning ? `Connected • ${rtkTotalBytes} bytes received` : 'Not connected - Configure NTRIP caster'}
-                  </Text>
-                </View>
-                <View style={[styles.statusBadge, isRTKStreamRunning ? styles.statusBadgeOn : styles.statusBadgeOff]}>
-                  <Text style={styles.statusBadgeText}>
-                    {isRTKStreamRunning ? 'ACTIVE' : 'INACTIVE'}
-                  </Text>
+                <Text style={styles.sectionIcon}>💧</Text>
+                <Text style={styles.sectionTitle}>Sprayer Configuration</Text>
+                <View style={styles.comingSoonBadge}>
+                  <Text style={styles.comingSoonText}>Coming Soon</Text>
                 </View>
               </View>
-
-              <View style={styles.divider} />
-
-              {/* Configure RTK Button */}
-              <TouchableOpacity
-                style={[styles.configureButton, isRTKSubmitting && { opacity: 0.6 }]}
-                onPress={handleOpenRTKModal}
-                disabled={isRTKSubmitting}
-              >
-                <Text style={styles.configureButtonIcon}>{isRTKSubmitting ? '⏳' : '⚙️'}</Text>
-                <View style={styles.configureButtonContent}>
-                  <Text style={styles.configureButtonTitle}>
-                    {isRTKStreamRunning ? 'Manage RTK Connection' : 'Configure RTK Injection'}
-                  </Text>
-                  <Text style={styles.configureButtonDescription}>
-                    {isRTKSubmitting ? 'Processing...' : 'Set up NTRIP caster profiles and start RTK stream'}
-                  </Text>
-                </View>
-                <Text style={styles.configureButtonArrow}>›</Text>
-              </TouchableOpacity>
-
-              {isRTKStreamRunning && (
-                <TouchableOpacity
-                  style={[styles.configureButton, { backgroundColor: '#dc2626', marginTop: 12 }]}
-                  onPress={handleStopRTKStream}
-                  disabled={isRTKSubmitting}
-                >
-                  <Text style={styles.configureButtonIcon}>⏹️</Text>
-                  <View style={styles.configureButtonContent}>
-                    <Text style={[styles.configureButtonTitle, { color: '#fff' }]}>Stop RTK Stream</Text>
-                    <Text style={[styles.configureButtonDescription, { color: '#fca5a5' }]}>
-                      Disconnect from NTRIP caster
-                    </Text>
-                  </View>
-                </TouchableOpacity>
-              )}
             </View>
           </ScrollView>
 

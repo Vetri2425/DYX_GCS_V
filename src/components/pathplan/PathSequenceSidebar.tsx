@@ -112,6 +112,15 @@ export const PathSequenceSidebar: React.FC<Props> = ({
         setEditingWaypoint(null);
     };
 
+    const handleReverseWaypoints = () => {
+        const reversed = [...waypoints].reverse().map((wp, index) => ({
+            ...wp,
+            id: index + 1,
+        }));
+
+        onUpdateWaypoints?.(recalculateWaypointDistances(reversed));
+    };
+
     const toggleBulkDeleteMode = () => {
         setBulkDeleteMode(!bulkDeleteMode);
         setSelectedWaypoints([]); // Clear selections when toggling mode
@@ -278,6 +287,22 @@ export const PathSequenceSidebar: React.FC<Props> = ({
                             <Text style={{ fontSize: 28, fontWeight: 'bold', color: colors.text }}>Marking Points Table</Text>
                             <View style={{ flexDirection: 'row', gap: 12 }}>
                                 <TouchableOpacity
+                                    onPress={handleReverseWaypoints}
+                                    disabled={waypoints.length < 2}
+                                    style={{
+                                        paddingHorizontal: 20,
+                                        paddingVertical: 14,
+                                        backgroundColor: waypoints.length < 2 ? '#555' : colors.blueBtn,
+                                        borderRadius: 12,
+                                        opacity: waypoints.length < 2 ? 0.5 : 1,
+                                        flexDirection: 'row',
+                                        alignItems: 'center',
+                                        justifyContent: 'center'
+                                    }}
+                                >
+                                    <Text style={{ fontSize: 16, color: '#fff', fontWeight: '700', textAlign: 'center' }}>Reverse Coordinates</Text>
+                                </TouchableOpacity>
+                                <TouchableOpacity
                                     onPress={() => {
                                         if (waypoints.length === 0) return;
                                         if (onUpdateWaypoints) {
@@ -305,7 +330,10 @@ export const PathSequenceSidebar: React.FC<Props> = ({
                                         paddingVertical: 14,
                                         backgroundColor: waypoints.length === 0 ? '#555' : '#dc2626',
                                         borderRadius: 12,
-                                        opacity: waypoints.length === 0 ? 0.5 : 1
+                                        opacity: waypoints.length === 0 ? 0.5 : 1,
+                                        flexDirection: 'row',
+                                        alignItems: 'center',
+                                        justifyContent: 'center'
                                     }}
                                 >
                                     <Text style={{ fontSize: 16, color: '#fff', fontWeight: '700' }}>🗑️ Delete All</Text>
