@@ -20,7 +20,8 @@ import { ManualControlPanel } from '../components/pathplan/ManualControlPanel';
 import { FailsafeModeSelector } from '../components/pathplan/FailsafeModeSelector';
 import { FailsafeStrictPopup } from '../components/pathplan/FailsafeStrictPopup';
 import { FailsafeRelaxNotification } from '../components/pathplan/FailsafeRelaxNotification';
-import { haversineDistance, recalculateWaypointDistances } from '../utils/missionCalculator';
+import { MapVisualizationControls, MapVisualization } from '../components/pathplan/MapVisualizationControls';
+import { vincentyDistance, recalculateWaypointDistances } from '../utils/missionCalculator';
 import { textToWaypointPath } from '../utils/textToPath';
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system/legacy';
@@ -91,7 +92,7 @@ export default function PathPlanScreen() {
         const cfg = res?.message || res?.config || res?.data || res;
         if (typeof cfg?.servo_enabled === 'boolean') {
           setGlobalServoEnabled(cfg.servo_enabled);
-          console.log('[PathPlan] Servo config loaded:', cfg.servo_enabled);
+          //console.log('[PathPlan] Servo config loaded:', cfg.servo_enabled);
         }
       } catch (err) {
         console.error('[PathPlan] Failed to fetch servo config:', err);
@@ -223,16 +224,26 @@ export default function PathPlanScreen() {
   // Drawing tools panel collapse state
   const [isDrawingToolsCollapsed, setIsDrawingToolsCollapsed] = useState(false);
 
+  // Map visualization controls state
+  const [mapVisualization, setMapVisualization] = useState<MapVisualization>({
+    distanceLabel: true,
+    angleLabel: true,
+    snapFeature: true,
+    roverIcon: true,
+    waypointPreview: true,
+  });
+
   // Load persisted PathPlan state on mount
   useEffect(() => {
     const loadPersistedState = async () => {
       try {
-        const [savedHomePosition, savedDrawSettings, savedDrawingMode, savedActiveTool, savedUIState] = await Promise.all([
+        const [savedHomePosition, savedDrawSettings, savedDrawingMode, savedActiveTool, savedUIState, savedMapVisualization] = await Promise.all([
           PersistentStorage.loadHomePosition(),
           PersistentStorage.loadDrawSettings(),
           PersistentStorage.loadDrawingMode(),
           PersistentStorage.loadActiveTool(),
           PersistentStorage.loadPathPlanUIState(),
+          PersistentStorage.loadMapVisualization(),
         ]);
 
         if (savedHomePosition) {
@@ -266,6 +277,12 @@ export default function PathPlanScreen() {
             console.log('[PathPlanScreen] 📂 Restored drawing tools collapsed:', savedUIState.isDrawingToolsCollapsed);
           }
           // Map center and zoom are restored by the map component itself
+        }
+
+        // Restore map visualization settings
+        if (savedMapVisualization) {
+          setMapVisualization(savedMapVisualization);
+          console.log('[PathPlanScreen] 📂 Restored map visualization settings');
         }
       } catch (error) {
         console.error('[PathPlanScreen] Failed to load persisted state:', error);
@@ -368,7 +385,14 @@ export default function PathPlanScreen() {
         console.error('[PathPlanScreen] Failed to persist UI state:', error);
       });
     }, 300);
-  }, [homePosition, drawSettings, isDrawingMode, activeDrawingTool, selectedWaypoint, isDrawingToolsCollapsed]);
+
+    // Map visualization settings - 300ms debounce
+    autoSaveTimersRef.current.mapVisualization = setTimeout(() => {
+      PersistentStorage.saveMapVisualization(mapVisualization).catch(error => {
+        console.error('[PathPlanScreen] Failed to persist map visualization settings:', error);
+      });
+    }, 300);
+  }, [homePosition, drawSettings, isDrawingMode, activeDrawingTool, selectedWaypoint, isDrawingToolsCollapsed, mapVisualization]);
 
   // Single consolidated useEffect for all auto-saves
   useEffect(() => {
@@ -400,7 +424,7 @@ export default function PathPlanScreen() {
     const lastWp = waypoints[waypoints.length - 1];
 
     const dist = lastWp
-      ? haversineDistance(
+      ? vincentyDistance(
         { lat: lastWp.lat, lon: lastWp.lon },
         { lat: coord.latitude, lon: coord.longitude }
       )
@@ -441,7 +465,7 @@ export default function PathPlanScreen() {
         // Update the dragged waypoint's coordinates
         const prevWp = index > 0 ? waypoints[index - 1] : null;
         const distance = prevWp
-          ? haversineDistance(
+          ? vincentyDistance(
             { lat: prevWp.lat, lon: prevWp.lon },
             { lat: coord.latitude, lon: coord.longitude }
           )
@@ -455,7 +479,7 @@ export default function PathPlanScreen() {
         };
       } else if (index > 0 && waypoints[index - 1].id === id) {
         // Recalculate distance for the waypoint AFTER the dragged one
-        const distance = haversineDistance(
+        const distance = vincentyDistance(
           { lat: coord.latitude, lon: coord.longitude },
           { lat: wp.lat, lon: wp.lon }
         );
@@ -495,7 +519,7 @@ export default function PathPlanScreen() {
       const prevWp = index > 0 ? { lat: coords[index - 1].latitude, lon: coords[index - 1].longitude } : lastWp;
 
       const dist = prevWp
-        ? haversineDistance(
+        ? vincentyDistance(
           { lat: prevWp.lat, lon: prevWp.lon },
           { lat: coord.latitude, lon: coord.longitude }
         )
@@ -555,7 +579,7 @@ export default function PathPlanScreen() {
       }
 
       const dist = lastValidWp
-        ? haversineDistance(
+        ? vincentyDistance(
           { lat: lastValidWp.lat, lon: lastValidWp.lon },
           { lat: coord.latitude, lon: coord.longitude }
         )
@@ -610,7 +634,7 @@ export default function PathPlanScreen() {
 
       // Calculate distance from previous waypoint
       const dist = lastValidWp
-        ? haversineDistance(
+        ? vincentyDistance(
           { lat: lastValidWp.lat, lon: lastValidWp.lon },
           { lat: coord.latitude, lon: coord.longitude }
         )
@@ -670,6 +694,14 @@ export default function PathPlanScreen() {
 
   const handleUpdateWaypoints = (updatedWaypoints: PathPlanWaypoint[]) => {
     updateWaypoints(updatedWaypoints);
+  };
+
+  // Map visualization toggle handler
+  const handleMapVisualizationToggle = (key: keyof MapVisualization) => {
+    setMapVisualization(prev => ({
+      ...prev,
+      [key]: !prev[key],
+    }));
   };
 
   const reverseWaypointOrder = useCallback((inputWaypoints: PathPlanWaypoint[]): PathPlanWaypoint[] => {
@@ -957,7 +989,7 @@ export default function PathPlanScreen() {
         return { ...wp, distance: 0 };
       }
       const prev = waypoints[idx - 1];
-      const dist = haversineDistance(
+      const dist = vincentyDistance(
         { lat: prev.lat, lon: prev.lon },
         { lat: wp.lat, lon: wp.lon }
       );
@@ -1641,6 +1673,8 @@ export default function PathPlanScreen() {
               onToggleFullscreen={toggleMapFullscreen}
               isManualConnectionMode={isConnectingPath}
               manualConnections={manualPathConnections}
+              visualization={mapVisualization}
+              onVisualizationToggle={handleMapVisualizationToggle}
             />
           </View>
         ) : (
@@ -1694,6 +1728,8 @@ export default function PathPlanScreen() {
                   onToggleFullscreen={toggleMapFullscreen}
                   isManualConnectionMode={isConnectingPath}
                   manualConnections={manualPathConnections}
+                  visualization={mapVisualization}
+                  onVisualizationToggle={handleMapVisualizationToggle}
                 />
               </View>
             </View>
@@ -1756,7 +1792,7 @@ export default function PathPlanScreen() {
                       return { ...wp, distance: 0 };
                     }
                     const prevWp = connectedWaypoints[idx - 1];
-                    const dist = haversineDistance(
+                    const dist = vincentyDistance(
                       { lat: prevWp.lat, lon: prevWp.lon },
                       { lat: wp.lat, lon: wp.lon }
                     );
@@ -1801,7 +1837,7 @@ export default function PathPlanScreen() {
                       return { ...wp, distance: 0 };
                     }
                     const prev = connectedWaypoints[idx - 1];
-                    const dist = haversineDistance(
+                    const dist = vincentyDistance(
                       { lat: prev.lat, lon: prev.lon },
                       { lat: wp.lat, lon: wp.lon }
                     );

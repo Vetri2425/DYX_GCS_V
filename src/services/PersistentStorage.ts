@@ -21,6 +21,7 @@ const STORAGE_KEYS = {
   PATHPLAN_DRAW_SETTINGS: '@pathplan/draw_settings',
   PATHPLAN_DRAWING_MODE: '@pathplan/drawing_mode',
   PATHPLAN_ACTIVE_TOOL: '@pathplan/active_tool',
+  PATHPLAN_MAP_VISUALIZATION: '@pathplan/map_visualization',
   APP_STATE: '@app/state',
   LAST_SAVE_TIMESTAMP: '@app/last_save',
   CRASH_RECOVERY_DATA: '@crash/recovery',
@@ -834,6 +835,50 @@ class PersistentStorageService {
       return null;
     } catch (error) {
       console.error('[Storage] ❌ Failed to load PathPlan UI state:', error);
+      return null;
+    }
+  }
+
+  /**
+   * Save map visualization settings (distance labels, angle labels, snap feature, etc.)
+   */
+  async saveMapVisualization(settings: {
+    distanceLabel: boolean;
+    angleLabel: boolean;
+    snapFeature: boolean;
+    roverIcon: boolean;
+    waypointPreview: boolean;
+  }): Promise<boolean> {
+    try {
+      await AsyncStorage.setItem(STORAGE_KEYS.PATHPLAN_MAP_VISUALIZATION, JSON.stringify(settings));
+      console.log('[Storage] ✅ Saved map visualization settings');
+      return true;
+    } catch (error) {
+      console.error('[Storage] ❌ Failed to save map visualization settings:', error);
+      return false;
+    }
+  }
+
+  /**
+   * Load map visualization settings
+   */
+  async loadMapVisualization(): Promise<{
+    distanceLabel: boolean;
+    angleLabel: boolean;
+    snapFeature: boolean;
+    roverIcon: boolean;
+    waypointPreview: boolean;
+  } | null> {
+    try {
+      const data = await AsyncStorage.getItem(STORAGE_KEYS.PATHPLAN_MAP_VISUALIZATION);
+      if (data) {
+        const settings = JSON.parse(data);
+        console.log('[Storage] 📂 Loaded map visualization settings');
+        return settings;
+      }
+      return null;
+    } catch (error) {
+      console.error('[Storage] ❌ Failed to load map visualization settings:', error);
       return null;
     }
   }

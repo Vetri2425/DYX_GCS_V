@@ -59,20 +59,26 @@ export function RoverProvider({ children }: RoverProviderProps): React.ReactElem
   const [gpsFailsafeMode, setGpsFailsafeModeState] = useState<GpsFailsafeMode>('disable');
   const [gpsFailsafeStatus, setGpsFailsafeStatus] = useState<GpsFailsafeStatus | null>(null);
 
-  // Load TTS language from AsyncStorage on mount
+  // Load TTS language and mission mode from AsyncStorage on mount
   useEffect(() => {
-    const loadTTSLanguage = async () => {
+    const loadPersistedData = async () => {
       try {
         const savedLanguage = await AsyncStorage.getItem(TTS_LANGUAGE_STORAGE_KEY);
         if (savedLanguage) {
           console.log('[RoverContext] Loaded TTS language:', savedLanguage);
           setTTSLanguageState(savedLanguage);
         }
+
+        const savedMissionMode = await PersistentStorage.loadMissionMode();
+        if (savedMissionMode) {
+          console.log('[RoverContext] Loaded mission mode:', savedMissionMode);
+          setMissionModeState(savedMissionMode);
+        }
       } catch (error) {
-        console.error('[RoverContext] Failed to load TTS language:', error);
+        console.error('[RoverContext] Failed to load persisted data:', error);
       }
     };
-    loadTTSLanguage();
+    loadPersistedData();
   }, []);
 
   // Update GPS failsafe status from telemetry
@@ -123,6 +129,10 @@ export function RoverProvider({ children }: RoverProviderProps): React.ReactElem
   const setMissionMode = useCallback((mode: string) => {
     setMissionModeState(mode);
     console.log('[RoverContext] Mission mode updated:', mode);
+    // Persist mission mode to storage
+    PersistentStorage.saveMissionMode(mode).catch(error => {
+      console.error('[RoverContext] Failed to persist mission mode:', error);
+    });
   }, []);
 
   const setTTSLanguage = useCallback(async (language: string) => {
@@ -166,17 +176,17 @@ export function RoverProvider({ children }: RoverProviderProps): React.ReactElem
     }
   }, [rover.socket]);
 
-  // Listen for GPS failsafe events
+  // Listen for GPS failsafe events and mission mode updates
   useEffect(() => {
     if (!rover.socket || rover.connectionState !== 'connected') {
       // Only log when connection state changes to avoid spam
       if (rover.connectionState !== 'connecting') {
-        console.log('[RoverContext] ⚠️ Socket not ready for GPS failsafe listener. Connection state:', rover.connectionState);
+        console.log('[RoverContext] ⚠️ Socket not ready for listeners. Connection state:', rover.connectionState);
       }
       return;
     }
 
-    console.log('[RoverContext] 🔌 Registering GPS failsafe listeners. Connection state:', rover.connectionState);
+    console.log('[RoverContext] 🔌 Registering listeners. Connection state:', rover.connectionState);
 
     const handleServoSuppressed = (event: GpsFailsafeEvent) => {
       console.log('[RoverContext] 🚫 Servo suppressed event:', event);
@@ -194,9 +204,23 @@ export function RoverProvider({ children }: RoverProviderProps): React.ReactElem
       console.log('✅ State updated to:', data.mode);
     };
 
+    // Handle mission mode updates from backend mission events
+    const handleMissionModeUpdate = (event: any) => {
+      if (event.mission_mode) {
+        const backendMode = String(event.mission_mode).trim();
+        console.log('[RoverContext] 📡 Mission mode from backend:', backendMode);
+        setMissionModeState(backendMode);
+        // Persist to storage
+        PersistentStorage.saveMissionMode(backendMode).catch(error => {
+          console.error('[RoverContext] Failed to persist mission mode from backend:', error);
+        });
+      }
+    };
+
     rover.socket.on('servo_suppressed', handleServoSuppressed);
     rover.socket.on('failsafe_mode_changed', handleFailsafeModeChanged);
-    console.log('[RoverContext] ✅ GPS failsafe listeners registered');
+    rover.socket.on('mission_status', handleMissionModeUpdate);
+    console.log('[RoverContext] ✅ Listeners registered');
 
     // ✅ FIX: Request current GPS failsafe mode after registering listener
     // This prevents race condition where backend sends mode before listener is ready
@@ -204,9 +228,10 @@ export function RoverProvider({ children }: RoverProviderProps): React.ReactElem
     rover.socket.emit('request_gps_failsafe_mode');
 
     return () => {
-      console.log('[RoverContext] 🔌 Unregistering GPS failsafe listeners');
+      console.log('[RoverContext] 🔌 Unregistering listeners');
       rover.socket?.off('servo_suppressed', handleServoSuppressed);
       rover.socket?.off('failsafe_mode_changed', handleFailsafeModeChanged);
+      rover.socket?.off('mission_status', handleMissionModeUpdate);
     };
   }, [rover.socket, rover.connectionState]);
 

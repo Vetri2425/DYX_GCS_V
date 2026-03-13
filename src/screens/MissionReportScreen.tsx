@@ -1966,6 +1966,7 @@ export default function MissionReportScreen() {
                 onNext={handleNext}
                 onSkip={handleSkip}
                 waypoints={waypoints}
+                missionMode={missionMode}
                 isMissionActive={isMissionActive}
               />
             </View>

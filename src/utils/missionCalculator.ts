@@ -172,6 +172,108 @@ export const calculateMissionStatistics = (
 export const haversineDistance = calculateDistance;
 
 /**
+ * Calculate distance between two points using Vincenty's inverse formula (Karney method).
+ * Uses WGS84 ellipsoid for sub-millimeter accuracy (±0.5mm).
+ * Falls back to Haversine if iteration doesn't converge.
+ */
+export const vincentyDistance = (
+    wp1: { lat: number; lon: number },
+    wp2: { lat: number; lon: number }
+): number => {
+    // Validate input coordinates
+    if (!wp1 || !wp2 ||
+        !Number.isFinite(wp1.lat) || !Number.isFinite(wp1.lon) ||
+        !Number.isFinite(wp2.lat) || !Number.isFinite(wp2.lon)) {
+        console.warn('[missionCalculator] vincentyDistance: Invalid coordinates:', { wp1, wp2 });
+        return 0;
+    }
+
+    if (Math.abs(wp1.lat) > 90 || Math.abs(wp2.lat) > 90) return 0;
+    if (Math.abs(wp1.lon) > 180 || Math.abs(wp2.lon) > 180) return 0;
+
+    // WGS84 ellipsoid parameters
+    const a = 6378137.0;           // Semi-major axis (meters)
+    const f = 1 / 298.257223563;   // Flattening
+    const b = a * (1 - f);         // Semi-minor axis
+
+    const toRad = (deg: number) => deg * Math.PI / 180;
+
+    const phi1 = toRad(wp1.lat);
+    const phi2 = toRad(wp2.lat);
+    const L = toRad(wp2.lon - wp1.lon);
+
+    // Reduced latitudes
+    const U1 = Math.atan((1 - f) * Math.tan(phi1));
+    const U2 = Math.atan((1 - f) * Math.tan(phi2));
+    const sinU1 = Math.sin(U1), cosU1 = Math.cos(U1);
+    const sinU2 = Math.sin(U2), cosU2 = Math.cos(U2);
+
+    // Coincident points
+    if (Math.abs(wp1.lat - wp2.lat) < 1e-12 && Math.abs(wp1.lon - wp2.lon) < 1e-12) {
+        return 0;
+    }
+
+    let lambda = L;
+    let lambdaPrev: number;
+    let sinSigma: number, cosSigma: number, sigma: number;
+    let sinAlpha: number, cos2Alpha: number, cos2SigmaM: number;
+    let C: number;
+    const maxIterations = 200;
+
+    for (let i = 0; i < maxIterations; i++) {
+        const sinLambda = Math.sin(lambda);
+        const cosLambda = Math.cos(lambda);
+
+        sinSigma = Math.sqrt(
+            (cosU2 * sinLambda) ** 2 +
+            (cosU1 * sinU2 - sinU1 * cosU2 * cosLambda) ** 2
+        );
+
+        if (sinSigma === 0) return 0; // Coincident points
+
+        cosSigma = sinU1 * sinU2 + cosU1 * cosU2 * cosLambda;
+        sigma = Math.atan2(sinSigma, cosSigma);
+
+        sinAlpha = (cosU1 * cosU2 * sinLambda) / sinSigma;
+        cos2Alpha = 1 - sinAlpha ** 2;
+
+        cos2SigmaM = cos2Alpha !== 0
+            ? cosSigma - (2 * sinU1 * sinU2) / cos2Alpha
+            : 0; // Equatorial line
+
+        C = (f / 16) * cos2Alpha * (4 + f * (4 - 3 * cos2Alpha));
+
+        lambdaPrev = lambda;
+        lambda = L + (1 - C) * f * sinAlpha * (
+            sigma + C * sinSigma * (
+                cos2SigmaM + C * cosSigma * (-1 + 2 * cos2SigmaM ** 2)
+            )
+        );
+
+        if (Math.abs(lambda - lambdaPrev) < 1e-12) {
+            // Converged - calculate distance
+            const u2 = cos2Alpha * (a ** 2 - b ** 2) / (b ** 2);
+            const A = 1 + (u2 / 16384) * (4096 + u2 * (-768 + u2 * (320 - 175 * u2)));
+            const B = (u2 / 1024) * (256 + u2 * (-128 + u2 * (74 - 47 * u2)));
+
+            const deltaSigma = B * sinSigma * (
+                cos2SigmaM + (B / 4) * (
+                    cosSigma * (-1 + 2 * cos2SigmaM ** 2) -
+                    (B / 6) * cos2SigmaM * (-3 + 4 * sinSigma ** 2) * (-3 + 4 * cos2SigmaM ** 2)
+                )
+            );
+
+            const distance = b * A * (sigma - deltaSigma);
+            return Number.isFinite(distance) && distance >= 0 ? distance : 0;
+        }
+    }
+
+    // Failed to converge (antipodal points) - fall back to Haversine
+    console.warn('[missionCalculator] Vincenty failed to converge, using Haversine fallback');
+    return calculateDistance(wp1, wp2);
+};
+
+/**
  * Recalculate distances for all waypoints after reordering.
  * First waypoint gets distance = 0, subsequent ones get distance from previous.
  */

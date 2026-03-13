@@ -4,6 +4,7 @@ import { WebView } from 'react-native-webview';
 import { Fontisto } from '@expo/vector-icons';
 import { colors } from '../../theme/colors';
 import { PathPlanWaypoint, DrawingMode } from '../../types/pathplan';
+import { MapVisualizationControls, MapVisualization } from './MapVisualizationControls';
 
 interface Props {
   waypoints: PathPlanWaypoint[];
@@ -30,6 +31,20 @@ interface Props {
   isManualConnectionMode?: boolean;
   manualConnections?: number[];
   manualConnectionMode?: 'tap' | 'drag' | 'pan';
+  visualization?: {
+    distanceLabel: boolean;
+    angleLabel: boolean;
+    snapFeature: boolean;
+    roverIcon: boolean;
+    waypointPreview: boolean;
+  };
+  onVisualizationToggle?: (key: keyof {
+    distanceLabel: boolean;
+    angleLabel: boolean;
+    snapFeature: boolean;
+    roverIcon: boolean;
+    waypointPreview: boolean;
+  }) => void;
 }
 
 export const PathPlanMap: React.FC<Props> = ({
@@ -52,6 +67,14 @@ export const PathPlanMap: React.FC<Props> = ({
   isManualConnectionMode = false,
   manualConnections = [],
   manualConnectionMode = 'tap',
+  visualization = {
+    distanceLabel: true,
+    angleLabel: true,
+    snapFeature: true,
+    roverIcon: true,
+    waypointPreview: true,
+  },
+  onVisualizationToggle,
 }) => {
   const webViewRef = useRef<WebView | null>(null);
   const [mapReady, setMapReady] = useState(false);
@@ -269,13 +292,66 @@ export const PathPlanMap: React.FC<Props> = ({
       
       marker.on('click', function(e) {
         L.DomEvent.stopPropagation(e);
+        // Activate ortho guide for this waypoint - mark as intentionally activated
+        if (window.orthoGuideState) {
+          window.orthoGuideState.lastWaypoint = { lat: wp.lat, lon: wp.lon };
+          window.orthoGuideState.isIntentionallyActivated = true;  // User clicked this waypoint
+        }
         window.ReactNativeWebView.postMessage(JSON.stringify({
           type: 'waypointClick',
           id: wp.id
         }));
       });
 
+      marker.on('dragstart', function(e) {
+        window.dragPreviewState.isDragging = true;
+        window.dragPreviewState.draggingWpIndex = index;
+        // Hide main polyline during drag for cleaner visuals
+        if (missionPolyline) missionPolyline.setStyle({ opacity: 0.3 });
+        
+        // Activate ortho guide ONLY if:
+        // 1. User intentionally clicked this waypoint first, OR
+        // 2. This is the last waypoint (for creating new waypoints)
+        if (window.orthoGuideState) {
+          const isLastWaypoint = index === waypoints.length - 1;
+          const wasIntentionallyActivated = window.orthoGuideState.isIntentionallyActivated && 
+                                            window.orthoGuideState.lastWaypoint && 
+                                            window.orthoGuideState.lastWaypoint.lat === wp.lat &&
+                                            window.orthoGuideState.lastWaypoint.lon === wp.lon;
+          
+          if (isLastWaypoint || wasIntentionallyActivated) {
+            // For last waypoint: use previous waypoint as reference
+            // For intentionally selected: use the waypoint itself as reference
+            if (isLastWaypoint && index > 0) {
+              const prevWp = waypoints[index - 1];
+              window.orthoGuideState.lastWaypoint = { lat: prevWp.lat, lon: prevWp.lon };
+            }
+            // If intentionally activated, lastWaypoint is already set from click
+          } else {
+            // Not intentionally activated and not last waypoint - disable ortho snap
+            window.orthoGuideState.isIntentionallyActivated = false;
+            window.orthoGuideState.lastWaypoint = null;
+          }
+        }
+      });
+
+      marker.on('drag', function(e) {
+        const pos = e.target.getLatLng();
+        updateDragPreview(pos, index, waypoints);
+        // Update ortho guide during drag - DISABLED in manual connection mode
+        if (window.orthoGuideState && window.updateOrthoGuide && !window.isManualConnectionMode) {
+          window.updateOrthoGuide(pos);
+        }
+      });
+
       marker.on('dragend', function(e) {
+        clearDragPreview();
+        // Clear ortho guide after drag and reset intentional activation flag
+        if (window.orthoGuideState && window.clearOrthoGuide) {
+          window.clearOrthoGuide();
+          window.orthoGuideState.isIntentionallyActivated = false;
+        }
+        if (missionPolyline) missionPolyline.setStyle({ opacity: 1 });
         const newPos = e.target.getLatLng();
         window.ReactNativeWebView.postMessage(JSON.stringify({
           type: 'waypointDrag',
@@ -374,7 +450,203 @@ export const PathPlanMap: React.FC<Props> = ({
       // console.log('[PathPlanMap] Rover position not available - hasPosition:', roverData.hasPosition);
     }
     
+    // ========== ORTHO SNAP FEATURE (IMPROVED) ==========
+    window.ORTHO_ANGLES = [0, 30, 60, 90, 120, 150, 180, 210, 240, 270, 300, 330];
+    window.ORTHO_SNAP_THRESHOLD = 5; // degrees - snap when within 5° of target angle
+    window.orthoGuideState = {
+      lastWaypoint: null,
+      guideLine: null,
+      angleLabel: null,
+      isActive: false,
+      currentBearing: null,
+      isIntentionallyActivated: false  // Flag: true only if user clicked a waypoint first
+    };
+
+    // ========== MAP VISUALIZATION STATE ==========
+    window.mapVisualization = {
+      distanceLabel: true,
+      angleLabel: true,
+      snapFeature: true,
+      roverIcon: true,
+      waypointPreview: true
+    };
+    
+    // ========== MANUAL CONNECTION MODE STATE ==========
+    window.isManualConnectionMode = false;
+
+    window.calculateBearing = function(lat1, lon1, lat2, lon2) {
+      const dLon = (lon2 - lon1) * Math.PI / 180;
+      const lat1Rad = lat1 * Math.PI / 180;
+      const lat2Rad = lat2 * Math.PI / 180;
+      const y = Math.sin(dLon) * Math.cos(lat2Rad);
+      const x = Math.cos(lat1Rad) * Math.sin(lat2Rad) - Math.sin(lat1Rad) * Math.cos(lat2Rad) * Math.cos(dLon);
+      let bearing = Math.atan2(y, x) * 180 / Math.PI;
+      return (bearing + 360) % 360;
+    };
+
+    window.getSnappedAngle = function(bearing) {
+      for (const angle of window.ORTHO_ANGLES) {
+        const diff = Math.abs(bearing - angle);
+        if (diff < window.ORTHO_SNAP_THRESHOLD || diff > 360 - window.ORTHO_SNAP_THRESHOLD) {
+          return angle;
+        }
+      }
+      return null;
+    };
+
+    window.calculatePointAtBearing = function(lat, lon, bearing, distanceMeters) {
+      const R = 6371000; // Earth radius in meters
+      const lat1 = lat * Math.PI / 180;
+      const lon1 = lon * Math.PI / 180;
+      const brng = bearing * Math.PI / 180;
+      const d = distanceMeters / R;
+
+      const lat2 = Math.asin(Math.sin(lat1) * Math.cos(d) + Math.cos(lat1) * Math.sin(d) * Math.cos(brng));
+      const lon2 = lon1 + Math.atan2(Math.sin(brng) * Math.sin(d) * Math.cos(lat1), Math.cos(d) - Math.sin(lat1) * Math.sin(lat2));
+
+      return L.latLng(lat2 * 180 / Math.PI, lon2 * 180 / Math.PI);
+    };
+
+    window.updateOrthoGuide = function(currentLatLng) {
+      if (!window.orthoGuideState.lastWaypoint) return;
+      
+      // Check if snap feature is enabled
+      if (!window.mapVisualization || !window.mapVisualization.snapFeature) {
+        window.clearOrthoGuide();
+        return;
+      }
+
+      const lastWp = window.orthoGuideState.lastWaypoint;
+      const bearing = window.calculateBearing(lastWp.lat, lastWp.lon, currentLatLng.lat, currentLatLng.lng);
+      const snappedAngle = window.getSnappedAngle(bearing);
+      window.orthoGuideState.currentBearing = bearing;
+
+      if (snappedAngle !== null) {
+        // Calculate snapped position at same distance
+        const dist = vincentyDistanceJS(lastWp.lat, lastWp.lon, currentLatLng.lat, currentLatLng.lng);
+        const snappedLatLng = window.calculatePointAtBearing(lastWp.lat, lastWp.lon, snappedAngle, dist);
+
+        // Update guide line - GREEN for snapped angles (always show when snap is enabled)
+        if (window.orthoGuideState.guideLine) {
+          window.orthoGuideState.guideLine.setLatLngs([L.latLng(lastWp.lat, lastWp.lon), snappedLatLng]);
+          window.orthoGuideState.guideLine.setStyle({ color: '#10b981', weight: 3, dashArray: '8, 4', opacity: 0.9 });
+        } else {
+          window.orthoGuideState.guideLine = L.polyline(
+            [[lastWp.lat, lastWp.lon], snappedLatLng],
+            { color: '#10b981', weight: 3, dashArray: '8, 4', opacity: 0.9, zIndex: 500 }
+          ).addTo(map);
+        }
+
+        // Update angle label - GREEN for snapped angles (only if angle label is enabled)
+        if (window.mapVisualization && window.mapVisualization.angleLabel) {
+          const midLat = (lastWp.lat + snappedLatLng.lat) / 2;
+          const midLng = (lastWp.lon + snappedLatLng.lng) / 2;
+          const labelHtml = '<div style="background:rgba(16,185,129,0.95);color:white;padding:4px 8px;border-radius:4px;font-size:12px;font-weight:700;border:2px solid rgba(16,185,129,0.8);white-space:nowrap;font-family:monospace;display:inline-block;min-width:50px;text-align:center;">' + snappedAngle.toFixed(0) + '°</div>';
+
+          if (window.orthoGuideState.angleLabel) {
+            window.orthoGuideState.angleLabel.setLatLng(L.latLng(midLat, midLng));
+            window.orthoGuideState.angleLabel.getElement().innerHTML = labelHtml;
+            window.orthoGuideState.angleLabel.setOpacity(1);
+          } else {
+            window.orthoGuideState.angleLabel = L.marker(L.latLng(midLat, midLng), {
+              icon: L.divIcon({ html: labelHtml, className: '', iconSize: [80, 28], iconAnchor: [40, 14] }),
+              interactive: false, zIndexOffset: 2002
+            }).addTo(map);
+          }
+        } else if (window.orthoGuideState.angleLabel) {
+          // Hide angle label if disabled
+          window.orthoGuideState.angleLabel.setOpacity(0);
+        }
+
+        window.orthoGuideState.isActive = true;
+      } else {
+        // Not snapped - show faint guide line and current bearing
+        const dist = vincentyDistanceJS(lastWp.lat, lastWp.lon, currentLatLng.lat, currentLatLng.lng);
+        const currentLatLngSnapped = window.calculatePointAtBearing(lastWp.lat, lastWp.lon, bearing, dist);
+
+        // Update guide line - BLUE/FAINT for non-snapped angles (always show when snap is enabled)
+        if (window.orthoGuideState.guideLine) {
+          window.orthoGuideState.guideLine.setLatLngs([L.latLng(lastWp.lat, lastWp.lon), currentLatLngSnapped]);
+          window.orthoGuideState.guideLine.setStyle({ color: '#3B82F6', weight: 2, dashArray: '4, 4', opacity: 0.4 });
+        } else {
+          window.orthoGuideState.guideLine = L.polyline(
+            [[lastWp.lat, lastWp.lon], currentLatLngSnapped],
+            { color: '#3B82F6', weight: 2, dashArray: '4, 4', opacity: 0.4, zIndex: 500 }
+          ).addTo(map);
+        }
+
+        // Update angle label - BLUE for non-snapped angles (only if angle label is enabled)
+        if (window.mapVisualization && window.mapVisualization.angleLabel) {
+          const midLat = (lastWp.lat + currentLatLngSnapped.lat) / 2;
+          const midLng = (lastWp.lon + currentLatLngSnapped.lng) / 2;
+          const labelHtml = '<div style="background:rgba(59,130,246,0.85);color:white;padding:4px 8px;border-radius:4px;font-size:11px;font-weight:600;border:1px solid rgba(59,130,246,0.6);white-space:nowrap;font-family:monospace;display:inline-block;min-width:50px;text-align:center;">' + bearing.toFixed(1) + '°</div>';
+
+          if (window.orthoGuideState.angleLabel) {
+            window.orthoGuideState.angleLabel.setLatLng(L.latLng(midLat, midLng));
+            window.orthoGuideState.angleLabel.getElement().innerHTML = labelHtml;
+            window.orthoGuideState.angleLabel.setOpacity(1);
+          } else {
+            window.orthoGuideState.angleLabel = L.marker(L.latLng(midLat, midLng), {
+              icon: L.divIcon({ html: labelHtml, className: '', iconSize: [80, 28], iconAnchor: [40, 14] }),
+              interactive: false, zIndexOffset: 2002
+            }).addTo(map);
+          }
+        } else if (window.orthoGuideState.angleLabel) {
+          // Hide angle label if disabled
+          window.orthoGuideState.angleLabel.setOpacity(0);
+        }
+
+        window.orthoGuideState.isActive = true;
+      }
+    };
+
+    window.clearOrthoGuide = function() {
+      if (window.orthoGuideState.guideLine) {
+        map.removeLayer(window.orthoGuideState.guideLine);
+        window.orthoGuideState.guideLine = null;
+      }
+      if (window.orthoGuideState.angleLabel) {
+        map.removeLayer(window.orthoGuideState.angleLabel);
+        window.orthoGuideState.angleLabel = null;
+      }
+      window.orthoGuideState.isActive = false;
+      window.orthoGuideState.currentBearing = null;
+    };
+
+    map.on('mousemove', function(e) {
+      if (!window.orthoGuideState) return;
+      
+      // DISABLE ortho snap in manual connection mode
+      if (window.isManualConnectionMode) {
+        window.clearOrthoGuide();
+        return;
+      }
+      
+      // Create mode: Show ortho snap from last waypoint to cursor
+      // But only if NOT in edit mode (intentionally activated for editing)
+      if (!window.orthoGuideState.isIntentionallyActivated && window.currentWaypoints && window.currentWaypoints.length > 0) {
+        const lastWp = window.currentWaypoints[window.currentWaypoints.length - 1];
+        window.orthoGuideState.lastWaypoint = { lat: lastWp.lat, lon: lastWp.lon };
+        window.updateOrthoGuide(e.latlng);
+      }
+      // Edit mode: Only update if lastWaypoint was set by click
+      else if (window.orthoGuideState.isIntentionallyActivated && window.orthoGuideState.lastWaypoint) {
+        window.updateOrthoGuide(e.latlng);
+      }
+    });
+
+    map.on('mouseleave', function() {
+      if (window.orthoGuideState) {
+        window.clearOrthoGuide();
+      }
+    });
+    // ========== END ORTHO SNAP FEATURE ==========
+    
     map.on('click', function(e) {
+      // Clear ortho guide when creating new waypoint
+      if (window.orthoGuideState) {
+        window.orthoGuideState.lastWaypoint = null;
+      }
       window.ReactNativeWebView.postMessage(JSON.stringify({
         type: 'mapClick',
         lat: e.latlng.lat,
@@ -490,6 +762,201 @@ export const PathPlanMap: React.FC<Props> = ({
       const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
       return R * c;
     }
+
+    // Vincenty distance (WGS84 ellipsoid, ±0.5mm accuracy)
+    function vincentyDistanceJS(lat1, lon1, lat2, lon2) {
+      const a = 6378137.0, f = 1/298.257223563, b = a*(1-f);
+      const toRad = d => d * Math.PI / 180;
+      const p1 = toRad(lat1), p2 = toRad(lat2), L = toRad(lon2 - lon1);
+      const U1 = Math.atan((1-f)*Math.tan(p1)), U2 = Math.atan((1-f)*Math.tan(p2));
+      const sU1 = Math.sin(U1), cU1 = Math.cos(U1);
+      const sU2 = Math.sin(U2), cU2 = Math.cos(U2);
+      if (Math.abs(lat1-lat2)<1e-12 && Math.abs(lon1-lon2)<1e-12) return 0;
+      let lam = L, lamP, sS, cS, sig, sA, c2A, c2SM, C;
+      for (let i=0; i<200; i++) {
+        const sL=Math.sin(lam), cL=Math.cos(lam);
+        sS=Math.sqrt((cU2*sL)**2+(cU1*sU2-sU1*cU2*cL)**2);
+        if (sS===0) return 0;
+        cS=sU1*sU2+cU1*cU2*cL; sig=Math.atan2(sS,cS);
+        sA=(cU1*cU2*sL)/sS; c2A=1-sA*sA;
+        c2SM=c2A!==0?cS-(2*sU1*sU2)/c2A:0;
+        C=(f/16)*c2A*(4+f*(4-3*c2A));
+        lamP=lam;
+        lam=L+(1-C)*f*sA*(sig+C*sS*(c2SM+C*cS*(-1+2*c2SM*c2SM)));
+        if (Math.abs(lam-lamP)<1e-12) {
+          const u2=c2A*(a*a-b*b)/(b*b);
+          const A=1+(u2/16384)*(4096+u2*(-768+u2*(320-175*u2)));
+          const B=(u2/1024)*(256+u2*(-128+u2*(74-47*u2)));
+          const dS=B*sS*(c2SM+(B/4)*(cS*(-1+2*c2SM*c2SM)-(B/6)*c2SM*(-3+4*sS*sS)*(-3+4*c2SM*c2SM)));
+          return b*A*(sig-dS);
+        }
+      }
+      return haversineDistanceJS(lat1, lon1, lat2, lon2); // Fallback
+    }
+
+    function formatDistanceLabel(meters) {
+      if (meters < 1000) return meters.toFixed(1) + ' m';
+      return (meters / 1000).toFixed(2) + ' km';
+    }
+
+    function calculateBearing(lat1, lon1, lat2, lon2) {
+      const dLon = (lon2 - lon1) * Math.PI / 180;
+      const lat1Rad = lat1 * Math.PI / 180;
+      const lat2Rad = lat2 * Math.PI / 180;
+      const y = Math.sin(dLon) * Math.cos(lat2Rad);
+      const x = Math.cos(lat1Rad) * Math.sin(lat2Rad) - Math.sin(lat1Rad) * Math.cos(lat2Rad) * Math.cos(dLon);
+      let bearing = Math.atan2(y, x) * 180 / Math.PI;
+      return (bearing + 360) % 360;
+    }
+
+    // ========== DRAG PREVIEW STATE ==========
+    window.dragPreviewState = {
+      prevLine: null,     // Polyline from prev WP to dragging WP
+      nextLine: null,     // Polyline from dragging WP to next WP
+      prevLabel: null,    // Distance label marker (prev -> dragging)
+      nextLabel: null,    // Distance label marker (dragging -> next)
+      prevAngleLabel: null, // Angle label for prev segment
+      nextAngleLabel: null, // Angle label for next segment
+      draggingWpIndex: -1,
+      isDragging: false
+    };
+
+    function clearDragPreview() {
+      const s = window.dragPreviewState;
+      if (s.prevLine) { map.removeLayer(s.prevLine); s.prevLine = null; }
+      if (s.nextLine) { map.removeLayer(s.nextLine); s.nextLine = null; }
+      if (s.prevLabel) { map.removeLayer(s.prevLabel); s.prevLabel = null; }
+      if (s.nextLabel) { map.removeLayer(s.nextLabel); s.nextLabel = null; }
+      if (s.prevAngleLabel) { map.removeLayer(s.prevAngleLabel); s.prevAngleLabel = null; }
+      if (s.nextAngleLabel) { map.removeLayer(s.nextAngleLabel); s.nextAngleLabel = null; }
+      s.isDragging = false;
+      s.draggingWpIndex = -1;
+    }
+
+    function updateDragPreview(dragLatLng, wpIndex, allWaypoints) {
+      const s = window.dragPreviewState;
+      const prevWp = wpIndex > 0 ? allWaypoints[wpIndex - 1] : null;
+      const nextWp = wpIndex < allWaypoints.length - 1 ? allWaypoints[wpIndex + 1] : null;
+
+      // Update or create previous segment line + label + angle
+      if (prevWp) {
+        const prevLatLng = L.latLng(prevWp.lat, prevWp.lon);
+        if (s.prevLine) {
+          s.prevLine.setLatLngs([prevLatLng, dragLatLng]);
+        } else {
+          s.prevLine = L.polyline([prevLatLng, dragLatLng], {
+            color: '#3B82F6', weight: 3, dashArray: '6, 4', opacity: 0.9
+          }).addTo(map);
+        }
+        const dist = vincentyDistanceJS(prevWp.lat, prevWp.lon, dragLatLng.lat, dragLatLng.lng);
+        const bearing = calculateBearing(prevWp.lat, prevWp.lon, dragLatLng.lat, dragLatLng.lng);
+        const midLat = (prevWp.lat + dragLatLng.lat) / 2;
+        const midLng = (prevWp.lon + dragLatLng.lng) / 2;
+        
+        // Distance label - only show if enabled
+        if (window.mapVisualization && window.mapVisualization.distanceLabel) {
+          const labelHtml = '<div style="background:rgba(30,41,59,0.92);color:#67e8f9;padding:4px 10px;border-radius:6px;font-size:12px;font-weight:600;border:1px solid rgba(103,232,249,0.4);white-space:nowrap;font-family:monospace;display:inline-block;min-width:50px;text-align:center;">' + formatDistanceLabel(dist) + '</div>';
+          if (s.prevLabel) {
+            s.prevLabel.setLatLng(L.latLng(midLat, midLng));
+            s.prevLabel.getElement().innerHTML = labelHtml;
+            s.prevLabel.setOpacity(1);
+          } else {
+            s.prevLabel = L.marker(L.latLng(midLat, midLng), {
+              icon: L.divIcon({ html: labelHtml, className: '', iconSize: [80, 28], iconAnchor: [40, 14] }),
+              interactive: false, zIndexOffset: 2000
+            }).addTo(map);
+          }
+        } else if (s.prevLabel) {
+          s.prevLabel.setOpacity(0);
+        }
+
+        // Angle label (offset perpendicular to the line for better visibility) - only show if enabled
+        if (window.mapVisualization && window.mapVisualization.angleLabel) {
+          const angleHtml = '<div style="background:rgba(34,197,94,0.92);color:white;padding:3px 8px;border-radius:4px;font-size:11px;font-weight:700;border:1px solid rgba(34,197,94,0.6);white-space:nowrap;font-family:monospace;display:inline-block;min-width:45px;text-align:center;">' + bearing.toFixed(1) + '°</div>';
+          // Calculate perpendicular offset (rotate 90 degrees) - dynamic based on distance
+          const dLat = dragLatLng.lat - prevWp.lat;
+          const dLng = dragLatLng.lng - prevWp.lon;
+          // Increase offset for short distances to prevent label clash
+          const offsetMultiplier = Math.max(0.12, Math.min(0.08, 50 / Math.max(dist, 50)));
+          const perpLat = -dLng * offsetMultiplier;  // Perpendicular component (rotated 90°)
+          const perpLng = dLat * offsetMultiplier;   // Perpendicular component (rotated 90°)
+          const angleOffsetLat = midLat + perpLat;
+          const angleOffsetLng = midLng + perpLng;
+          if (s.prevAngleLabel) {
+            s.prevAngleLabel.setLatLng(L.latLng(angleOffsetLat, angleOffsetLng));
+            s.prevAngleLabel.getElement().innerHTML = angleHtml;
+            s.prevAngleLabel.setOpacity(1);
+          } else {
+            s.prevAngleLabel = L.marker(L.latLng(angleOffsetLat, angleOffsetLng), {
+              icon: L.divIcon({ html: angleHtml, className: '', iconSize: [75, 24], iconAnchor: [37, 12] }),
+              interactive: false, zIndexOffset: 2001
+            }).addTo(map);
+          }
+        } else if (s.prevAngleLabel) {
+          s.prevAngleLabel.setOpacity(0);
+        }
+      }
+
+      // Update or create next segment line + label + angle
+      if (nextWp) {
+        const nextLatLng = L.latLng(nextWp.lat, nextWp.lon);
+        if (s.nextLine) {
+          s.nextLine.setLatLngs([dragLatLng, nextLatLng]);
+        } else {
+          s.nextLine = L.polyline([dragLatLng, nextLatLng], {
+            color: '#3B82F6', weight: 3, dashArray: '6, 4', opacity: 0.9
+          }).addTo(map);
+        }
+        const dist = vincentyDistanceJS(dragLatLng.lat, dragLatLng.lng, nextWp.lat, nextWp.lon);
+        const bearing = calculateBearing(dragLatLng.lat, dragLatLng.lng, nextWp.lat, nextWp.lon);
+        const midLat = (dragLatLng.lat + nextWp.lat) / 2;
+        const midLng = (dragLatLng.lng + nextWp.lon) / 2;
+        
+        // Distance label - only show if enabled
+        if (window.mapVisualization && window.mapVisualization.distanceLabel) {
+          const labelHtml = '<div style="background:rgba(30,41,59,0.92);color:#67e8f9;padding:4px 10px;border-radius:6px;font-size:12px;font-weight:600;border:1px solid rgba(103,232,249,0.4);white-space:nowrap;font-family:monospace;display:inline-block;min-width:50px;text-align:center;">' + formatDistanceLabel(dist) + '</div>';
+          if (s.nextLabel) {
+            s.nextLabel.setLatLng(L.latLng(midLat, midLng));
+            s.nextLabel.getElement().innerHTML = labelHtml;
+            s.nextLabel.setOpacity(1);
+          } else {
+            s.nextLabel = L.marker(L.latLng(midLat, midLng), {
+              icon: L.divIcon({ html: labelHtml, className: '', iconSize: [80, 28], iconAnchor: [40, 14] }),
+              interactive: false, zIndexOffset: 2000
+            }).addTo(map);
+          }
+        } else if (s.nextLabel) {
+          s.nextLabel.setOpacity(0);
+        }
+
+        // Angle label (offset perpendicular to the line for better visibility) - only show if enabled
+        if (window.mapVisualization && window.mapVisualization.angleLabel) {
+          const angleHtml = '<div style="background:rgba(34,197,94,0.92);color:white;padding:3px 8px;border-radius:4px;font-size:11px;font-weight:700;border:1px solid rgba(34,197,94,0.6);white-space:nowrap;font-family:monospace;display:inline-block;min-width:45px;text-align:center;">' + bearing.toFixed(1) + '°</div>';
+          // Calculate perpendicular offset (rotate 90 degrees) - dynamic based on distance
+          const dLat2 = nextWp.lat - dragLatLng.lat;
+          const dLng2 = nextWp.lon - dragLatLng.lng;
+          // Increase offset for short distances to prevent label clash
+          const offsetMultiplier2 = Math.max(0.12, Math.min(0.08, 50 / Math.max(dist, 50)));
+          const perpLat2 = -dLng2 * offsetMultiplier2;  // Perpendicular component (rotated 90°)
+          const perpLng2 = dLat2 * offsetMultiplier2;   // Perpendicular component (rotated 90°)
+          const angleOffsetLat = midLat + perpLat2;
+          const angleOffsetLng = midLng + perpLng2;
+          if (s.nextAngleLabel) {
+            s.nextAngleLabel.setLatLng(L.latLng(angleOffsetLat, angleOffsetLng));
+            s.nextAngleLabel.getElement().innerHTML = angleHtml;
+            s.nextAngleLabel.setOpacity(1);
+          } else {
+            s.nextAngleLabel = L.marker(L.latLng(angleOffsetLat, angleOffsetLng), {
+              icon: L.divIcon({ html: angleHtml, className: '', iconSize: [75, 24], iconAnchor: [37, 12] }),
+              interactive: false, zIndexOffset: 2001
+            }).addTo(map);
+          }
+        } else if (s.nextAngleLabel) {
+          s.nextAngleLabel.setOpacity(0);
+        }
+      }
+    }
+    // ========== END DRAG PREVIEW STATE ==========
 
     function addDrawingPoint(lat, lng) {
       // Check spacing from last point
@@ -642,8 +1109,8 @@ export const PathPlanMap: React.FC<Props> = ({
     const waypointsKey = waypoints.map(wp => `${wp.id}-${wp.lat}-${wp.lon}`).join('|') +
       `|manualMode:${isManualConnectionMode}|manualConns:${manualConnections.join(',')}|connMode:${manualConnectionMode}|selected:${selectedWaypoint}`;
 
-    // Only update if waypoints actually changed
-    if (waypointsKey === lastWaypointsRef.current) return;
+    // Only update if waypoints actually changed OR if this is the first update after map ready
+    if (waypointsKey === lastWaypointsRef.current && lastWaypointsRef.current !== '') return;
     lastWaypointsRef.current = waypointsKey;
 
     // console.log('[PathPlanMap] Updating waypoints via JavaScript injection');
@@ -681,7 +1148,10 @@ export const PathPlanMap: React.FC<Props> = ({
                 }
 
                 // Manual connection mode drag state
+                console.log('[MapDrag] Initializing drag state - isManualMode:', isManualMode, 'connectionMode:', connectionMode);
+                
                 if (!window.dragConnectionState) {
+                    console.log('[MapDrag] Creating new dragConnectionState');
                     window.dragConnectionState = {
                         isDragging: false,
                         startWaypointId: null,
@@ -694,7 +1164,10 @@ export const PathPlanMap: React.FC<Props> = ({
                         isManualMode: false,
                         connectionMode: 'tap'
                     };
+                } else {
+                    console.log('[MapDrag] dragConnectionState already exists');
                 }
+                
                 window.dragConnectionState.waypoints = newWaypoints;
                 window.dragConnectionState.connections = manualConnections;
                 if (!window.dragConnectionState.isDragging) {
@@ -702,67 +1175,110 @@ export const PathPlanMap: React.FC<Props> = ({
                 }
                 window.dragConnectionState.isManualMode = isManualMode;
                 window.dragConnectionState.connectionMode = connectionMode;
+                
+                console.log('[MapDrag] State updated - waypoints:', newWaypoints.length, 'connections:', manualConnections.length, 'localConnections:', window.dragConnectionState.localConnections.length);
 
                 if (!window.dragListenersAdded) {
+                    console.log('[MapDrag] Adding drag event listeners for the first time');
                     window.dragListenersAdded = true;
                     
                     const startDrag = function(latlng, containerPoint) {
+                        console.log('[MapDrag] startDrag called - latlng:', latlng, 'containerPoint:', containerPoint);
                         const state = window.dragConnectionState;
-                        if (!state.isManualMode || state.connectionMode !== 'drag') return;
+                        console.log('[MapDrag] State check - isManualMode:', state.isManualMode, 'connectionMode:', state.connectionMode);
                         
+                        if (!state.isManualMode || state.connectionMode !== 'drag') {
+                            console.log('[MapDrag] Not in drag mode, returning');
+                            return;
+                        }
+                        
+                        console.log('[MapDrag] Waypoints count:', state.waypoints?.length);
                         if (state.waypoints && state.waypoints.length > 0) {
                             let closest = null;
-                            let minD = 50; // Touch radius snap distance
+                            let minD = 40; // Touch radius snap distance - increased to 40px
+                            console.log('[MapDrag] Searching for closest waypoint within 40px');
+                            
                             for (const wp of state.waypoints) {
                                 const wpPoint = map.latLngToContainerPoint(L.latLng(wp.lat, wp.lon));
                                 const d = containerPoint.distanceTo(wpPoint);
+                                console.log('[MapDrag] Waypoint', wp.id, 'distance:', d.toFixed(2) + 'px');
                                 if (d < minD) {
                                     minD = d;
                                     closest = wp;
                                 }
                             }
                             
+                            console.log('[MapDrag] Closest waypoint:', closest?.id, 'at distance:', minD.toFixed(2) + 'px');
+                            
                             if (closest) {
                                 state.isDragging = true;
                                 state.startWaypointId = closest.id;
                                 state.startLatLng = L.latLng(closest.lat, closest.lon);
+                                console.log('[MapDrag] Started dragging from waypoint:', closest.id);
+                                console.log('[MapDrag] Current localConnections:', state.localConnections);
 
                                 // Mirror connectedWaypointsRef from Canvas mode — update locally
                                 // so updateDragVisuals sees it immediately without React roundtrip
                                 if (!state.localConnections.includes(closest.id)) {
                                     state.localConnections.push(closest.id);
+                                    console.log('[MapDrag] Added waypoint', closest.id, 'to localConnections');
+                                } else {
+                                    console.log('[MapDrag] Waypoint', closest.id, 'already in localConnections');
                                 }
 
                                 // In drag mode, tapping a node should select it like in Canvas Mode
                                 // Sending 'waypointConnect' fromId=toId handles this on the React Native side
+                                console.log('[MapDrag] Sending waypointConnect message:', closest.id, '->', closest.id);
                                 window.ReactNativeWebView.postMessage(JSON.stringify({
                                     type: 'waypointConnect',
                                     fromId: closest.id,
                                     toId: closest.id
                                 }));
+                            } else {
+                                console.log('[MapDrag] No waypoint found within snap distance');
                             }
                         }
                     };
 
                     const updateDragVisuals = function(e) {
+                        console.log('[MapDrag] updateDragVisuals called - isDragging:', window.dragConnectionState.isDragging);
+                        
                         if (window.dragConnectionState.isDragging && window.dragConnectionState.startLatLng) {
                             const latlng = e.latlng;
                             const currentPoint = map.latLngToContainerPoint(latlng);
                             const startPoint = map.latLngToContainerPoint(window.dragConnectionState.startLatLng);
+                            const dragDistance = currentPoint.distanceTo(startPoint);
+                            
+                            console.log('[MapDrag] Drag distance from start:', dragDistance.toFixed(2) + 'px');
+                            console.log('[MapDrag] Current position:', latlng);
+                            console.log('[MapDrag] Start waypoint:', window.dragConnectionState.startWaypointId);
                             
                             // Only activate snap logic if dragged more than 10px from start
-                            if (currentPoint.distanceTo(startPoint) > 10) {
+                            if (dragDistance > 10) {
+                                console.log('[MapDrag] Drag distance > 10px, checking for nearby waypoints');
+                                
                                 if (window.dragConnectionState.waypoints && window.dragConnectionState.waypoints.length > 0) {
                                     // Use localConnections (sync, like connectedWaypointsRef in Canvas)
                                     // NOT connections (stale — only updates after React re-render roundtrip)
                                     const conns = window.dragConnectionState.localConnections;
+                                    console.log('[MapDrag] Current localConnections:', conns);
 
                                     for (const wp of window.dragConnectionState.waypoints) {
-                                        if (wp.id === window.dragConnectionState.startWaypointId) continue;
-                                        if (conns.includes(wp.id)) continue;
-
+                                        if (wp.id === window.dragConnectionState.startWaypointId) {
+                                            console.log('[MapDrag] Skipping start waypoint:', wp.id);
+                                            continue;
+                                        }
+                                        if (conns.includes(wp.id)) {
+                                            console.log('[MapDrag] Skipping already connected waypoint:', wp.id);
+                                            continue;
+                                        }
                                         const wpPoint = map.latLngToContainerPoint(L.latLng(wp.lat, wp.lon));
-                                        if (currentPoint.distanceTo(wpPoint) < 50) {
+                                        const distToWp = currentPoint.distanceTo(wpPoint);
+                                        console.log('[MapDrag] Distance to waypoint', wp.id + ':', distToWp.toFixed(2) + 'px');
+                                        
+                                        if (distToWp < 40) {
+                                            console.log('[MapDrag] WAYPOINT CAPTURED! Connecting', window.dragConnectionState.startWaypointId, '->', wp.id);
+                                            
                                             window.ReactNativeWebView.postMessage(JSON.stringify({
                                                 type: 'waypointConnect',
                                                 fromId: window.dragConnectionState.startWaypointId,
@@ -774,20 +1290,30 @@ export const PathPlanMap: React.FC<Props> = ({
                                             window.dragConnectionState.localConnections.push(wp.id);
                                             window.dragConnectionState.startWaypointId = wp.id;
                                             window.dragConnectionState.startLatLng = L.latLng(wp.lat, wp.lon);
+                                            
+                                            console.log('[MapDrag] Updated start to waypoint:', wp.id);
+                                            console.log('[MapDrag] Updated localConnections:', window.dragConnectionState.localConnections);
 
                                             if (window.dragConnectionState.tempLine) {
                                                 map.removeLayer(window.dragConnectionState.tempLine);
                                                 window.dragConnectionState.tempLine = null;
+                                                console.log('[MapDrag] Cleared temp line after capture');
                                             }
                                             return;
                                         }
                                     }
+                                    console.log('[MapDrag] No waypoints within 50px capture range');
                                 }
+                            } else {
+                                console.log('[MapDrag] Drag distance <= 10px, not checking for waypoints yet');
                             }
 
+                            // Update preview line
+                            console.log('[MapDrag] Updating preview line');
                             if (window.dragConnectionState.tempLine) {
                                 window.dragConnectionState.tempLine.setLatLngs([window.dragConnectionState.startLatLng, latlng]);
                             } else {
+                                console.log('[MapDrag] Creating new temp line');
                                 window.dragConnectionState.tempLine = L.polyline([window.dragConnectionState.startLatLng, latlng], {
                                     color: '#60A5FA',
                                     weight: 4,
@@ -796,9 +1322,11 @@ export const PathPlanMap: React.FC<Props> = ({
                                 }).addTo(map);
                             }
                             
+                            // Update finger indicator
                             if (window.dragConnectionState.tempIndicator) {
                                 window.dragConnectionState.tempIndicator.setLatLng(latlng);
                             } else {
+                                console.log('[MapDrag] Creating new temp indicator');
                                 window.dragConnectionState.tempIndicator = L.circleMarker(latlng, {
                                     radius: 12,
                                     fillColor: '#60A5FA',
@@ -806,29 +1334,39 @@ export const PathPlanMap: React.FC<Props> = ({
                                     color: 'transparent'
                                 }).addTo(map);
                             }
+                        } else {
+                            console.log('[MapDrag] Not dragging or no start point');
                         }
                     };
                     
                     const clearDragVisuals = function() {
+                        console.log('[MapDrag] clearDragVisuals called');
+                        console.log('[MapDrag] Final localConnections:', window.dragConnectionState.localConnections);
+                        
                         if (window.dragConnectionState.tempLine) {
                             map.removeLayer(window.dragConnectionState.tempLine);
                             window.dragConnectionState.tempLine = null;
+                            console.log('[MapDrag] Removed temp line');
                         }
                         if (window.dragConnectionState.tempIndicator) {
                             map.removeLayer(window.dragConnectionState.tempIndicator);
                             window.dragConnectionState.tempIndicator = null;
+                            console.log('[MapDrag] Removed temp indicator');
                         }
                         window.dragConnectionState.isDragging = false;
                         window.dragConnectionState.startWaypointId = null;
+                        console.log('[MapDrag] Drag ended - isDragging set to false');
                     };
 
                     // Desktop: Leaflet map events (mousemove/mousedown/mouseup work reliably)
                     map.on('mousemove', updateDragVisuals);
                     map.on('mousedown', function(e) {
+                        console.log('[MapDrag] Desktop mousedown event');
                         startDrag(e.latlng, map.latLngToContainerPoint(e.latlng));
                     });
                     map.on('mouseup', function() {
-                        setTimeout(clearDragVisuals, 50);
+                        console.log('[MapDrag] Desktop mouseup event');
+                        setTimeout(clearDragVisuals, 800);
                     });
 
                     // Mobile: Direct DOM event listeners on the container.
@@ -839,42 +1377,57 @@ export const PathPlanMap: React.FC<Props> = ({
                     var container = map.getContainer();
 
                     container.addEventListener('touchstart', function(e) {
+                        console.log('[MapDrag] Mobile touchstart event - touches:', e.touches.length);
                         if (e.touches && e.touches[0]) {
                             var touch = e.touches[0];
                             var rect = container.getBoundingClientRect();
                             var point = L.point(touch.clientX - rect.left, touch.clientY - rect.top);
+                            console.log('[MapDrag] Touch point:', point);
                             startDrag(map.containerPointToLatLng(point), point);
                         }
                     }, { passive: true });
 
                     container.addEventListener('touchmove', function(e) {
                         var state = window.dragConnectionState;
-                        if (!state || !state.isDragging) return;
+                        console.log('[MapDrag] Mobile touchmove event - isDragging:', state?.isDragging);
+                        
+                        if (!state || !state.isDragging) {
+                            console.log('[MapDrag] touchmove ignored - not dragging');
+                            return;
+                        }
 
                         // Prevent map scroll/pan while drag-connecting
                         e.preventDefault();
+                        console.log('[MapDrag] touchmove preventDefault called');
 
                         if (e.touches && e.touches[0]) {
                             var touch = e.touches[0];
                             var rect = container.getBoundingClientRect();
                             var point = L.point(touch.clientX - rect.left, touch.clientY - rect.top);
                             var latlng = map.containerPointToLatLng(point);
+                            console.log('[MapDrag] touchmove position:', latlng);
                             updateDragVisuals({ latlng: latlng });
                         }
                     }, { passive: false });
 
                     container.addEventListener('touchend', function() {
-                        setTimeout(clearDragVisuals, 50);
+                        console.log('[MapDrag] Mobile touchend event');
+                        setTimeout(clearDragVisuals, 800);
                     });
+                    
+                    console.log('[MapDrag] ✅ All drag event listeners registered successfully');
+                    console.log('[MapDrag] - Desktop: mousemove, mousedown, mouseup');
+                    console.log('[MapDrag] - Mobile: touchstart, touchmove, touchend on container');
                 }
 
                 // Control map dragging based on mode
                 if (isManualMode && connectionMode === 'drag') {
                     map.dragging.disable();
-                    console.log('Map dragging disabled for drag connection mode');
+                    console.log('[MapDrag] Map dragging DISABLED for drag connection mode');
+                    console.log('[MapDrag] Touch events should now be handled by custom listeners');
                 } else {
                     map.dragging.enable();
-                    console.log('Map dragging enabled for', connectionMode, 'mode');
+                    console.log('[MapDrag] Map dragging ENABLED for', connectionMode, 'mode');
                 }
 
                 // Clear existing waypoint markers
@@ -951,6 +1504,11 @@ export const PathPlanMap: React.FC<Props> = ({
                     if (connectionMode === 'tap' || !isManualMode) {
                         marker.on('click', function(e) {
                             L.DomEvent.stopPropagation(e);
+                            // Activate ortho guide for this waypoint - mark as intentionally activated
+                            if (window.orthoGuideState) {
+                                window.orthoGuideState.lastWaypoint = { lat: wp.lat, lon: wp.lon };
+                                window.orthoGuideState.isIntentionallyActivated = true;  // User clicked this waypoint
+                            }
                             if (isManualMode && connectionMode === 'tap') {
                                 // Manual connection tap
                                 window.ReactNativeWebView.postMessage(JSON.stringify({
@@ -992,7 +1550,54 @@ export const PathPlanMap: React.FC<Props> = ({
                          });
                     }
                     if (!isManualMode) {
+                        marker.on('dragstart', function(e) {
+                            window.dragPreviewState.isDragging = true;
+                            window.dragPreviewState.draggingWpIndex = index;
+                            if (missionPolyline) missionPolyline.setStyle({ opacity: 0.3 });
+                            
+                            // Activate ortho guide ONLY if:
+                            // 1. User intentionally clicked this waypoint first, OR
+                            // 2. This is the last waypoint (for creating new waypoints)
+                            if (window.orthoGuideState) {
+                                const isLastWaypoint = index === newWaypoints.length - 1;
+                                const wasIntentionallyActivated = window.orthoGuideState.isIntentionallyActivated && 
+                                                                  window.orthoGuideState.lastWaypoint && 
+                                                                  window.orthoGuideState.lastWaypoint.lat === wp.lat &&
+                                                                  window.orthoGuideState.lastWaypoint.lon === wp.lon;
+                                
+                                if (isLastWaypoint || wasIntentionallyActivated) {
+                                  // For last waypoint: use previous waypoint as reference
+                                  // For intentionally selected: use the waypoint itself as reference
+                                  if (isLastWaypoint && index > 0) {
+                                    const prevWp = newWaypoints[index - 1];
+                                    window.orthoGuideState.lastWaypoint = { lat: prevWp.lat, lon: prevWp.lon };
+                                  }
+                                  // If intentionally activated, lastWaypoint is already set from click
+                                } else {
+                                  // Not intentionally activated and not last waypoint - disable ortho snap
+                                  window.orthoGuideState.isIntentionallyActivated = false;
+                                  window.orthoGuideState.lastWaypoint = null;
+                                }
+                            }
+                        });
+
+                        marker.on('drag', function(e) {
+                            const pos = e.target.getLatLng();
+                            updateDragPreview(pos, index, newWaypoints);
+                            // Update ortho guide during drag
+                            if (window.orthoGuideState && window.updateOrthoGuide) {
+                                window.updateOrthoGuide(pos);
+                            }
+                        });
+
                         marker.on('dragend', function(e) {
+                            clearDragPreview();
+                            // Clear ortho guide after drag and reset intentional activation flag
+                            if (window.orthoGuideState && window.clearOrthoGuide) {
+                                window.clearOrthoGuide();
+                                window.orthoGuideState.isIntentionallyActivated = false;
+                            }
+                            if (missionPolyline) missionPolyline.setStyle({ opacity: 1 });
                             const newPos = e.target.getLatLng();
                             window.ReactNativeWebView.postMessage(JSON.stringify({
                                 type: 'waypointDrag',
@@ -1141,6 +1746,55 @@ export const PathPlanMap: React.FC<Props> = ({
     }
   }, [isDrawingMode, drawSettings, mapReady]);
 
+  // Handle map visualization toggle changes
+  useEffect(() => {
+    if (!mapReady || !webViewRef.current || !visualization) return;
+
+    const updateVisualizationScript = `
+      window.mapVisualization = {
+        distanceLabel: ${visualization.distanceLabel},
+        angleLabel: ${visualization.angleLabel},
+        snapFeature: ${visualization.snapFeature},
+        roverIcon: ${visualization.roverIcon},
+        waypointPreview: ${visualization.waypointPreview}
+      };
+      
+      // Update manual connection mode flag
+      window.isManualConnectionMode = ${isManualConnectionMode};
+
+      // Toggle snap feature - clear guide lines if disabled OR in manual connection mode
+      if (window.orthoGuideState) {
+        if (!window.mapVisualization.snapFeature || window.isManualConnectionMode) {
+          if (window.clearOrthoGuide) {
+            window.clearOrthoGuide();
+          }
+        }
+      }
+
+      // Toggle rover icon visibility
+      if (typeof roverMarker !== 'undefined' && roverMarker) {
+        roverMarker.setOpacity(window.mapVisualization.roverIcon ? 1 : 0);
+      }
+
+      // Toggle waypoint markers visibility
+      if (typeof waypointMarkers !== 'undefined' && waypointMarkers && waypointMarkers.length > 0) {
+        waypointMarkers.forEach(marker => {
+          marker.setOpacity(window.mapVisualization.waypointPreview ? 1 : 0);
+        });
+      }
+
+      // Toggle distance and angle labels by controlling drag preview visibility
+      if (typeof window.dragPreviewState !== 'undefined') {
+        window.dragPreviewState.showDistanceLabel = window.mapVisualization.distanceLabel;
+        window.dragPreviewState.showAngleLabel = window.mapVisualization.angleLabel;
+      }
+
+      true;
+    `;
+
+    webViewRef.current.injectJavaScript(updateVisualizationScript);
+  }, [visualization, mapReady, isManualConnectionMode]);
+
   return (
     <View style={styles.container}>
       <WebView
@@ -1260,6 +1914,14 @@ export const PathPlanMap: React.FC<Props> = ({
             </TouchableOpacity>
           )}
         </View>
+      )}
+
+      {/* Map Visualization Controls */}
+      {visualization && onVisualizationToggle && (
+        <MapVisualizationControls
+          visualization={visualization}
+          onToggle={onVisualizationToggle}
+        />
       )}
     </View>
   );

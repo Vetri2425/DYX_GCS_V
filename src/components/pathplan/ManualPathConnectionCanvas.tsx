@@ -1,6 +1,14 @@
-import React, { useRef, useState, useCallback, useMemo } from 'react';
+import React, { useRef, useState, useCallback, useMemo, useEffect } from 'react';
 import { View, StyleSheet, TouchableOpacity, Text, PanResponder, GestureResponderEvent, Alert } from 'react-native';
 import Svg, { Line, G, Circle, Text as SvgText } from 'react-native-svg';
+import Animated, {
+  useSharedValue,
+  useAnimatedStyle,
+  withTiming,
+  Easing,
+  runOnJS,
+} from 'react-native-reanimated';
+import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { colors } from '../../theme/colors';
 import { PathPlanWaypoint } from '../../types/pathplan';
 
@@ -48,6 +56,10 @@ export const ManualPathConnectionCanvas: React.FC<Props> = ({
   const [currentDragPos, setCurrentDragPos] = useState<Point | null>(null);
   const [dragStartWaypointId, setDragStartWaypointId] = useState<number | null>(null);
   const canvasRef = useRef<View>(null);
+
+  // Pan/Zoom shared values for 60fps performance
+  const scale = useSharedValue(1);
+  const offset = useSharedValue({ x: 0, y: 0 });
 
   // Refs that always hold latest values — used in PanResponder to avoid stale closures
   const connectedWaypointsRef = useRef<number[]>([]);
@@ -176,6 +188,35 @@ export const ManualPathConnectionCanvas: React.FC<Props> = ({
     });
   };
 
+  const handleResetView = () => {
+    // Reset to initial view centered on rover
+    if (roverPosition && canvasSize.width > 0) {
+      const roverPt = latLngToCanvas(roverPosition.lat, roverPosition.lng, bounds, canvasSize);
+      const targetOffset = {
+        x: canvasSize.width / 2 - roverPt.x,
+        y: canvasSize.height / 2 - roverPt.y,
+      };
+      offset.value = withTiming(
+        { x: targetOffset.x, y: targetOffset.y },
+        { duration: 300, easing: Easing.bezier(0.25, 0.1, 0.25, 1) }
+      );
+    } else {
+      // Reset to center if no rover position
+      offset.value = withTiming({ x: 0, y: 0 }, { duration: 300, easing: Easing.bezier(0.25, 0.1, 0.25, 1) });
+    }
+    scale.value = withTiming(1, { duration: 300, easing: Easing.bezier(0.25, 0.1, 0.25, 1) });
+  };
+
+  const handleZoomIn = () => {
+    const newScale = Math.min(scale.value * 1.2, 5);
+    scale.value = withTiming(newScale, { duration: 200, easing: Easing.bezier(0.25, 0.1, 0.25, 1) });
+  };
+
+  const handleZoomOut = () => {
+    const newScale = Math.max(scale.value / 1.2, 0.5);
+    scale.value = withTiming(newScale, { duration: 200, easing: Easing.bezier(0.25, 0.1, 0.25, 1) });
+  };
+
   // Check if a point is near a waypoint (within 60px radius)
   const findWaypointNearPoint = useCallback((x: number, y: number): CanvasWaypoint | null => {
     const threshold = 60; // 60 pixels for easier touch
@@ -195,6 +236,58 @@ export const ManualPathConnectionCanvas: React.FC<Props> = ({
     return null;
   }, [canvasWaypoints]);
 
+  // Convert screen coordinates to canvas space (accounting for pan/zoom)
+  const canvasPt = useCallback((sx: number, sy: number): Point => ({
+    x: (sx - offset.value.x) / scale.value,
+    y: (sy - offset.value.y) / scale.value,
+  }), []);
+
+  // Pan gesture - 1:1 sensitivity for direct control
+  const panGesture = Gesture.Pan()
+    .onUpdate((event) => {
+      offset.value = {
+        x: offset.value.x + event.translationX,
+        y: offset.value.y + event.translationY,
+      };
+    });
+
+  // Pinch gesture - 1:1 sensitivity for direct control
+  const pinchGesture = Gesture.Pinch()
+    .onUpdate((event) => {
+      const newScale = Math.min(Math.max(scale.value * event.scale, 0.5), 5);
+      scale.value = newScale;
+    });
+
+  // Combine gestures for simultaneous pan + pinch
+  const composedGesture = Gesture.Simultaneous(panGesture, pinchGesture);
+
+  // Animated style for the canvas transform
+  const animatedStyle = useAnimatedStyle(() => ({
+    transform: [
+      { scale: scale.value },
+      { translateX: offset.value.x },
+      { translateY: offset.value.y },
+    ],
+  }));
+
+  // Center view on rover when component mounts or rover position changes
+  useEffect(() => {
+    if (!roverPosition || canvasSize.width === 0) return;
+    
+    const roverPt = latLngToCanvas(roverPosition.lat, roverPosition.lng, bounds, canvasSize);
+    const targetOffset = {
+      x: canvasSize.width / 2 - roverPt.x,
+      y: canvasSize.height / 2 - roverPt.y,
+    };
+    
+    // Professional timing animation like Google Maps
+    offset.value = withTiming(
+      { x: targetOffset.x, y: targetOffset.y },
+      { duration: 300, easing: Easing.bezier(0.25, 0.1, 0.25, 1) }
+    );
+    scale.value = withTiming(1, { duration: 300, easing: Easing.bezier(0.25, 0.1, 0.25, 1) });
+  }, [roverPosition, bounds, canvasSize, latLngToCanvas]);
+
   // Simplified Pan Responder for drag mode
   const panResponder = useMemo(() => {
     return PanResponder.create({
@@ -207,12 +300,12 @@ export const ManualPathConnectionCanvas: React.FC<Props> = ({
       onPanResponderGrant: (evt) => {
         if (connectionMode !== 'drag') return;
 
-        // Try both locationX/Y and pageX/Y
-        let x = evt.nativeEvent.locationX;
-        let y = evt.nativeEvent.locationY;
+        // Convert screen coordinates to canvas space
+        const canvasPoint = canvasPt(evt.nativeEvent.locationX, evt.nativeEvent.locationY);
+        let x = canvasPoint.x;
+        let y = canvasPoint.y;
 
-        console.log('[Drag] Grant - locationX:', x, 'locationY:', y);
-        console.log('[Drag] Grant - pageX:', evt.nativeEvent.pageX, 'pageY:', evt.nativeEvent.pageY);
+        console.log('[Drag] Grant - canvas coords:', x, y);
 
         // Must start on a waypoint
         const wp = findWaypointNearPoint(x, y);
@@ -223,7 +316,7 @@ export const ManualPathConnectionCanvas: React.FC<Props> = ({
           setIsDragging(true);
           dragStartWaypointIdRef.current = wp.id;
           setDragStartWaypointId(wp.id);
-          setCurrentDragPos({ x, y });
+          setCurrentDragPos({ x: evt.nativeEvent.locationX, y: evt.nativeEvent.locationY });
 
           // Add to connected list if not already there
           if (!connectedWaypointsRef.current.includes(wp.id)) {
@@ -236,11 +329,13 @@ export const ManualPathConnectionCanvas: React.FC<Props> = ({
       onPanResponderMove: (evt) => {
         if (connectionMode !== 'drag' || !isDragging || !dragStartWaypointId) return;
 
-        const x = evt.nativeEvent.locationX;
-        const y = evt.nativeEvent.locationY;
+        // Convert screen coordinates to canvas space
+        const canvasPoint = canvasPt(evt.nativeEvent.locationX, evt.nativeEvent.locationY);
+        const x = canvasPoint.x;
+        const y = canvasPoint.y;
 
-        // Update current drag position
-        setCurrentDragPos({ x, y });
+        // Update current drag position (keep in screen coordinates for visual feedback)
+        setCurrentDragPos({ x: evt.nativeEvent.locationX, y: evt.nativeEvent.locationY });
 
         // Check if finger is over a new waypoint — use refs to avoid stale closure duplicates
         const wp = findWaypointNearPoint(x, y);
@@ -320,6 +415,28 @@ export const ManualPathConnectionCanvas: React.FC<Props> = ({
               ]}>✍️ Drag Mode</Text>
             </TouchableOpacity>
           </View>
+
+          {/* Zoom Controls */}
+          <View style={{ gap: 6, marginLeft: 8 }}>
+            <TouchableOpacity
+              style={styles.zoomButton}
+              onPress={handleZoomIn}
+            >
+              <Text style={styles.zoomButtonText}>🔍+</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.zoomButton}
+              onPress={handleZoomOut}
+            >
+              <Text style={styles.zoomButtonText}>🔍-</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.zoomButton}
+              onPress={handleResetView}
+            >
+              <Text style={styles.zoomButtonText}>🎯</Text>
+            </TouchableOpacity>
+          </View>
         </View>
       </View>
 
@@ -332,186 +449,193 @@ export const ManualPathConnectionCanvas: React.FC<Props> = ({
           setCanvasSize({ width, height });
         }}
       >
-        <Svg style={StyleSheet.absoluteFill}>
-          {/* Rover marker */}
-          {roverCanvasPosition && roverPosition && (
-            <G key="rover">
-              <Circle cx={roverCanvasPosition.x} cy={roverCanvasPosition.y} r={20} fill="#60A5FA" opacity={0.3} />
-              <Circle cx={roverCanvasPosition.x} cy={roverCanvasPosition.y} r={12} fill="#60A5FA" stroke="#fff" strokeWidth={2} />
-              {roverPosition.heading != null && (
-                <Line
-                  x1={roverCanvasPosition.x}
-                  y1={roverCanvasPosition.y}
-                  x2={roverCanvasPosition.x + Math.sin(roverPosition.heading * Math.PI / 180) * 25}
-                  y2={roverCanvasPosition.y - Math.cos(roverPosition.heading * Math.PI / 180) * 25}
-                  stroke="#fff"
-                  strokeWidth={3}
-                />
+        <GestureDetector gesture={composedGesture}>
+          <Animated.View style={[StyleSheet.absoluteFill, animatedStyle]}>
+            <Svg style={StyleSheet.absoluteFill}>
+              {/* Rover marker */}
+              {roverCanvasPosition && roverPosition && (
+                <G key="rover">
+                  <Circle cx={roverCanvasPosition.x} cy={roverCanvasPosition.y} r={20} fill="#60A5FA" opacity={0.3} />
+                  <Circle cx={roverCanvasPosition.x} cy={roverCanvasPosition.y} r={12} fill="#60A5FA" stroke="#fff" strokeWidth={2} />
+                  {roverPosition.heading != null && (
+                    <Line
+                      x1={roverCanvasPosition.x}
+                      y1={roverCanvasPosition.y}
+                      x2={roverCanvasPosition.x + Math.sin(roverPosition.heading * Math.PI / 180) * 25}
+                      y2={roverCanvasPosition.y - Math.cos(roverPosition.heading * Math.PI / 180) * 25}
+                      stroke="#fff"
+                      strokeWidth={3}
+                    />
+                  )}
+                  <SvgText
+                    x={roverCanvasPosition.x}
+                    y={roverCanvasPosition.y + 35}
+                    fill="#60A5FA"
+                    fontSize="10"
+                    fontWeight="bold"
+                    textAnchor="middle"
+                  >
+                    ROVER
+                  </SvgText>
+                </G>
               )}
-              <SvgText
-                x={roverCanvasPosition.x}
-                y={roverCanvasPosition.y + 35}
-                fill="#60A5FA"
-                fontSize="10"
-                fontWeight="bold"
-                textAnchor="middle"
-              >
-                ROVER
-              </SvgText>
-            </G>
-          )}
 
-          {/* Grid lines (subtle) */}
-          <G key="vertical-grid">
-            {Array.from({ length: 21 }).map((_, i) => {
-              const x = (canvasSize.width / 20) * i;
+              {/* Grid lines (subtle) */}
+              <G key="vertical-grid">
+                {Array.from({ length: 21 }).map((_, i) => {
+                  const x = (canvasSize.width / 20) * i;
+                  return (
+                    <Line
+                      key={`v-${i}`}
+                      x1={x}
+                      y1={0}
+                      x2={x}
+                      y2={canvasSize.height}
+                      stroke="#f0f0f0"
+                      strokeWidth={1}
+                    />
+                  );
+                })}
+              </G>
+              <G key="horizontal-grid">
+                {Array.from({ length: 21 }).map((_, i) => {
+                  const y = (canvasSize.height / 20) * i;
+                  return (
+                    <Line
+                      key={`h-${i}`}
+                      x1={0}
+                      y1={y}
+                      x2={canvasSize.width}
+                      y2={y}
+                      stroke="#f0f0f0"
+                      strokeWidth={1}
+                    />
+                  );
+                })}
+              </G>
+
+              {/* Connection lines between connected waypoints */}
+              {connectedWaypoints.length > 1 && connectedWaypoints.map((id, index) => {
+                if (index === 0) return null;
+                const fromWp = canvasWaypoints.find(wp => wp.id === connectedWaypoints[index - 1]);
+                const toWp = canvasWaypoints.find(wp => wp.id === id);
+                if (!fromWp || !toWp) return null;
+
+                return (
+                  <Line
+                    key={`conn-${index}-${connectedWaypoints[index - 1]}-${id}`}
+                    x1={fromWp.x}
+                    y1={fromWp.y}
+                    x2={toWp.x}
+                    y2={toWp.y}
+                    stroke="#4ADE80"
+                    strokeWidth={3}
+                    strokeDasharray="5, 5"
+                  />
+                );
+              })}
+
+              {/* Drag line - simple line from start waypoint to current finger position */}
+              {isDragging && dragStartWaypointId && currentDragPos && (() => {
+                const startWp = canvasWaypoints.find(wp => wp.id === dragStartWaypointId);
+                if (!startWp) return null;
+
+                // Convert screen drag position back to canvas coordinates for the line endpoint
+                const canvasEndPoint = canvasPt(currentDragPos.x, currentDragPos.y);
+
+                return (
+                  <>
+                    <Line
+                      key="drag-line"
+                      x1={startWp.x}
+                      y1={startWp.y}
+                      x2={canvasEndPoint.x}
+                      y2={canvasEndPoint.y}
+                      stroke="#60A5FA"
+                      strokeWidth={4}
+                      strokeDasharray="8, 4"
+                      opacity={0.8}
+                    />
+                    {/* Finger position indicator */}
+                    <Circle
+                      cx={canvasEndPoint.x}
+                      cy={canvasEndPoint.y}
+                      r={12}
+                      fill="#60A5FA"
+                      opacity={0.5}
+                    />
+                  </>
+                );
+              })()}
+            </Svg>
+
+            {/* Waypoint markers - using TouchableOpacity for tap events */}
+            {canvasWaypoints.map((wp, wpIndex) => {
+              const isConnected = connectedWaypoints.includes(wp.id);
+              const connectionIndex = connectedWaypoints.indexOf(wp.id);
+
+              // Larger size in drag mode for easier targeting
+              const baseSize = connectionMode === 'drag' ? 40 : 24;
+              const circleSize = isConnected ? baseSize + 8 : baseSize;
+              const markerSize = circleSize + 20;
+
               return (
-                <Line
-                  key={`v-${i}`}
-                  x1={x}
-                  y1={0}
-                  x2={x}
-                  y2={canvasSize.height}
-                  stroke="#f0f0f0"
-                  strokeWidth={1}
-                />
+                <TouchableOpacity
+                  key={`wp-${wpIndex}-${wp.id}`}
+                  style={[
+                    styles.waypointMarker,
+                    {
+                      left: wp.x - markerSize / 2,
+                      top: wp.y - markerSize / 2,
+                      width: markerSize,
+                      height: markerSize,
+                    },
+                  ]}
+                  onPress={() => handleWaypointTap(wp.id)}
+                  activeOpacity={0.7}
+                  disabled={connectionMode === 'drag'} // Disable tap in drag mode
+                >
+                  <View
+                    style={[
+                      styles.waypointCircle,
+                      {
+                        backgroundColor: isConnected ? '#4ADE80' : '#f97316',
+                        width: circleSize,
+                        height: circleSize,
+                      },
+                    ]}
+                  >
+                    <Text style={[styles.waypointIdText, { fontSize: connectionMode === 'drag' ? 14 : 10 }]}>
+                      {wp.id}
+                    </Text>
+                  </View>
+                  {isConnected && (
+                    <View style={styles.connectionBadge}>
+                      <Text style={styles.connectionBadgeText}>{connectionIndex + 1}</Text>
+                    </View>
+                  )}
+                </TouchableOpacity>
               );
             })}
-          </G>
-          <G key="horizontal-grid">
-            {Array.from({ length: 21 }).map((_, i) => {
-              const y = (canvasSize.height / 20) * i;
-              return (
-                <Line
-                  key={`h-${i}`}
-                  x1={0}
-                  y1={y}
-                  x2={canvasSize.width}
-                  y2={y}
-                  stroke="#f0f0f0"
-                  strokeWidth={1}
-                />
-              );
-            })}
-          </G>
 
-          {/* Connection lines between connected waypoints */}
-          {connectedWaypoints.length > 1 && connectedWaypoints.map((id, index) => {
-            if (index === 0) return null;
-            const fromWp = canvasWaypoints.find(wp => wp.id === connectedWaypoints[index - 1]);
-            const toWp = canvasWaypoints.find(wp => wp.id === id);
-            if (!fromWp || !toWp) return null;
-
-            return (
-              <Line
-                key={`conn-${index}-${connectedWaypoints[index - 1]}-${id}`}
-                x1={fromWp.x}
-                y1={fromWp.y}
-                x2={toWp.x}
-                y2={toWp.y}
-                stroke="#4ADE80"
-                strokeWidth={3}
-                strokeDasharray="5, 5"
-              />
-            );
-          })}
-
-          {/* Drag line - simple line from start waypoint to current finger position */}
-          {isDragging && dragStartWaypointId && currentDragPos && (() => {
-            const startWp = canvasWaypoints.find(wp => wp.id === dragStartWaypointId);
-            if (!startWp) return null;
-
-            return (
-              <>
-                <Line
-                  key="drag-line"
-                  x1={startWp.x}
-                  y1={startWp.y}
-                  x2={currentDragPos.x}
-                  y2={currentDragPos.y}
-                  stroke="#60A5FA"
-                  strokeWidth={4}
-                  strokeDasharray="8, 4"
-                  opacity={0.8}
-                />
-                {/* Finger position indicator */}
-                <Circle
-                  cx={currentDragPos.x}
-                  cy={currentDragPos.y}
-                  r={12}
-                  fill="#60A5FA"
-                  opacity={0.5}
-                />
-              </>
-            );
-          })()}
-        </Svg>
-
-        {/* Waypoint markers - using TouchableOpacity for tap events */}
-        {canvasWaypoints.map((wp, wpIndex) => {
-          const isConnected = connectedWaypoints.includes(wp.id);
-          const connectionIndex = connectedWaypoints.indexOf(wp.id);
-
-          // Larger size in drag mode for easier targeting
-          const baseSize = connectionMode === 'drag' ? 40 : 24;
-          const circleSize = isConnected ? baseSize + 8 : baseSize;
-          const markerSize = circleSize + 20;
-
-          return (
-            <TouchableOpacity
-              key={`wp-${wpIndex}-${wp.id}`}
-              style={[
-                styles.waypointMarker,
-                {
-                  left: wp.x - markerSize / 2,
-                  top: wp.y - markerSize / 2,
-                  width: markerSize,
-                  height: markerSize,
-                },
-              ]}
-              onPress={() => handleWaypointTap(wp.id)}
-              activeOpacity={0.7}
-              disabled={connectionMode === 'drag'} // Disable tap in drag mode
-            >
+            {/* Transparent gesture overlay for drag mode */}
+            {connectionMode === 'drag' && (
               <View
-                style={[
-                  styles.waypointCircle,
-                  {
-                    backgroundColor: isConnected ? '#4ADE80' : '#f97316',
-                    width: circleSize,
-                    height: circleSize,
-                  },
-                ]}
-              >
-                <Text style={[styles.waypointIdText, { fontSize: connectionMode === 'drag' ? 14 : 10 }]}>
-                  {wp.id}
-                </Text>
-              </View>
-              {isConnected && (
-                <View style={styles.connectionBadge}>
-                  <Text style={styles.connectionBadgeText}>{connectionIndex + 1}</Text>
-                </View>
-              )}
-            </TouchableOpacity>
-          );
-        })}
-
-        {/* Transparent gesture overlay for drag mode */}
-        {connectionMode === 'drag' && (
-          <View
-            style={StyleSheet.absoluteFill}
-            {...panResponder.panHandlers}
-            pointerEvents="box-only"
-          />
-        )}
+                style={StyleSheet.absoluteFill}
+                {...panResponder.panHandlers}
+                pointerEvents="box-only"
+              />
+            )}
+          </Animated.View>
+        </GestureDetector>
       </View>
 
       {/* Instructions overlay */}
       <View style={styles.instructionBox}>
         <Text style={styles.instructionText}>
           {connectionMode === 'tap'
-            ? '💡 Tap marking points in order to connect them'
-            : '💡 Touch a marking point, drag to next marking point. Line will connect when you touch it.'}
+            ? '💡 Tap marking points in order to connect them. Pinch to zoom, drag to pan.'
+            : '💡 Touch a marking point, drag to next marking point. Pinch to zoom, drag to pan.'}
         </Text>
       </View>
 
@@ -769,6 +893,21 @@ const styles = StyleSheet.create({
   modeToggleTextActive: {
     color: '#000',
     fontWeight: '700',
+  },
+  zoomButton: {
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    borderRadius: 8,
+    borderWidth: 2,
+    borderColor: 'transparent',
+    minWidth: 50,
+    alignItems: 'center',
+  },
+  zoomButtonText: {
+    color: 'rgba(255, 255, 255, 0.9)',
+    fontSize: 14,
+    fontWeight: '600',
   },
 });
 

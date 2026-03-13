@@ -21,6 +21,7 @@ export type MissionControlCardProps = {
   onRestart?: () => void;
   mode: 'AUTO' | 'MANUAL';
   onSetMode: (mode: 'AUTO' | 'MANUAL') => void;
+  missionMode?: string; // Backend mission mode (DGPS Mark, Dash, Continuous, etc.)
   isMissionActive?: boolean;
 };
 
@@ -36,6 +37,7 @@ const MissionControlCard: React.FC<MissionControlCardProps> = ({
   onLoadMission,
   mode,
   onSetMode,
+  missionMode = 'DGPS Mark',
 }) => {
   const { services, telemetry } = useRover();
   const [isLoadingMission, setIsLoadingMission] = React.useState(false);
@@ -47,6 +49,14 @@ const MissionControlCard: React.FC<MissionControlCardProps> = ({
   const [isBulkMode, setIsBulkMode] = React.useState(false);
   const [showBulkModal, setShowBulkModal] = React.useState(false);
   const [bulkFrom, setBulkFrom] = React.useState<string>('');
+
+  // Determine if AUTO/MANUAL buttons should be active based on mission mode
+  // Only active when mission mode is Auto or Manual (not Dash, Continuous, etc.)
+  const isModeButtonsActive = React.useMemo(() => {
+    const normalizedMode = (missionMode || '').toLowerCase().trim();
+    return normalizedMode === 'auto' || 
+           normalizedMode === 'manual';
+  }, [missionMode]);
   const [bulkTo, setBulkTo] = React.useState<string>('');
   const [bulkError, setBulkError] = React.useState<string | null>(null);
   const [isBulkSubmitting, setIsBulkSubmitting] = React.useState(false);
@@ -357,10 +367,11 @@ const MissionControlCard: React.FC<MissionControlCardProps> = ({
               style={[
                 styles.modeButton,
                 !isTogglingMode && mode === 'AUTO' && styles.modeButtonActive,
+                !isModeButtonsActive && styles.modeButtonFaded,
                 isTogglingMode && styles.buttonDisabled,
               ]}
               onPress={() => handleModeToggle('AUTO')}
-              disabled={isTogglingMode}
+              disabled={isTogglingMode || !isModeButtonsActive}
             >
               <Text style={[
                 styles.modeText,
@@ -374,10 +385,11 @@ const MissionControlCard: React.FC<MissionControlCardProps> = ({
               style={[
                 styles.modeButton,
                 !isTogglingMode && mode === 'MANUAL' && styles.modeButtonActive,
+                !isModeButtonsActive && styles.modeButtonFaded,
                 isTogglingMode && styles.buttonDisabled,
               ]}
               onPress={() => handleModeToggle('MANUAL')}
-              disabled={isTogglingMode}
+              disabled={isTogglingMode || !isModeButtonsActive}
             >
               <Text style={[
                 styles.modeText,
@@ -705,6 +717,10 @@ const styles = StyleSheet.create({
   },
   modeButtonActive: {
     backgroundColor: '#10B981',
+  },
+  modeButtonFaded: {
+    opacity: 0.4,
+    backgroundColor: '#2d3748',
   },
   modeButtonManual: {
     backgroundColor: '#475569',

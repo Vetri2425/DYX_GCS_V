@@ -16,6 +16,7 @@ interface Props {
   onNext?: () => Promise<any>;
   onSkip?: () => Promise<any>;
   waypoints?: Waypoint[];
+  missionMode?: string; // Backend mission mode
   isMissionActive?: boolean;
 }
 
@@ -29,6 +30,7 @@ export const SystemStatusPanel: React.FC<Props> = ({
   onNext,
   onSkip,
   waypoints = [],
+  missionMode = 'DGPS Mark',
   isMissionActive = false,
 }) => {
   const { telemetry, connectionState, services } = useRover();
@@ -178,6 +180,7 @@ export const SystemStatusPanel: React.FC<Props> = ({
         onResume={onResume || handleResume}
         onNext={onNext}
         onSkip={onSkip}
+        missionMode={missionMode}
         isMissionActive={isMissionActive}
       />
     </View>
