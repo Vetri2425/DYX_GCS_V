@@ -16,6 +16,7 @@ interface Props {
     onDelete?: (id: number) => void;
     onToggleMark?: (id: number, mark: boolean) => void;
     globalServoEnabled?: boolean;
+    missionMode?: string;
 }
 
 // ─── Web Drag-and-Drop Row ────────────────────────────────────────────────────
@@ -31,7 +32,8 @@ const WebDraggableRow: React.FC<{
     onDragEnd: () => void;
     isDragOver: boolean;
     isDragging: boolean;
-}> = memo(({ item, index, isDragDisabled, onDelete, onToggleMark, globalServoEnabled = true, onDragStart, onDragEnter, onDragEnd, isDragOver, isDragging }) => {
+    isMarkHidden?: boolean;
+}> = memo(({ item, index, isDragDisabled, onDelete, onToggleMark, globalServoEnabled = true, onDragStart, onDragEnter, onDragEnd, isDragOver, isDragging, isMarkHidden = false }) => {
     return (
         <div
             draggable={!isDragDisabled}
@@ -80,18 +82,20 @@ const WebDraggableRow: React.FC<{
             <Text style={[styles.cell, styles.colAlt]}>{item.alt?.toFixed(2) || '0.00'}</Text>
             <Text style={[styles.cell, styles.colDist]}>{item.distance?.toFixed(2) || '0.00'}</Text>
             {/* Mark Checkbox */}
-            <div style={{ flex: 0.6, display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
-                <input
-                    type="checkbox"
-                    checked={item.mark !== undefined ? item.mark : globalServoEnabled}
-                    onChange={(e) => {
-                        e.stopPropagation();
-                        const currentValue = item.mark !== undefined ? item.mark : globalServoEnabled;
-                        onToggleMark?.(item.id, !currentValue);
-                    }}
-                    style={{ width: 22, height: 22, cursor: 'pointer', accentColor: '#22d3ee' }}
-                />
-            </div>
+            {!isMarkHidden && (
+                <div style={{ flex: 0.6, display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
+                    <input
+                        type="checkbox"
+                        checked={item.mark !== undefined ? item.mark : globalServoEnabled}
+                        onChange={(e) => {
+                            e.stopPropagation();
+                            const currentValue = item.mark !== undefined ? item.mark : globalServoEnabled;
+                            onToggleMark?.(item.id, !currentValue);
+                        }}
+                        style={{ width: 22, height: 22, cursor: 'pointer', accentColor: '#22d3ee' }}
+                    />
+                </div>
+            )}
             {/* Delete Button */}
             {onDelete && (
                 <RNTouchableOpacity style={styles.deleteBtn} onPress={() => onDelete(item.id)}>
@@ -104,10 +108,11 @@ const WebDraggableRow: React.FC<{
 WebDraggableRow.displayName = 'WebDraggableRow';
 
 // ─── Web Draggable List ───────────────────────────────────────────────────────
-const WebDraggableList: React.FC<Props> = ({ waypoints, onReorder, onDelete, onToggleMark, globalServoEnabled }) => {
+const WebDraggableList: React.FC<Props> = ({ waypoints, onReorder, onDelete, onToggleMark, globalServoEnabled, missionMode }) => {
     const [dragFromIndex, setDragFromIndex] = useState<number | null>(null);
     const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
     const isDragDisabled = waypoints.length <= 1;
+    const isMarkHidden = missionMode?.toLowerCase() === 'continuous' || missionMode?.toLowerCase() === 'dash';
 
     const handleDragStart = useCallback((index: number) => {
         setDragFromIndex(index);
@@ -153,6 +158,7 @@ const WebDraggableList: React.FC<Props> = ({ waypoints, onReorder, onDelete, onT
                     onDragEnd={handleDragEnd}
                     isDragOver={dragOverIndex === index && dragFromIndex !== index}
                     isDragging={dragFromIndex === index}
+                    isMarkHidden={isMarkHidden}
                 />
             ))}
         </div>
@@ -162,11 +168,12 @@ const WebDraggableList: React.FC<Props> = ({ waypoints, onReorder, onDelete, onT
 // ─── Native Row (Android / iOS) ───────────────────────────────────────────────
 // Defined outside NativeDraggableList so React always sees the same component type.
 const NativeWaypointRow = memo((
-    { item, drag, isActive, onDelete, onToggleMark, globalServoEnabled = true, isDragDisabled, getIndex }: RenderItemParams<PathPlanWaypoint> & {
+    { item, drag, isActive, onDelete, onToggleMark, globalServoEnabled = true, isDragDisabled, getIndex, isMarkHidden = false }: RenderItemParams<PathPlanWaypoint> & {
         onDelete?: (id: number) => void;
         onToggleMark?: (id: number, mark: boolean) => void;
         globalServoEnabled?: boolean;
         isDragDisabled?: boolean;
+        isMarkHidden?: boolean;
     }
 ) => {
     const index = getIndex() ?? 0;
@@ -201,19 +208,21 @@ const NativeWaypointRow = memo((
                 <Text style={[styles.cell, styles.colAlt]}>{item.alt?.toFixed(2) || '0.00'}</Text>
                 <Text style={[styles.cell, styles.colDist]}>{item.distance?.toFixed(2) || '0.00'}</Text>
                 {/* Mark Checkbox */}
-                <RNTouchableOpacity
-                    style={{ flex: 0.6, alignItems: 'center', justifyContent: 'center' }}
-                    onPress={() => {
-                        const currentValue = item.mark !== undefined ? item.mark : globalServoEnabled;
-                        onToggleMark?.(item.id, !currentValue);
-                    }}
-                >
-                    <Ionicons
-                        name={(item.mark !== undefined ? item.mark : globalServoEnabled) ? 'checkbox' : 'square-outline'}
-                        size={24}
-                        color={(item.mark !== undefined ? item.mark : globalServoEnabled) ? '#22d3ee' : '#4a5568'}
-                    />
-                </RNTouchableOpacity>
+                {!isMarkHidden && (
+                    <RNTouchableOpacity
+                        style={{ flex: 0.6, alignItems: 'center', justifyContent: 'center' }}
+                        onPress={() => {
+                            const currentValue = item.mark !== undefined ? item.mark : globalServoEnabled;
+                            onToggleMark?.(item.id, !currentValue);
+                        }}
+                    >
+                        <Ionicons
+                            name={(item.mark !== undefined ? item.mark : globalServoEnabled) ? 'checkbox' : 'square-outline'}
+                            size={24}
+                            color={(item.mark !== undefined ? item.mark : globalServoEnabled) ? '#22d3ee' : '#4a5568'}
+                        />
+                    </RNTouchableOpacity>
+                )}
                 {onDelete && (
                     <TouchableOpacity
                         style={styles.deleteBtn}
@@ -231,8 +240,9 @@ const NativeWaypointRow = memo((
 NativeWaypointRow.displayName = 'NativeWaypointRow';
 
 // ─── Native Draggable List (Android / iOS) ────────────────────────────────────
-const NativeDraggableList: React.FC<Props> = ({ waypoints, onReorder, onDelete, onToggleMark, globalServoEnabled }) => {
+const NativeDraggableList: React.FC<Props> = ({ waypoints, onReorder, onDelete, onToggleMark, globalServoEnabled, missionMode }) => {
     const isDragDisabled = waypoints.length <= 1;
+    const isMarkHidden = missionMode?.toLowerCase() === 'continuous' || missionMode?.toLowerCase() === 'dash';
 
     const renderItem = useCallback(
         (params: RenderItemParams<PathPlanWaypoint>) => (
@@ -242,9 +252,10 @@ const NativeDraggableList: React.FC<Props> = ({ waypoints, onReorder, onDelete, 
                 onToggleMark={onToggleMark}
                 globalServoEnabled={globalServoEnabled}
                 isDragDisabled={isDragDisabled}
+                isMarkHidden={isMarkHidden}
             />
         ),
-        [onDelete, onToggleMark, globalServoEnabled, isDragDisabled]
+        [onDelete, onToggleMark, globalServoEnabled, isDragDisabled, isMarkHidden]
     );
 
     const handleDragEnd = useCallback(

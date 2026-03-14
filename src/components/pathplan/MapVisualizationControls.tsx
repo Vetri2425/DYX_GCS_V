@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { View, StyleSheet, TouchableOpacity, Text, Animated, GestureResponderEvent } from 'react-native';
+import { View, StyleSheet, TouchableOpacity, Text, Animated, GestureResponderEvent, ViewProps } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { colors } from '../../theme/colors';
 
@@ -93,7 +93,6 @@ export const MapVisualizationControls: React.FC<MapVisualizationControlsProps> =
             bottom: 0,
             zIndex: 999,
           }}
-          pointerEvents="auto"
           onTouchEnd={(e) => {
             e.stopPropagation();
             setIsOpen(false);
@@ -112,7 +111,6 @@ export const MapVisualizationControls: React.FC<MapVisualizationControlsProps> =
           style={[styles.settingsButton, isOpen && styles.settingsButtonActive]}
           onPress={toggleMenu}
           activeOpacity={0.7}
-          pointerEvents="auto"
         >
           <MaterialCommunityIcons name="cog" size={18} color="#67e8f9" />
         </TouchableOpacity>
@@ -127,9 +125,8 @@ export const MapVisualizationControls: React.FC<MapVisualizationControlsProps> =
                 opacity: menuOpacity,
               },
             ]}
-            pointerEvents="auto"
           >
-            <View pointerEvents="auto">
+            <View>
               {toggleOptions.map((option) => (
                 <TouchableOpacity
                   key={option.key}
@@ -139,11 +136,10 @@ export const MapVisualizationControls: React.FC<MapVisualizationControlsProps> =
                     handleToggle(option.key, e);
                   }}
                   activeOpacity={0.6}
-                  pointerEvents="auto"
                 >
-                  <View style={styles.menuItemContent} pointerEvents="none">
+                  <View style={styles.menuItemContent}>
                     <MaterialCommunityIcons
-                      name={option.icon}
+                      name={option.icon as any}
                       size={16}
                       color="#67e8f9"
                       style={styles.menuItemIcon}
@@ -155,7 +151,6 @@ export const MapVisualizationControls: React.FC<MapVisualizationControlsProps> =
                       styles.checkbox,
                       visualization[option.key] && styles.checkboxChecked,
                     ]}
-                    pointerEvents="none"
                   >
                     {visualization[option.key] && (
                       <MaterialCommunityIcons

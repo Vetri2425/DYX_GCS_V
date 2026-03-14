@@ -144,7 +144,6 @@ export default function TabNavigator() {
       <AppHeader
         activeTab={activeTab}
         onTabChange={handleTabChange}
-        missionMode={missionMode}
       />
 
       {/* Screen Content */}

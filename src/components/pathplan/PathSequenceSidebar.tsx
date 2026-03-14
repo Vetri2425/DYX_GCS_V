@@ -22,6 +22,7 @@ interface Props {
     globalServoEnabled?: boolean;
     missionName?: string;
     onMissionNameChange?: (name: string) => void;
+    missionMode?: string;
 }
 
 export const PathSequenceSidebar: React.FC<Props> = ({
@@ -34,11 +35,15 @@ export const PathSequenceSidebar: React.FC<Props> = ({
     globalServoEnabled = true,
     missionName = 'DRAWN MISSION - 4:15:34',
     onMissionNameChange,
+    missionMode,
 }) => {
     const [isEditingName, setIsEditingName] = useState(false);
     const [editedName, setEditedName] = useState(missionName);
     const [isFullScreenTable, setIsFullScreenTable] = useState(false);
     // Unicode icons: ↗ (arrow out), ↩ (arrow in)
+
+    // Check if mark section should be hidden
+    const isMarkHidden = missionMode?.toLowerCase() === 'continuous' || missionMode?.toLowerCase() === 'dash';
 
     // Dialog states
     const [showRowDialog, setShowRowDialog] = useState(false);
@@ -226,7 +231,7 @@ export const PathSequenceSidebar: React.FC<Props> = ({
                     <Text style={[styles.tableHeaderText, { flex: 1.2 }]}>Latitude</Text>
                     <Text style={[styles.tableHeaderText, { flex: 1.2 }]}>Longitude</Text>
                     <Text style={[styles.tableHeaderText, { flex: 0.6 }]}>Dist</Text>
-                    <Text style={[styles.tableHeaderText, { flex: 0.4 }]}>Mark</Text>
+                    {!isMarkHidden && <Text style={[styles.tableHeaderText, { flex: 0.4 }]}>Mark</Text>}
                     <Text style={[styles.tableHeaderText, { flex: 0.5 }]}>Action</Text>
                 </View>
 
@@ -245,15 +250,17 @@ export const PathSequenceSidebar: React.FC<Props> = ({
                         <Text style={[styles.waypointCell, { flex: 0.6 }]}>{wp.distance?.toFixed(1) ?? '0.0'}</Text>
 
                         {/* Mark Checkbox */}
-                        <TouchableOpacity
-                            style={{ flex: 0.4, alignItems: 'center' }}
-                            onPress={() => {
-                                const effective = wp.mark !== undefined ? wp.mark : globalServoEnabled;
-                                onToggleMark?.(wp.id, !effective);
-                            }}
-                        >
-                            <Text style={{ fontSize: 16 }}>{(wp.mark !== undefined ? wp.mark : globalServoEnabled) ? '✅' : '⬜'}</Text>
-                        </TouchableOpacity>
+                        {!isMarkHidden && (
+                            <TouchableOpacity
+                                style={{ flex: 0.4, alignItems: 'center' }}
+                                onPress={() => {
+                                    const effective = wp.mark !== undefined ? wp.mark : globalServoEnabled;
+                                    onToggleMark?.(wp.id, !effective);
+                                }}
+                            >
+                                <Text style={{ fontSize: 16 }}>{(wp.mark !== undefined ? wp.mark : globalServoEnabled) ? '✅' : '⬜'}</Text>
+                            </TouchableOpacity>
+                        )}
 
                         {/* Action Buttons */}
                         <View style={{ flex: 0.5, alignItems: 'center' }}>
@@ -361,7 +368,7 @@ export const PathSequenceSidebar: React.FC<Props> = ({
                                 <Text style={{ flex: 2, color: '#67E8F9', fontWeight: 'bold', textAlign: 'center', fontSize: 20 }}>Longitude</Text>
                                 <Text style={{ flex: 1.2, color: '#67E8F9', fontWeight: 'bold', textAlign: 'center', fontSize: 20 }}>Altitude</Text>
                                 <Text style={{ flex: 1.2, color: '#67E8F9', fontWeight: 'bold', textAlign: 'center', fontSize: 20 }}>Distance</Text>
-                                <Text style={{ flex: 0.8, color: '#67E8F9', fontWeight: 'bold', textAlign: 'center', fontSize: 20 }}>Mark</Text>
+                                {!isMarkHidden && <Text style={{ flex: 0.8, color: '#67E8F9', fontWeight: 'bold', textAlign: 'center', fontSize: 20 }}>Mark</Text>}
                                 <View style={{ flex: 0.8 }} />
                             </View>
                             {/* Draggable Table */}
@@ -371,6 +378,7 @@ export const PathSequenceSidebar: React.FC<Props> = ({
                                 onDelete={onDeleteWaypoint}
                                 onToggleMark={onToggleMark}
                                 globalServoEnabled={globalServoEnabled}
+                                missionMode={missionMode}
                             />
                         </View>
                     </View>

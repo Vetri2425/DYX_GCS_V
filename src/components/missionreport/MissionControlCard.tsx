@@ -308,26 +308,26 @@ const MissionControlCard: React.FC<MissionControlCardProps> = ({
             </Text>
           </TouchableOpacity>
 
-          {/* NEXT MARK — only active in MANUAL mode */}
+          {/* NEXT MARK — only active in MANUAL mode and when not in Continuous/Dash */}
           <TouchableOpacity
             style={[
               styles.controlButton,
               styles.nextButton,
-              (!isRunning || isNexting || mode !== 'MANUAL') && styles.buttonDisabled,
+              (!isRunning || isNexting || mode !== 'MANUAL' || !isModeButtonsActive) && styles.buttonDisabled,
             ]}
             onPress={handleNext}
-            disabled={!isRunning || isNexting || mode !== 'MANUAL'}
+            disabled={!isRunning || isNexting || mode !== 'MANUAL' || !isModeButtonsActive}
           >
             <Text style={styles.buttonText}>NEXT MARK</Text>
           </TouchableOpacity>
 
-          {/* SKIP — always enabled while mission is running, regardless of mode */}
+          {/* SKIP — only active when mission running and not in Continuous/Dash */}
           <View style={styles.skipRow}>
             <TouchableOpacity
               style={[
                 styles.controlButton,
                 styles.skipButton,
-                (!isRunning || isSkipping) && styles.buttonDisabled,
+                (!isRunning || isSkipping || !isModeButtonsActive) && styles.buttonDisabled,
                 { flex: 1, position: 'relative' },
               ]}
               onPress={async () => {
@@ -342,7 +342,7 @@ const MissionControlCard: React.FC<MissionControlCardProps> = ({
                   handleSkip();
                 }
               }}
-              disabled={!isRunning || isSkipping}
+              disabled={!isRunning || isSkipping || !isModeButtonsActive}
             >
               <Text style={styles.buttonText}>
                 {isSkipping ? '⏳ Skipping...' : (isBulkMode ? 'BULK SKIP' : 'SKIP MARK')}

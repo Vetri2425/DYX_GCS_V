@@ -9,6 +9,7 @@ interface DrawingToolsPanelProps {
   onShowSurveyGridTool: () => void;
   onShowTextTool: () => void;
   onShowDrawTool: () => void;
+  onShowManualConnection: () => void;
   isCollapsed?: boolean;
   onToggleCollapse?: () => void;
 }
@@ -20,6 +21,7 @@ export const DrawingToolsPanel: React.FC<DrawingToolsPanelProps> = ({
   onShowSurveyGridTool,
   onShowTextTool,
   onShowDrawTool,
+  onShowManualConnection,
   isCollapsed = false,
   onToggleCollapse,
 }) => {
@@ -36,12 +38,19 @@ export const DrawingToolsPanel: React.FC<DrawingToolsPanelProps> = ({
       setInternalCollapsed(!internalCollapsed);
     }
   };
+
+  // Handler for opening manual connection canvas
+  const handleOpenManualConnection = () => {
+    onShowManualConnection();
+  };
+
   const drawingTools = [
     { name: 'line', icon: '📍', title: 'Points', color: colors.greenBtn },
-    { name: 'draw', icon: '✏️', title: 'Draw', color: colors.greenBtn },
+    { name: 'draw', icon: '🖊️', title: 'Draw', color: colors.greenBtn },
     { name: 'rectangle', icon: '⬜', title: 'Rectangle', color: colors.blueBtn },
     { name: 'text', icon: '📝', title: 'Text', color: colors.accent },
     { name: 'measure', icon: '📏', title: 'Measure', color: colors.accent },
+    { name: 'manual-connection', icon: '✏️', title: 'Manual Connection', color: colors.accent },
   ];
 
   const handleToolPress = (toolName: string) => {
@@ -51,6 +60,10 @@ export const DrawingToolsPanel: React.FC<DrawingToolsPanelProps> = ({
     }
     if (toolName === 'draw') {
       onShowDrawTool();
+      return;
+    }
+    if (toolName === 'manual-connection') {
+      handleOpenManualConnection();
       return;
     }
     if (activeDrawingTool === toolName) {
@@ -102,7 +115,7 @@ export const DrawingToolsPanel: React.FC<DrawingToolsPanelProps> = ({
       {!collapsed && (
         <>
           <View style={styles.toolsGrid3Cols}>
-            {[...drawingTools, ...themedGeneratorTools].map((tool, idx) => {
+            {[...drawingTools, ...themedGeneratorTools].map((tool) => {
               const isGenerator = (tool as GeneratorTool).onPress !== undefined;
               return (
                 <TouchableOpacity

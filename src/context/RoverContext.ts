@@ -31,6 +31,11 @@ export interface RoverContextValue extends UseRoverTelemetryResult {
   onFailsafeAcknowledge: () => void;
   onFailsafeResume: () => void;
   onFailsafeRestart: () => void;
+  // PathPlan modal state
+  showUploadPreview: boolean;
+  setShowUploadPreview: (visible: boolean) => void;
+  showManualConnectionCanvas: boolean;
+  setShowManualConnectionCanvas: (visible: boolean) => void;
 }
 
 const RoverContext = createContext<RoverContextValue | null>(null);
@@ -58,6 +63,8 @@ export function RoverProvider({ children }: RoverProviderProps): React.ReactElem
   const [ttsLanguage, setTTSLanguageState] = useState<string>('en');
   const [gpsFailsafeMode, setGpsFailsafeModeState] = useState<GpsFailsafeMode>('disable');
   const [gpsFailsafeStatus, setGpsFailsafeStatus] = useState<GpsFailsafeStatus | null>(null);
+  const [showUploadPreview, setShowUploadPreviewState] = useState<boolean>(false);
+  const [showManualConnectionCanvas, setShowManualConnectionCanvasState] = useState<boolean>(false);
 
   // Load TTS language and mission mode from AsyncStorage on mount
   useEffect(() => {
@@ -176,6 +183,14 @@ export function RoverProvider({ children }: RoverProviderProps): React.ReactElem
     }
   }, [rover.socket]);
 
+  const setShowUploadPreview = useCallback((visible: boolean) => {
+    setShowUploadPreviewState(visible);
+  }, []);
+
+  const setShowManualConnectionCanvas = useCallback((visible: boolean) => {
+    setShowManualConnectionCanvasState(visible);
+  }, []);
+
   // Listen for GPS failsafe events and mission mode updates
   useEffect(() => {
     if (!rover.socket || rover.connectionState !== 'connected') {
@@ -208,7 +223,7 @@ export function RoverProvider({ children }: RoverProviderProps): React.ReactElem
     const handleMissionModeUpdate = (event: any) => {
       if (event.mission_mode) {
         const backendMode = String(event.mission_mode).trim();
-        console.log('[RoverContext] 📡 Mission mode from backend:', backendMode);
+        // console.log('[RoverContext] 📡 Mission mode from backend:', backendMode);
         setMissionModeState(backendMode);
         // Persist to storage
         PersistentStorage.saveMissionMode(backendMode).catch(error => {
@@ -266,6 +281,10 @@ export function RoverProvider({ children }: RoverProviderProps): React.ReactElem
     onFailsafeAcknowledge,                // ✅ Stable callback
     onFailsafeResume,                     // ✅ Stable callback
     onFailsafeRestart,                    // ✅ Stable callback
+    showUploadPreview,                    // ✅ Modal state
+    setShowUploadPreview,                 // ✅ Stable callback
+    showManualConnectionCanvas,           // ✅ Modal state
+    setShowManualConnectionCanvas,        // ✅ Stable callback
   }), [
     rover.telemetry,        // Changes frequently for live updates
     rover.roverPosition,    // Changes frequently for live updates
@@ -287,6 +306,10 @@ export function RoverProvider({ children }: RoverProviderProps): React.ReactElem
     onFailsafeAcknowledge,  // Stable
     onFailsafeResume,       // Stable
     onFailsafeRestart,      // Stable
+    showUploadPreview,      // Modal state
+    setShowUploadPreview,   // Stable
+    showManualConnectionCanvas,  // Modal state
+    setShowManualConnectionCanvas, // Stable
   ]);
 
   return React.createElement(

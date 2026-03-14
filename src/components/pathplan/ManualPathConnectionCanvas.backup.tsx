@@ -1,5 +1,5 @@
 import React, { useRef, useState, useCallback, useMemo, useEffect } from 'react';
-import { View, StyleSheet, TouchableOpacity, Text, Alert, ScrollView } from 'react-native';
+import { View, StyleSheet, TouchableOpacity, Text, Alert } from 'react-native';
 import Svg, { Line, G, Circle, Text as SvgText } from 'react-native-svg';
 import Animated, {
   useSharedValue,
@@ -14,13 +14,13 @@ import Animated, {
 const AnimatedLine = Animated.createAnimatedComponent(Line);
 const AnimatedCircle = Animated.createAnimatedComponent(Circle);
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
+import { colors } from '../../theme/colors';
 import { PathPlanWaypoint } from '../../types/pathplan';
 
 interface Props {
   visible: boolean;
   waypoints: PathPlanWaypoint[];
   onConnectionsComplete: (connectedWaypointIds: number[]) => void;
-  onDeleteWaypoints?: (deletedWaypointIds: number[]) => void;
   onCancel: () => void;
   roverPosition?: { lat: number; lng: number; heading?: number } | null;
 }
@@ -51,20 +51,18 @@ export const ManualPathConnectionCanvas: React.FC<Props> = ({
   visible,
   waypoints,
   onConnectionsComplete,
-  onDeleteWaypoints,
   onCancel,
   roverPosition,
 }) => {
-  const DOT_RADIUS = 10; // half of 24px dot
-  const CAPTURE_RADIUS = 50; // comfortable touch capture radius
+  const DOT_RADIUS = 12; // half of 24px dot
+  const CAPTURE_RADIUS = 30; // comfortable touch capture radius
 
   const [canvasSize, setCanvasSize] = useState({ width: 0, height: 0 });
   const [canvasOrigin, setCanvasOrigin] = useState({ x: 0, y: 0 });
   const [connectedWaypoints, setConnectedWaypoints] = useState<number[]>([]);
-  const [connectionMode, setConnectionMode] = useState<'tap' | 'drag' | 'pan' | 'del'>('tap');
+  const [connectionMode, setConnectionMode] = useState<'tap' | 'drag'>('tap');
   const [isDragging, setIsDragging] = useState(false); // kept for drag logic gating via isDraggingRef
-  const [isSequenceExpanded, setIsSequenceExpanded] = useState(true);
-  const [markedForDeletion, setMarkedForDeletion] = useState<number[]>([]);
+  const [isSequenceExpanded, setIsSequenceExpanded] = useState(false);
   const canvasRef = useRef<View>(null);
 
   // Pan/Zoom shared values for 60fps performance
@@ -192,20 +190,14 @@ export const ManualPathConnectionCanvas: React.FC<Props> = ({
 
   // Handle waypoint tap to connect
   const handleWaypointTap = (waypointId: number) => {
-    if (connectionMode === 'del') {
-      handleDeleteTap(waypointId);
-      return;
-    }
-    // Use ref as single source of truth to avoid stale closure / double-fire issues
-    const current = connectedWaypointsRef.current;
-    let next: number[];
-    if (current.includes(waypointId)) {
-      next = current.filter(id => id !== waypointId);
-    } else {
-      next = [...current, waypointId];
-    }
-    connectedWaypointsRef.current = next;
-    setConnectedWaypoints([...next]);
+    setConnectedWaypoints(prev => {
+      // Don't add if already the last connected waypoint
+      if (prev.length > 0 && prev[prev.length - 1] === waypointId) {
+        return prev;
+      }
+      // Add to connection sequence
+      return [...prev, waypointId];
+    });
   };
 
   const handleFinish = () => {
@@ -233,103 +225,31 @@ export const ManualPathConnectionCanvas: React.FC<Props> = ({
     });
   };
 
-  // Delete mode: toggle waypoint selection for deletion
-  const handleDeleteTap = (waypointId: number) => {
-    setMarkedForDeletion(prev =>
-      prev.includes(waypointId) ? prev.filter(id => id !== waypointId) : [...prev, waypointId]
-    );
-  };
-
-  const handleConfirmDelete = () => {
-    if (markedForDeletion.length === 0) return;
-    Alert.alert(
-      'Delete Waypoints',
-      `Remove ${markedForDeletion.length} marking point(s)? This cannot be undone.`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Delete',
-          style: 'destructive',
-          onPress: () => {
-            // Also remove deleted waypoints from the connection sequence
-            setConnectedWaypoints(prev => {
-              const next = prev.filter(id => !markedForDeletion.includes(id));
-              connectedWaypointsRef.current = next;
-              return next;
-            });
-            onDeleteWaypoints?.(markedForDeletion);
-            setMarkedForDeletion([]);
-            setConnectionMode('tap');
-          },
-        },
-      ]
-    );
-  };
-
-  const handleCancelDelete = () => {
-    setMarkedForDeletion([]);
-    setConnectionMode('tap');
-  };
-
-  const handleFitToMission = () => {
-    if (canvasWaypoints.length === 0 || canvasSize.width === 0) return;
-
-    // Calculate bounding box of all waypoints
-    let minX = canvasWaypoints[0].x;
-    let maxX = canvasWaypoints[0].x;
-    let minY = canvasWaypoints[0].y;
-    let maxY = canvasWaypoints[0].y;
-
-    for (const wp of canvasWaypoints) {
-      minX = Math.min(minX, wp.x);
-      maxX = Math.max(maxX, wp.x);
-      minY = Math.min(minY, wp.y);
-      maxY = Math.max(maxY, wp.y);
+  const handleResetView = () => {
+    if (roverPosition && canvasSize.width > 0) {
+      const roverPt = latLngToCanvas(roverPosition.lat, roverPosition.lng, bounds, canvasSize);
+      const targetOffset = {
+        x: canvasSize.width / 2 - roverPt.x,
+        y: canvasSize.height / 2 - roverPt.y,
+      };
+      offset.value = withTiming(
+        { x: targetOffset.x, y: targetOffset.y },
+        { duration: 300, easing: Easing.bezier(0.25, 0.1, 0.25, 1) }
+      );
+    } else {
+      offset.value = withTiming({ x: 0, y: 0 }, { duration: 300, easing: Easing.bezier(0.25, 0.1, 0.25, 1) });
     }
-
-    const width = maxX - minX || 100;
-    const height = maxY - minY || 100;
-    const padding = 40;
-
-    // Calculate scale to fit all waypoints with padding
-    const scaleX = (canvasSize.width - padding * 2) / width;
-    const scaleY = (canvasSize.height - padding * 2) / height;
-    const newScale = Math.min(scaleX, scaleY, 3);
-
-    // Center the bounding box
-    const centerX = (minX + maxX) / 2;
-    const centerY = (minY + maxY) / 2;
-    const targetOffsetX = canvasSize.width / 2 - centerX * newScale;
-    const targetOffsetY = canvasSize.height / 2 - centerY * newScale;
-
-    scale.value = withTiming(newScale, { duration: 300, easing: Easing.bezier(0.25, 0.1, 0.25, 1) });
-    offset.value = withTiming(
-      { x: targetOffsetX, y: targetOffsetY },
-      { duration: 300, easing: Easing.bezier(0.25, 0.1, 0.25, 1) }
-    );
+    scale.value = withTiming(1, { duration: 300, easing: Easing.bezier(0.25, 0.1, 0.25, 1) });
   };
 
   const handleZoomIn = () => {
-    const oldScale = scale.value;
-    const newScale = Math.min(oldScale * 1.2, 5);
-    // Zoom toward canvas center (focal-point math)
-    const cx = canvasSize.width / 2;
-    const cy = canvasSize.height / 2;
-    const newOffsetX = cx - (cx - offset.value.x) * (newScale / oldScale);
-    const newOffsetY = cy - (cy - offset.value.y) * (newScale / oldScale);
+    const newScale = Math.min(scale.value * 1.2, 5);
     scale.value = withTiming(newScale, { duration: 200, easing: Easing.bezier(0.25, 0.1, 0.25, 1) });
-    offset.value = withTiming({ x: newOffsetX, y: newOffsetY }, { duration: 200, easing: Easing.bezier(0.25, 0.1, 0.25, 1) });
   };
 
   const handleZoomOut = () => {
-    const oldScale = scale.value;
-    const newScale = Math.max(oldScale / 1.2, 0.5);
-    const cx = canvasSize.width / 2;
-    const cy = canvasSize.height / 2;
-    const newOffsetX = cx - (cx - offset.value.x) * (newScale / oldScale);
-    const newOffsetY = cy - (cy - offset.value.y) * (newScale / oldScale);
+    const newScale = Math.max(scale.value / 1.2, 0.5);
     scale.value = withTiming(newScale, { duration: 200, easing: Easing.bezier(0.25, 0.1, 0.25, 1) });
-    offset.value = withTiming({ x: newOffsetX, y: newOffsetY }, { duration: 200, easing: Easing.bezier(0.25, 0.1, 0.25, 1) });
   };
 
   // Cancel the idle timer
@@ -467,7 +387,7 @@ export const ManualPathConnectionCanvas: React.FC<Props> = ({
 
   // Pan gesture for map navigation – only when NOT in drag mode
   const panGesture = Gesture.Pan()
-    .enabled(connectionMode === 'pan' || connectionMode !== 'drag')
+    .enabled(connectionMode !== 'drag')
     .onBegin(() => {
       savedOffset.value = offset.value;
     })
@@ -569,81 +489,95 @@ export const ManualPathConnectionCanvas: React.FC<Props> = ({
     scale.value = withTiming(1, { duration: 300, easing: Easing.bezier(0.25, 0.1, 0.25, 1) });
   }, [canvasSize]);
 
-  // Progress percentage for the bar
-  const progressPercent = waypoints.length > 0 ? (connectedWaypoints.length / waypoints.length) * 100 : 0;
-
   if (!visible) return null;
 
   return (
     <View style={styles.container}>
-      {/* Header - Centered title + progress */}
+      {/* Header */}
       <View style={styles.header}>
-        <Text style={styles.title}>✏️ Manual Path Connection</Text>
-        <View style={styles.progressRow}>
-          <Text style={styles.info}>
-            Connected: {connectedWaypoints.length} / {waypoints.length} marking points
-          </Text>
-          <View style={styles.progressBarBg}>
-            <View style={[styles.progressBarFill, { width: `${progressPercent}%` }]} />
+        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
+          {/* Title & Info */}
+          <View style={{ flex: 1, minWidth: 0 }}>
+            <Text style={styles.title}>✏️ Manual Path Connection</Text>
+            <View style={{ flexDirection: 'row', gap: 16, marginTop: 4 }}>
+              <Text style={styles.info}>
+                Connected: {connectedWaypoints.length}/{waypoints.length}
+              </Text>
+              {nearestWaypoint && (
+                <Text style={[styles.info, { color: '#60A5FA' }]}>
+                  Nearest: #{nearestWaypoint.waypoint.id} ({Math.round(nearestWaypoint.distance)}m)
+                </Text>
+              )}
+            </View>
+          </View>
+
+          {/* All Controls in Single Row */}
+          <View style={{ flexDirection: 'row', gap: 6, alignItems: 'center' }}>
+            {/* Mode Toggle Buttons */}
+            <TouchableOpacity
+              style={[
+                styles.modeToggleButton,
+                connectionMode === 'tap' && styles.modeToggleButtonActive
+              ]}
+              onPress={() => setConnectionMode('tap')}
+            >
+              <Text style={[
+                styles.modeToggleText,
+                connectionMode === 'tap' && styles.modeToggleTextActive
+              ]}>👆 Tap</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[
+                styles.modeToggleButton,
+                connectionMode === 'drag' && styles.modeToggleButtonActive
+              ]}
+              onPress={() => setConnectionMode('drag')}
+            >
+              <Text style={[
+                styles.modeToggleText,
+                connectionMode === 'drag' && styles.modeToggleTextActive
+              ]}>✍️ Drag</Text>
+            </TouchableOpacity>
+
+            {/* Zoom Controls */}
+            <TouchableOpacity
+              style={styles.zoomButton}
+              onPress={handleZoomIn}
+            >
+              <Text style={styles.zoomButtonText}>🔍+</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.zoomButton}
+              onPress={handleZoomOut}
+            >
+              <Text style={styles.zoomButtonText}>🔍-</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.zoomButton}
+              onPress={handleResetView}
+            >
+              <Text style={styles.zoomButtonText}>🎯</Text>
+            </TouchableOpacity>
           </View>
         </View>
       </View>
 
-      {/* Main content area */}
-      <View style={styles.mainArea}>
-        {/* Sequence Sidebar - Left, always visible */}
-        <View style={[styles.sequenceSidebar, !isSequenceExpanded && styles.sequenceSidebarCollapsed]}>
-          {/* Tab Header with toggle */}
-          <View style={styles.seqTabRow}>
-            <TouchableOpacity
-              style={styles.seqTabActive}
-              onPress={() => setIsSequenceExpanded(!isSequenceExpanded)}
-            >
-              <Text style={styles.seqTabTextActive}>
-                {isSequenceExpanded ? '◀ SEQ' : '▶'}
-              </Text>
-            </TouchableOpacity>
-          </View>
-
-          {/* Sequence Items - shown when expanded */}
-          {isSequenceExpanded && (
-            <ScrollView style={styles.sequenceContent} showsVerticalScrollIndicator={true}>
-              {connectedWaypoints.length === 0 ? (
-                <Text style={styles.seqEmptyText}>Tap a point to start</Text>
-              ) : (
-                connectedWaypoints.map((id, index) => (
-                  <View key={`seq-${index}-${id}`}>
-                    <View style={styles.sequenceItemVertical}>
-                      <View style={styles.sequenceBadge}>
-                        <Text style={styles.sequenceBadgeText}>#{id}</Text>
-                      </View>
-                    </View>
-                    {index < connectedWaypoints.length - 1 && (
-                      <View style={styles.sequenceConnector}>
-                        <View style={styles.sequenceConnectorLine} />
-                      </View>
-                    )}
-                  </View>
-                ))
-              )}
-            </ScrollView>
-          )}
-        </View>
-
-        {/* Canvas View */}
-        <View
-          ref={canvasRef}
-          style={styles.canvas}
-          onLayout={(e) => {
-            const { width, height } = e.nativeEvent.layout;
-            setCanvasSize({ width, height });
-            setTimeout(() => {
-              canvasRef.current?.measureInWindow?.((x: number, y: number) => {
-                if (x != null && y != null) setCanvasOrigin({ x, y });
-              });
-            }, 100);
-          }}
-        >
+      {/* Canvas View */}
+      <View
+        ref={canvasRef}
+        style={styles.canvas}
+        onLayout={(e) => {
+          const { width, height } = e.nativeEvent.layout;
+          setCanvasSize({ width, height });
+          // Measure the absolute position of the canvas on screen
+          // so we can convert absoluteX/Y to canvas-relative coords
+          setTimeout(() => {
+            canvasRef.current?.measureInWindow?.((x: number, y: number) => {
+              if (x != null && y != null) setCanvasOrigin({ x, y });
+            });
+          }, 100);
+        }}
+      >
         <GestureDetector gesture={composedGesture}>
           <Animated.View style={[StyleSheet.absoluteFill, { transformOrigin: '0 0' }, animatedStyle]}>
             <Svg style={StyleSheet.absoluteFill}>
@@ -765,7 +699,6 @@ export const ManualPathConnectionCanvas: React.FC<Props> = ({
             {canvasWaypoints.map((wp, wpIndex) => {
               const isConnected = connectedWaypoints.includes(wp.id);
               const connectionIndex = connectedWaypoints.indexOf(wp.id);
-              const isMarkedForDeletion = markedForDeletion.includes(wp.id);
 
               const baseSize = DOT_RADIUS * 2; // always 24px
               const circleSize = isConnected ? baseSize + 4 : baseSize;
@@ -785,25 +718,20 @@ export const ManualPathConnectionCanvas: React.FC<Props> = ({
                   ]}
                   onPress={() => handleWaypointTap(wp.id)}
                   activeOpacity={0.7}
-                  disabled={connectionMode === 'drag' && !connectedWaypoints.includes(wp.id)}
+                  disabled={connectionMode === 'drag'}
                 >
                   <View
                     style={[
                       styles.waypointCircle,
                       {
-                        backgroundColor: isMarkedForDeletion
-                          ? '#ef4444'
-                          : isConnected
-                            ? '#4ADE80'
-                            : '#f97316',
+                        backgroundColor: isConnected ? '#4ADE80' : '#f97316',
                         width: circleSize,
                         height: circleSize,
-                        borderColor: isMarkedForDeletion ? '#fca5a5' : '#fff',
                       },
                     ]}
                   >
                     <Text style={styles.waypointIdText}>
-                      {isMarkedForDeletion ? '✕' : wp.id}
+                      {wp.id}
                     </Text>
                   </View>
                   {isConnected && (
@@ -847,109 +775,73 @@ export const ManualPathConnectionCanvas: React.FC<Props> = ({
             </Svg>
           </Animated.View>
         </GestureDetector>
-
-        {/* Floating Mode Toggle - Top Right */}
-        <View style={styles.floatingModeGroup}>
-          <TouchableOpacity
-            style={[styles.floatingBtn, connectionMode === 'tap' && styles.floatingBtnActive]}
-            onPress={() => setConnectionMode('tap')}
-          >
-            <Text style={[styles.floatingBtnText, connectionMode === 'tap' && styles.floatingBtnTextActive]}>👆 Tap</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[styles.floatingBtn, connectionMode === 'drag' && styles.floatingBtnActive]}
-            onPress={() => setConnectionMode('drag')}
-          >
-            <Text style={[styles.floatingBtnText, connectionMode === 'drag' && styles.floatingBtnTextActive]}>✍️ Drag</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[styles.floatingBtn, connectionMode === 'pan' && styles.floatingBtnActive]}
-            onPress={() => setConnectionMode('pan')}
-          >
-            <Text style={[styles.floatingBtnText, connectionMode === 'pan' && styles.floatingBtnTextActive]}>🖐 Pan</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[styles.floatingBtn, connectionMode === 'del' && styles.floatingBtnActiveDel]}
-            onPress={() => {
-              setConnectionMode('del');
-              setMarkedForDeletion([]);
-            }}
-          >
-            <Text style={[styles.floatingBtnText, connectionMode === 'del' && styles.floatingBtnTextActiveDel]}>🗑 Del</Text>
-          </TouchableOpacity>
-        </View>
-
-        {/* Floating Tool Buttons - Top Left */}
-        <View style={styles.floatingZoomGroup}>
-          <TouchableOpacity style={styles.toolBtn} onPress={handleZoomIn}>
-            <Text style={styles.toolBtnText}>+</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.toolBtn} onPress={handleFitToMission}>
-            <Text style={styles.toolBtnText}>◎</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.toolBtn} onPress={handleZoomOut}>
-            <Text style={styles.toolBtnText}>−</Text>
-          </TouchableOpacity>
-        </View>
       </View>
 
+      {/* Connection Sequence Sidebar - Vertical, Collapsible */}
+      {connectedWaypoints.length > 0 && (
+        <View style={[styles.sequenceSidebar, isSequenceExpanded && styles.sequenceSidebarExpanded]}>
+          {/* Toggle Button */}
+          <TouchableOpacity
+            style={styles.sequenceToggleButton}
+            onPress={() => setIsSequenceExpanded(!isSequenceExpanded)}
+          >
+            <Text style={styles.sequenceToggleText}>
+              {isSequenceExpanded ? '◀' : '▶'}
+            </Text>
+          </TouchableOpacity>
 
-      </View>
-
-      {/* Delete Mode Confirmation Bar */}
-      {connectionMode === 'del' && (
-        <View style={styles.deleteBar}>
-          <Text style={styles.deleteBarText}>
-            {markedForDeletion.length === 0
-              ? 'Tap waypoints to mark for deletion'
-              : `${markedForDeletion.length} point(s) selected`}
-          </Text>
-          <View style={styles.deleteBarActions}>
-            <TouchableOpacity style={styles.deleteBarCancel} onPress={handleCancelDelete}>
-              <Text style={styles.deleteBarCancelText}>Cancel</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.deleteBarConfirm, markedForDeletion.length === 0 && { opacity: 0.4 }]}
-              onPress={handleConfirmDelete}
-              disabled={markedForDeletion.length === 0}
-            >
-              <Text style={styles.deleteBarConfirmText}>Delete ({markedForDeletion.length})</Text>
-            </TouchableOpacity>
-          </View>
+          {/* Expanded Content */}
+          {isSequenceExpanded && (
+            <View style={styles.sequenceContent}>
+              <Text style={styles.sequenceTitle}>Sequence</Text>
+              <View style={styles.sequenceListVertical}>
+                {connectedWaypoints.map((id, index) => (
+                  <View key={`seq-${index}-${id}`}>
+                    <View style={styles.sequenceItemVertical}>
+                      <View style={styles.sequenceBadge}>
+                        <Text style={styles.sequenceBadgeText}>#{id}</Text>
+                      </View>
+                    </View>
+                    {index < connectedWaypoints.length - 1 && (
+                      <Text style={styles.sequenceArrowVertical}>↓</Text>
+                    )}
+                  </View>
+                ))}
+              </View>
+            </View>
+          )}
         </View>
       )}
 
-      {/* Bottom Action Bar */}
+      {/* Action Buttons */}
       <View style={styles.buttonRow}>
-        <View style={styles.buttonRowLeft}>
-          <TouchableOpacity style={styles.secondaryButton} onPress={onCancel}>
-            <Text style={styles.secondaryButtonText}>Cancel</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={styles.secondaryButton}
-            onPress={handleUndo}
-            disabled={connectedWaypoints.length === 0}
-          >
-            <Text style={[styles.secondaryButtonText, connectedWaypoints.length === 0 && { opacity: 0.4 }]}>
-              ↩ Undo
-            </Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={styles.clearButton}
-            onPress={handleClear}
-            disabled={connectedWaypoints.length === 0}
-          >
-            <Text style={[styles.clearButtonText, connectedWaypoints.length === 0 && { opacity: 0.4 }]}>
-              🗑 Clear
-            </Text>
-          </TouchableOpacity>
-        </View>
+        <TouchableOpacity style={styles.secondaryButton} onPress={onCancel}>
+          <Text style={styles.secondaryButtonText}>✕ Cancel</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={styles.secondaryButton}
+          onPress={handleUndo}
+          disabled={connectedWaypoints.length === 0}
+        >
+          <Text style={[styles.secondaryButtonText, connectedWaypoints.length === 0 && { opacity: 0.5 }]}>
+            ↶ Undo
+          </Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={styles.secondaryButton}
+          onPress={handleClear}
+          disabled={connectedWaypoints.length === 0}
+        >
+          <Text style={[styles.secondaryButtonText, connectedWaypoints.length === 0 && { opacity: 0.5 }]}>
+            🗑️ Clear
+          </Text>
+        </TouchableOpacity>
         <TouchableOpacity
           style={[styles.primaryButton, connectedWaypoints.length < 2 && { opacity: 0.5 }]}
           onPress={handleFinish}
           disabled={connectedWaypoints.length < 2}
         >
-          <Text style={styles.primaryButtonText}>Finish ({connectedWaypoints.length})</Text>
+          <Text style={styles.primaryButtonText}>✓ Finish ({connectedWaypoints.length})</Text>
         </TouchableOpacity>
       </View>
     </View>
@@ -963,254 +855,191 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     bottom: 0,
-    backgroundColor: '#0A1628',
+    backgroundColor: '#f5f5f5',
     zIndex: 3000,
   },
   header: {
-    backgroundColor: '#0F1D32',
+    backgroundColor: colors.headerBlue,
     paddingVertical: 10,
-    paddingHorizontal: 20,
-    alignItems: 'center',
-    borderBottomWidth: 1,
-    borderBottomColor: '#1e3a5f',
+    paddingHorizontal: 16,
+    borderBottomWidth: 2,
+    borderBottomColor: '#1e3a8a',
   },
   title: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: 'bold',
+    marginBottom: 0,
+  },
+  info: {
+    color: '#4ADE80',
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  canvas: {
+    flex: 1,
+    backgroundColor: '#ffffff',
+    margin: 8,
+    borderRadius: 12,
+    borderWidth: 2,
+    borderColor: '#d1d5db',
+    overflow: 'hidden',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  instructionBox: {
+    position: 'absolute',
+    top: 10,
+    left: '50%',
+    transform: [{ translateX: -150 }],
+    width: 300,
+    backgroundColor: 'rgba(74, 222, 128, 0.9)',
+    paddingVertical: 8,
+    paddingHorizontal: 16,
+    borderRadius: 8,
+  },
+  instructionText: {
+    color: '#fff',
+    fontSize: 13,
+    fontWeight: '600',
+    textAlign: 'center',
+  },
+  sequenceBox: {
+    backgroundColor: colors.cardBg,
+    marginHorizontal: 12,
+    marginBottom: 8,
+    padding: 12,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  sequenceSidebar: {
+    position: 'absolute',
+    left: 0,
+    top: 80,
+    bottom: 80,
+    width: 50,
+    backgroundColor: 'transparent',
+    zIndex: 1000,
+    flexDirection: 'row',
+  },
+  sequenceSidebarExpanded: {
+    width: 200,
+    backgroundColor: colors.cardBg,
+    borderRightWidth: 2,
+    borderRightColor: colors.border,
+    borderTopRightRadius: 12,
+    borderBottomRightRadius: 12,
+    shadowColor: '#000',
+    shadowOffset: { width: 2, height: 0 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 5,
+  },
+  sequenceToggleButton: {
+    width: 50,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: colors.headerBlue,
+    borderTopLeftRadius: 12,
+    borderBottomLeftRadius: 12,
+  },
+  sequenceToggleText: {
     color: '#fff',
     fontSize: 18,
     fontWeight: 'bold',
   },
-  progressRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    marginTop: 4,
-  },
-  info: {
-    color: '#4ADE80',
-    fontSize: 12,
-    fontWeight: '600',
-  },
-  progressBarBg: {
-    flex: 1,
-    height: 4,
-    backgroundColor: '#1e3a5f',
-    borderRadius: 2,
-    maxWidth: 120,
-  },
-  progressBarFill: {
-    height: 4,
-    backgroundColor: '#4ADE80',
-    borderRadius: 2,
-  },
-  mainArea: {
-    flex: 1,
-    flexDirection: 'row',
-  },
-  // Sequence Sidebar
-  sequenceSidebar: {
-    width: 100,
-    backgroundColor: '#0F1D32',
-    borderRightWidth: 1,
-    borderRightColor: '#1e3a5f',
-  },
-  sequenceSidebarCollapsed: {
-    width: 40,
-  },
-  seqTabRow: {
-    flexDirection: 'row',
-    borderBottomWidth: 1,
-    borderBottomColor: '#1e3a5f',
-  },
-  seqTabActive: {
-    flex: 1,
-    paddingVertical: 8,
-    alignItems: 'center',
-    borderBottomWidth: 2,
-    borderBottomColor: '#4ADE80',
-  },
-  seqTabTextActive: {
-    color: '#fff',
-    fontSize: 11,
-    fontWeight: '700',
-    textTransform: 'uppercase',
-    letterSpacing: 1,
-  },
-  seqEmptyText: {
-    color: 'rgba(255,255,255,0.4)',
-    fontSize: 10,
-    textAlign: 'center',
-    marginTop: 16,
-  },
   sequenceContent: {
     flex: 1,
-    padding: 10,
+    padding: 12,
+    justifyContent: 'flex-start',
+  },
+  sequenceTitle: {
+    color: colors.accent,
+    fontSize: 13,
+    fontWeight: '700',
+    marginBottom: 12,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  sequenceListVertical: {
+    gap: 8,
   },
   sequenceItemVertical: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  sequenceList: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+  },
+  sequenceItem: {
+    flexDirection: 'row',
     alignItems: 'center',
   },
   sequenceBadge: {
-    backgroundColor: '#4ADE80',
-    paddingHorizontal: 14,
-    paddingVertical: 8,
+    backgroundColor: colors.headerBlue,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
     borderRadius: 6,
-    minWidth: 60,
-    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: colors.accent,
   },
   sequenceBadgeText: {
-    color: '#000',
-    fontSize: 13,
+    color: '#fff',
+    fontSize: 11,
     fontWeight: '700',
   },
-  sequenceConnector: {
-    alignItems: 'center',
-    height: 20,
-    justifyContent: 'center',
-  },
-  sequenceConnectorLine: {
-    width: 2,
-    height: 20,
-    backgroundColor: '#4ADE80',
-  },
-  // Canvas
-  canvas: {
-    flex: 1,
-    position: 'relative',
-    backgroundColor: '#ffffff',
-    margin: 6,
-    borderRadius: 10,
-    overflow: 'hidden',
-  },
-  // Floating Mode Toggle
-  floatingModeGroup: {
-    position: 'absolute',
-    top: 20,
-    right: 12,
-    gap: 6,
-    zIndex: 1100,
-  },
-  floatingBtn: {
-    paddingVertical: 8,
-    paddingHorizontal: 14,
-    backgroundColor: 'rgba(15, 29, 50, 0.85)',
-    borderRadius: 8,
-    borderWidth: 1.5,
-    borderColor: '#1e3a5f',
-  },
-  floatingBtnActive: {
-    backgroundColor: '#4ADE80',
-    borderColor: '#22c55e',
-  },
-  floatingBtnText: {
-    color: 'rgba(255,255,255,0.8)',
+  sequenceArrow: {
+    color: colors.textSecondary,
     fontSize: 12,
-    fontWeight: '600',
+    marginHorizontal: 4,
+  },
+  sequenceArrowVertical: {
+    color: colors.textSecondary,
+    fontSize: 14,
     textAlign: 'center',
+    marginVertical: 2,
   },
-  floatingBtnTextActive: {
-    color: '#000',
-    fontWeight: '700',
-  },
-  floatingBtnActiveDel: {
-    backgroundColor: '#ef4444',
-    borderColor: '#dc2626',
-  },
-  floatingBtnTextActiveDel: {
-    color: '#fff',
-    fontWeight: '700',
-  },
-  // Floating Tool Buttons
-  floatingToolGroup: {
-    position: 'absolute',
-    right: 12,
-    top: 170,
-    backgroundColor: 'rgba(15, 29, 50, 0.85)',
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: '#1e3a5f',
-    overflow: 'hidden',
-    zIndex: 1100,
-  },
-  floatingZoomGroup: {
-    position: 'absolute',
-    left: 12,
-    top: 20,
-    backgroundColor: 'rgba(15, 29, 50, 0.85)',
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: '#1e3a5f',
-    overflow: 'hidden',
-    zIndex: 1100,
-  },
-  toolBtn: {
-    width: 44,
-    height: 44,
-    justifyContent: 'center',
-    alignItems: 'center',
-    borderBottomWidth: 1,
-    borderBottomColor: '#1e3a5f',
-  },
-  toolBtnText: {
-    color: '#fff',
-    fontSize: 18,
-    fontWeight: '600',
-  },
-  // Bottom Bar
   buttonRow: {
     flexDirection: 'row',
-    paddingVertical: 10,
-    paddingHorizontal: 16,
+    padding: 12,
     gap: 10,
-    backgroundColor: '#0F1D32',
+    backgroundColor: '#e5e7eb',
     borderTopWidth: 1,
-    borderTopColor: '#1e3a5f',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  buttonRowLeft: {
-    flexDirection: 'row',
-    gap: 10,
+    borderTopColor: '#d1d5db',
   },
   secondaryButton: {
-    backgroundColor: '#1e3a5f',
-    paddingVertical: 12,
-    paddingHorizontal: 20,
-    borderRadius: 8,
+    flex: 1,
+    backgroundColor: '#fff',
+    paddingVertical: 14,
+    borderRadius: 10,
     alignItems: 'center',
     borderWidth: 1,
-    borderColor: '#2d4a6f',
+    borderColor: '#d1d5db',
   },
   secondaryButtonText: {
-    color: '#fff',
-    fontSize: 13,
-    fontWeight: '600',
-  },
-  clearButton: {
-    backgroundColor: 'transparent',
-    paddingVertical: 12,
-    paddingHorizontal: 20,
-    borderRadius: 8,
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: '#ef4444',
-  },
-  clearButtonText: {
-    color: '#ef4444',
+    color: '#374151',
     fontSize: 13,
     fontWeight: '600',
   },
   primaryButton: {
+    flex: 1.5,
     backgroundColor: '#22c55e',
-    paddingVertical: 12,
-    paddingHorizontal: 32,
-    borderRadius: 8,
+    paddingVertical: 14,
+    borderRadius: 10,
     alignItems: 'center',
   },
   primaryButtonText: {
     color: '#fff',
-    fontSize: 14,
+    fontSize: 13,
     fontWeight: 'bold',
   },
-  // Waypoint markers
   waypointMarker: {
     position: 'absolute',
     justifyContent: 'center',
@@ -1251,48 +1080,41 @@ const styles = StyleSheet.create({
     fontSize: 8,
     fontWeight: 'bold',
   },
-  // Delete bar
-  deleteBar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    backgroundColor: '#1a0a0a',
-    paddingVertical: 10,
-    paddingHorizontal: 16,
-    borderTopWidth: 1,
-    borderTopColor: '#ef4444',
-  },
-  deleteBarText: {
-    color: '#fca5a5',
-    fontSize: 13,
-    fontWeight: '600',
-  },
-  deleteBarActions: {
-    flexDirection: 'row',
-    gap: 10,
-  },
-  deleteBarCancel: {
-    paddingVertical: 8,
-    paddingHorizontal: 16,
+  modeToggleButton: {
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
     borderRadius: 6,
-    borderWidth: 1,
-    borderColor: '#6b7280',
+    borderWidth: 1.5,
+    borderColor: 'transparent',
   },
-  deleteBarCancelText: {
-    color: '#d1d5db',
-    fontSize: 12,
+  modeToggleButtonActive: {
+    backgroundColor: '#4ADE80',
+    borderColor: '#22c55e',
+  },
+  modeToggleText: {
+    color: 'rgba(255, 255, 255, 0.8)',
+    fontSize: 11,
     fontWeight: '600',
+    textAlign: 'center',
   },
-  deleteBarConfirm: {
-    paddingVertical: 8,
-    paddingHorizontal: 16,
-    borderRadius: 6,
-    backgroundColor: '#ef4444',
-  },
-  deleteBarConfirmText: {
-    color: '#fff',
-    fontSize: 12,
+  modeToggleTextActive: {
+    color: '#000',
     fontWeight: '700',
+  },
+  zoomButton: {
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    borderRadius: 6,
+    borderWidth: 1.5,
+    borderColor: 'transparent',
+    alignItems: 'center',
+  },
+  zoomButtonText: {
+    color: 'rgba(255, 255, 255, 0.9)',
+    fontSize: 12,
+    fontWeight: '600',
   },
 });
 

@@ -290,3 +290,22 @@ export const recalculateWaypointDistances = (
         return { ...wp, distance: dist };
     });
 };
+
+/**
+ * Calculate forward azimuth (bearing) between two geodetic points.
+ * Uses the spherical formula — accurate to <0.5° for typical drone distances.
+ * Returns degrees clockwise from true north [0, 360).
+ */
+export const calcBearing = (
+    wp1: { lat: number; lon: number },
+    wp2: { lat: number; lon: number }
+): number => {
+    const toRad = (d: number) => d * Math.PI / 180;
+    const toDeg = (r: number) => r * 180 / Math.PI;
+    const lat1 = toRad(wp1.lat);
+    const lat2 = toRad(wp2.lat);
+    const dLon = toRad(wp2.lon - wp1.lon);
+    const y = Math.sin(dLon) * Math.cos(lat2);
+    const x = Math.cos(lat1) * Math.sin(lat2) - Math.sin(lat1) * Math.cos(lat2) * Math.cos(dLon);
+    return (toDeg(Math.atan2(y, x)) + 360) % 360;
+};

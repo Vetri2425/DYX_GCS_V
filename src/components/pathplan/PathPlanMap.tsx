@@ -1,5 +1,6 @@
 import React, { useState, useRef, useMemo, useEffect } from 'react';
-import { View, StyleSheet, TouchableOpacity, Text, Alert } from 'react-native';
+import { View, StyleSheet, TouchableOpacity, Text, Alert, PanResponder, Animated } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { WebView } from 'react-native-webview';
 import { Fontisto } from '@expo/vector-icons';
 import { colors } from '../../theme/colors';
@@ -45,6 +46,10 @@ interface Props {
     roverIcon: boolean;
     waypointPreview: boolean;
   }) => void;
+  measurePoints?: { lat: number; lon: number; seq: number; waypointId?: number }[];
+  measureResult?: { distance: number; heading: number } | null;
+  onMeasureClear?: () => void;
+  onMeasureWaypointSelect?: (id: number) => void;
 }
 
 export const PathPlanMap: React.FC<Props> = ({
@@ -75,6 +80,10 @@ export const PathPlanMap: React.FC<Props> = ({
     waypointPreview: true,
   },
   onVisualizationToggle,
+  measurePoints = [],
+  measureResult = null,
+  onMeasureClear,
+  onMeasureWaypointSelect,
 }) => {
   const webViewRef = useRef<WebView | null>(null);
   const [mapReady, setMapReady] = useState(false);
@@ -84,6 +93,10 @@ export const PathPlanMap: React.FC<Props> = ({
   const [drawingMode, setDrawingMode] = useState<DrawingMode>('none');
   const [tempPoints, setTempPoints] = useState<{ latitude: number; longitude: number }[]>([]);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; waypointId: number } | null>(null);
+  const [measureOverlayPos, setMeasureOverlayPos] = useState({ x: 10, y: 120 });
+  const measurePanResponderRef = useRef<any>(null);
+  const measureDragStartRef = useRef({ x: 0, y: 0 });
+  
   const drawingPointsRef = useRef<{ lat: number; lng: number }[]>([]);
   const mapInitializedRef = useRef(false);
   const lastWaypointsRef = useRef<string>(''); // Track waypoints changes by serialized string
@@ -95,6 +108,23 @@ export const PathPlanMap: React.FC<Props> = ({
   // const MIN_TRAIL_DISTANCE_M = 1.5; // Minimum distance between trail points in meters
   // const TRAIL_FADE_START_SEC = 15; // Start fading after 15 seconds
   // const TRAIL_MAX_AGE_SEC = 60; // Remove points older than 60 seconds
+
+  // Initialize PanResponder for measure overlay dragging with reduced sensitivity
+  useEffect(() => {
+    measurePanResponderRef.current = PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponder: () => true,
+      onPanResponderGrant: () => {
+        measureDragStartRef.current = { x: measureOverlayPos.x, y: measureOverlayPos.y };
+      },
+      onPanResponderMove: (evt, gestureState) => {
+        // Reduce sensitivity by dividing movement by 2
+        const newX = Math.max(0, measureDragStartRef.current.x + gestureState.dx * 0.5);
+        const newY = Math.max(0, measureDragStartRef.current.y + gestureState.dy * 0.5);
+        setMeasureOverlayPos({ x: newX, y: newY });
+      },
+    });
+  }, [measureOverlayPos]);
 
   // Generate HTML ONLY ONCE on component mount - never regenerate
   const mapHTML = useMemo(() => {
@@ -290,6 +320,13 @@ export const PathPlanMap: React.FC<Props> = ({
         Alt: \${wp.alt}m
       \`);
       
+      // Prevent popup from opening when measure tool is active
+      marker.on('popupopen', function(e) {
+        if (window.isMeasureToolActive) {
+          marker.closePopup();
+        }
+      });
+      
       marker.on('click', function(e) {
         L.DomEvent.stopPropagation(e);
         // Activate ortho guide for this waypoint - mark as intentionally activated
@@ -473,6 +510,9 @@ export const PathPlanMap: React.FC<Props> = ({
     
     // ========== MANUAL CONNECTION MODE STATE ==========
     window.isManualConnectionMode = false;
+    
+    // ========== MEASURE TOOL STATE ==========
+    window.isMeasureToolActive = false;
 
     window.calculateBearing = function(lat1, lon1, lat2, lon2) {
       const dLon = (lon2 - lon1) * Math.PI / 180;
@@ -616,8 +656,8 @@ export const PathPlanMap: React.FC<Props> = ({
     map.on('mousemove', function(e) {
       if (!window.orthoGuideState) return;
       
-      // DISABLE ortho snap in manual connection mode
-      if (window.isManualConnectionMode) {
+      // DISABLE ortho snap in manual connection mode or measure tool
+      if (window.isManualConnectionMode || window.isMeasureToolActive) {
         window.clearOrthoGuide();
         return;
       }
@@ -689,14 +729,6 @@ export const PathPlanMap: React.FC<Props> = ({
       // Use dynamically updated waypoints
       if (window.currentWaypoints && window.currentWaypoints.length > 0) {
         window.currentWaypoints.forEach(wp => bounds.push([wp.lat, wp.lon]));
-      }
-
-      // Add rover position to bounds
-      if (roverMarker) {
-        const pos = roverMarker.getLatLng();
-        bounds.push([pos.lat, pos.lng]);
-      } else if (roverData.hasPosition) {
-        bounds.push([roverData.lat, roverData.lon]);
       }
 
       if (bounds.length > 0) {
@@ -1795,6 +1827,83 @@ export const PathPlanMap: React.FC<Props> = ({
     webViewRef.current.injectJavaScript(updateVisualizationScript);
   }, [visualization, mapReady, isManualConnectionMode]);
 
+  // Update measure tool active state
+  useEffect(() => {
+    if (!mapReady || !webViewRef.current) return;
+    const isMeasureActive = activeDrawingTool === 'measure';
+    const script = `
+      window.isMeasureToolActive = ${isMeasureActive};
+      true;
+    `;
+    webViewRef.current.injectJavaScript(script);
+  }, [activeDrawingTool, mapReady]);
+
+  // Inject measure ring-markers + connecting line into Leaflet, and open popup on selected waypoints
+  useEffect(() => {
+    if (!mapReady || !webViewRef.current) return;
+    const pts = JSON.stringify(measurePoints);
+    const selectedIds = JSON.stringify(measurePoints.map(p => p.waypointId).filter(Boolean));
+    const script = `
+      (function() {
+        if (!window.measureMarkers) window.measureMarkers = [];
+        if (!window.measureLine) window.measureLine = null;
+        window.measureMarkers.forEach(function(m) { map.removeLayer(m); });
+        window.measureMarkers = [];
+        if (window.measureLine) { map.removeLayer(window.measureLine); window.measureLine = null; }
+
+        var points = ${pts};
+        if (!points || points.length === 0) return;
+
+        // Draw amber ring overlay on top of selected existing waypoint markers
+        points.forEach(function(pt, idx) {
+          var icon = L.divIcon({
+            className: '',
+            html: '<div style="border:3px solid #f59e0b;border-radius:50%;width:30px;height:30px;box-shadow:0 0 8px rgba(245,158,11,0.8);background:rgba(245,158,11,0.15);"></div>',
+            iconSize: [30, 30],
+            iconAnchor: [15, 15]
+          });
+          var marker = L.marker([pt.lat, pt.lon], { icon: icon, zIndexOffset: 2000, interactive: false }).addTo(map);
+          window.measureMarkers.push(marker);
+        });
+
+        if (points.length === 2) {
+          window.measureLine = L.polyline([[points[0].lat, points[0].lon],[points[1].lat, points[1].lon]], {
+            color: '#f59e0b', weight: 2, dashArray: '6,4', opacity: 0.9
+          }).addTo(map);
+        }
+      })();
+      true;
+    `;
+    webViewRef.current.injectJavaScript(script);
+  }, [measurePoints, mapReady]);
+
+  // Load measure overlay position from storage on mount
+  useEffect(() => {
+    const loadMeasurePosition = async () => {
+      try {
+        const saved = await AsyncStorage.getItem('measureOverlayPos');
+        if (saved) {
+          setMeasureOverlayPos(JSON.parse(saved));
+        }
+      } catch (e) {
+        // Ignore errors, use default position
+      }
+    };
+    loadMeasurePosition();
+  }, []);
+
+  // Save measure overlay position to storage whenever it changes
+  useEffect(() => {
+    const saveMeasurePosition = async () => {
+      try {
+        await AsyncStorage.setItem('measureOverlayPos', JSON.stringify(measureOverlayPos));
+      } catch (e) {
+        // Ignore errors
+      }
+    };
+    saveMeasurePosition();
+  }, [measureOverlayPos]);
+
   return (
     <View style={styles.container}>
       <WebView
@@ -1810,12 +1919,19 @@ export const PathPlanMap: React.FC<Props> = ({
               onMapPress?.({ latitude: message.lat, longitude: message.lng });
               setContextMenu(null); // Close context menu on map click
             } else if (message.type === 'waypointClick') {
-              onWaypointClick?.(message.id);
+              if (activeDrawingTool === 'measure') {
+                onMeasureWaypointSelect?.(message.id);
+              } else {
+                onWaypointClick?.(message.id);
+              }
+              setContextMenu(null);
             } else if (message.type === 'waypointConnect') {
               onWaypointConnect?.(message.fromId, message.toId);
             } else if (message.type === 'waypointDrag') {
               onWaypointDrag?.(message.id, { latitude: message.lat, longitude: message.lng });
             } else if (message.type === 'waypointContextMenu') {
+              // Suppress context menu entirely in measure mode
+              if (activeDrawingTool === 'measure') return;
               // Only show context menu in pan mode or when not in manual connection mode
               if (!isManualConnectionMode || manualConnectionMode === 'pan') {
                 setContextMenu({ x: message.x, y: message.y, waypointId: message.id });
@@ -1923,6 +2039,50 @@ export const PathPlanMap: React.FC<Props> = ({
           onToggle={onVisualizationToggle}
         />
       )}
+
+      {/* Measure Tool Overlay */}
+      {measurePoints.length > 0 && (
+        <View 
+          style={[styles.measureOverlay, { left: measureOverlayPos.x, top: measureOverlayPos.y }]}
+          {...measurePanResponderRef.current?.panHandlers}
+        >
+          <View style={styles.measureHeader}>
+            <Text style={styles.measureTitle}>📏 Measure</Text>
+            <TouchableOpacity onPress={onMeasureClear} style={styles.measureClearBtn}>
+              <Text style={styles.measureClearText}>✕</Text>
+            </TouchableOpacity>
+          </View>
+          {measurePoints.map((pt, idx) => (
+            <View key={idx} style={styles.measureRow}>
+              <Text style={styles.measureSeq}>
+                {pt.waypointId != null ? `WP${pt.waypointId}` : `M${pt.seq}`}
+              </Text>
+              <Text style={styles.measureCoord}>
+                {pt.lat.toFixed(6)},{'\n'}{pt.lon.toFixed(6)}
+              </Text>
+            </View>
+          ))}
+          {measurePoints.length < 2 && (
+            <Text style={styles.measureHint}>Tap an existing waypoint</Text>
+          )}
+          {measureResult && (
+            <View style={styles.measureResultBlock}>
+              <View style={styles.measureResultRow}>
+                <Text style={styles.measureResultLabel}>Distance</Text>
+                <Text style={styles.measureResultValue}>
+                  {measureResult.distance >= 1000
+                    ? `${(measureResult.distance / 1000).toFixed(3)} km`
+                    : `${measureResult.distance.toFixed(2)} m`}
+                </Text>
+              </View>
+              <View style={styles.measureResultRow}>
+                <Text style={styles.measureResultLabel}>Heading</Text>
+                <Text style={styles.measureResultValue}>{measureResult.heading.toFixed(1)}°</Text>
+              </View>
+            </View>
+          )}
+        </View>
+      )}
     </View>
   );
 };
@@ -1970,5 +2130,85 @@ const styles = StyleSheet.create({
     fontWeight: '900',
     color: '#67e8f9',
     zIndex: 2,
+  },
+  measureOverlay: {
+    position: 'absolute',
+    backgroundColor: 'rgba(30, 41, 59, 0.95)',
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(245, 158, 11, 0.5)',
+    padding: 10,
+    minWidth: 180,
+    zIndex: 1000,
+  },
+  measureHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 6,
+  },
+  measureTitle: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#f59e0b',
+    fontFamily: 'monospace',
+  },
+  measureClearBtn: {
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    backgroundColor: 'rgba(239,68,68,0.2)',
+    borderRadius: 4,
+  },
+  measureClearText: {
+    fontSize: 11,
+    color: '#ef4444',
+    fontWeight: '700',
+  },
+  measureRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginBottom: 2,
+  },
+  measureSeq: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#f59e0b',
+    width: 36,
+    fontFamily: 'monospace',
+  },
+  measureCoord: {
+    fontSize: 10,
+    color: 'rgba(148,163,184,1)',
+    fontFamily: 'monospace',
+  },
+  measureHint: {
+    fontSize: 10,
+    color: 'rgba(103,232,249,0.8)',
+    marginTop: 4,
+    fontStyle: 'italic',
+  },
+  measureResultBlock: {
+    marginTop: 8,
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(245,158,11,0.3)',
+    paddingTop: 6,
+  },
+  measureResultRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 3,
+  },
+  measureResultLabel: {
+    fontSize: 10,
+    color: 'rgba(148,163,184,1)',
+    fontFamily: 'monospace',
+  },
+  measureResultValue: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#f59e0b',
+    fontFamily: 'monospace',
   },
 });

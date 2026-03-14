@@ -3,20 +3,23 @@ import { View, Text, StyleSheet, TouchableOpacity, Image } from 'react-native';
 import { colors } from '../../theme/colors';
 import { SettingsScreen } from '../../screens/SettingsScreen';
 import { useRover } from '../../context/RoverContext';
+import { ModeSelectionDialog } from '../pathplan/ModeSelectionDialog';
+import { DashConfigDialog } from '../pathplan/DashConfigDialog';
+import { setMissionMode as setBackendMissionMode } from '../../services/missionModeService';
 
 interface Props {
   activeTab: 'Dashboard' | 'Marking Plan' | 'Mission Progress' | 'Analytics';
   onTabChange: (tab: 'Dashboard' | 'Marking Plan' | 'Mission Progress' | 'Analytics') => void;
-  missionMode?: string;
 }
 
 export const AppHeader: React.FC<Props> = ({
   activeTab,
   onTabChange,
-  missionMode = 'DGPS Mark',
 }) => {
   const [showSettings, setShowSettings] = useState(false);
-  const { telemetry } = useRover();
+  const [showModeDialog, setShowModeDialog] = useState(false);
+  const [showDashConfigDialog, setShowDashConfigDialog] = useState(false);
+  const { telemetry, missionMode, setMissionMode } = useRover();
   
   const getModeIcon = (mode: string): string => {
     switch (mode.toLowerCase()) {
@@ -33,6 +36,51 @@ export const AppHeader: React.FC<Props> = ({
       default:
         return '🎯';
     }
+  };
+
+  const handleModeSelect = async (mode: string) => {
+    setMissionMode(mode);
+    setShowModeDialog(false);
+
+    if (mode === 'Dash') {
+      setShowDashConfigDialog(true);
+      return;
+    }
+
+    let backendMode: 'auto' | 'continuous' | 'dash' = 'auto';
+    if (mode === 'Continuous') {
+      backendMode = 'continuous';
+    }
+
+    try {
+      const result = await setBackendMissionMode({ mode: backendMode });
+      if (!result.success) {
+        console.error('[AppHeader] Failed to set mode:', result.error);
+      }
+    } catch (error) {
+      console.error('[AppHeader] Error setting mode:', error);
+    }
+  };
+
+  const handleDashConfigConfirm = async (onTime: number, offTime: number) => {
+    setShowDashConfigDialog(false);
+    try {
+      const result = await setBackendMissionMode({
+        mode: 'dash',
+        dash_servo_on_time: onTime,
+        dash_servo_off_time: offTime,
+      });
+      if (!result.success) {
+        console.error('[AppHeader] Failed to set dash mode:', result.error);
+      }
+    } catch (error) {
+      console.error('[AppHeader] Error setting dash mode:', error);
+    }
+  };
+
+  const handleDashConfigCancel = () => {
+    setMissionMode('DGPS Mark');
+    setShowDashConfigDialog(false);
   };
 
   return (
@@ -108,17 +156,40 @@ export const AppHeader: React.FC<Props> = ({
         >
           <Text style={styles.gearIcon}>⚙️</Text>
         </TouchableOpacity>
-        <View style={styles.modeBox}>
+        <TouchableOpacity
+          onPress={() => setShowModeDialog(true)}
+          style={styles.modeBox}
+          activeOpacity={0.7}
+          accessibilityLabel="Change mission mode"
+          accessibilityRole="button"
+        >
           <Text style={styles.modeIcon}>{getModeIcon(missionMode)}</Text>
           <View>
             <Text style={styles.modeLabel}>MODE</Text>
             <Text style={styles.modeValue}>{missionMode}</Text>
           </View>
-        </View>
+        </TouchableOpacity>
       </View>
 
       {/* Settings Screen Modal */}
       <SettingsScreen visible={showSettings} onClose={() => setShowSettings(false)} />
+
+      {/* Mode Selection Dialog */}
+      <ModeSelectionDialog
+        visible={showModeDialog}
+        currentMode={missionMode}
+        onSelectMode={handleModeSelect}
+        onCancel={() => setShowModeDialog(false)}
+      />
+
+      {/* Dash Config Dialog */}
+      <DashConfigDialog
+        visible={showDashConfigDialog}
+        initialDistance={5.0}
+        initialGap={3.0}
+        onConfirm={handleDashConfigConfirm}
+        onCancel={handleDashConfigCancel}
+      />
     </View>
   );
 };

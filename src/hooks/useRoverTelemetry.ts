@@ -1313,13 +1313,16 @@ export function useRoverTelemetry(): UseRoverTelemetryResult {
 
         socket.on(SOCKET_EVENTS.MISSION_STATUS, (data: any) => {
           // Log every mission_state change for debugging button sync
-          console.log('[MISSION_STATUS] Received:', {
-            mission_state: data.mission_state,
-            mission_mode: data.mission_mode,
-            current_waypoint: data.current_waypoint,
-            total_waypoints: data.total_waypoints,
-            event_type: data.event_type,
-          });
+         // Log key mission status fields for debugging state transitions and button sync issues.
+          // This helps trace mission lifecycle events (start, pause, resume, stop) and
+          // verify that waypoint progress is being reported correctly by the backend.
+          // console.log('[MISSION_STATUS] Received:', {
+          //   mission_state: data.mission_state,
+          //   mission_mode: data.mission_mode,
+          //   current_waypoint: data.current_waypoint,
+          //   total_waypoints: data.total_waypoints,
+          //   event_type: data.event_type,
+          // });
 
           // 🔍 CRITICAL FIX: Parse GPS telemetry data from mission_status events!
           if (data.current_position || data.pixhawk_state) {

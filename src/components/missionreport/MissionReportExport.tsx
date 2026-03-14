@@ -9,6 +9,7 @@ import {
   ActivityIndicator,
   Alert,
   Platform,
+  TextInput,
 } from 'react-native';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
@@ -66,6 +67,8 @@ const MissionReportExport: React.FC<MissionReportExportProps> = ({
   const [exportFormat, setExportFormat] = useState<'excel' | 'pdf'>('excel');
   const [exportMethod, setExportMethod] = useState<'share' | 'save'>('save');
   const [isDownloading, setIsDownloading] = useState(false);
+  const [showFilenameDialog, setShowFilenameDialog] = useState(false);
+  const [exportFilename, setExportFilename] = useState('mission_report');
 
   // Calculate mission statistics
   const totalPoints = waypoints.length;
@@ -127,6 +130,17 @@ const MissionReportExport: React.FC<MissionReportExportProps> = ({
   };
 
   const handleDownload = async () => {
+    // Show filename dialog first
+    setShowFilenameDialog(true);
+  };
+
+  const handleFilenameConfirm = async () => {
+    if (!exportFilename.trim()) {
+      Alert.alert('Invalid Filename', 'Please enter a filename.');
+      return;
+    }
+
+    setShowFilenameDialog(false);
     setIsDownloading(true);
 
     try {
@@ -195,10 +209,6 @@ const MissionReportExport: React.FC<MissionReportExportProps> = ({
         errorLocations,
       };
 
-      const timestamp = new Date()
-        .toISOString()
-        .replace(/[:.]/g, '-')
-        .slice(0, -5);
       let fileUri: string;
       let filename: string;
       let mimeType: string;
@@ -212,7 +222,7 @@ const MissionReportExport: React.FC<MissionReportExportProps> = ({
         // In React Native, generateExcel may fall back to CSV for compatibility
         const isReactNative =
           typeof navigator !== 'undefined' && navigator.product === 'ReactNative';
-        filename = `mission_report_${timestamp}.${
+        filename = `${exportFilename.trim()}.${
           isReactNative ? 'csv' : 'xlsx'
         }`;
 
@@ -253,7 +263,7 @@ const MissionReportExport: React.FC<MissionReportExportProps> = ({
         console.log('[Export] Generating PDF file...');
         const htmlContent = generatePDFHTML(data, stats, missionMode ?? null);
 
-        filename = `mission_report_${timestamp}.pdf`;
+        filename = `${exportFilename.trim()}.pdf`;
 
         // Generate PDF from HTML (expo-print already saves to a shareable location)
         const { uri } = await Print.printToFileAsync({
@@ -600,6 +610,35 @@ const MissionReportExport: React.FC<MissionReportExportProps> = ({
           </View>
         </View>
       </Modal>
+
+      {/* Filename input modal */}
+      <Modal visible={showFilenameDialog} transparent animationType="fade" onRequestClose={() => setShowFilenameDialog(false)}>
+        <View style={styles.filenameModalOverlay}>
+          <View style={styles.filenameModalContent}>
+            <Text style={styles.filenameModalTitle}>Enter Filename</Text>
+            <Text style={styles.filenameHint}>
+              {exportFormat === 'excel' && 'Format: Excel (.xlsx)'}
+              {exportFormat === 'pdf' && 'Format: PDF (.pdf)'}
+            </Text>
+            <TextInput
+              style={styles.filenameInput}
+              placeholder="Enter filename"
+              placeholderTextColor="#888"
+              value={exportFilename}
+              onChangeText={setExportFilename}
+              maxLength={50}
+            />
+            <View style={styles.filenameButtonsRow}>
+              <TouchableOpacity style={[styles.filenameButton, styles.confirmBtn]} onPress={handleFilenameConfirm}>
+                <Text style={styles.filenameButtonText}>Export</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[styles.filenameButton, styles.cancelBtn]} onPress={() => setShowFilenameDialog(false)}>
+                <Text style={styles.cancelBtnText}>Cancel</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </>
   );
 };
@@ -801,6 +840,74 @@ const styles = StyleSheet.create({
     color: colors.text,
     fontSize: 14,
     fontWeight: '600',
+  },
+  filenameModalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.7)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  filenameModalContent: {
+    backgroundColor: '#001F3F',
+    borderRadius: 12,
+    padding: 20,
+    width: '100%',
+    maxWidth: 400,
+    borderWidth: 1,
+    borderColor: 'rgba(103, 232, 249, 0.3)',
+  },
+  filenameModalTitle: {
+    color: colors.text,
+    fontSize: 16,
+    fontWeight: '700',
+    marginBottom: 12,
+    textAlign: 'center',
+  },
+  filenameHint: {
+    color: colors.textSecondary,
+    fontSize: 12,
+    marginBottom: 12,
+    fontStyle: 'italic',
+    textAlign: 'center',
+  },
+  filenameInput: {
+    backgroundColor: '#002244',
+    borderWidth: 1,
+    borderColor: 'rgba(103, 232, 249, 0.3)',
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    color: colors.text,
+    marginBottom: 16,
+    fontSize: 14,
+  },
+  filenameButtonsRow: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  filenameButton: {
+    flex: 1,
+    paddingVertical: 12,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  confirmBtn: {
+    backgroundColor: '#10B981',
+  },
+  cancelBtn: {
+    backgroundColor: '#003366',
+  },
+  filenameButtonText: {
+    color: colors.text,
+    fontWeight: '700',
+    fontSize: 14,
+  },
+  cancelBtnText: {
+    color: colors.text,
+    fontWeight: '700',
+    fontSize: 14,
   },
 });
 

@@ -21,7 +21,7 @@ import { FailsafeModeSelector } from '../components/pathplan/FailsafeModeSelecto
 import { FailsafeStrictPopup } from '../components/pathplan/FailsafeStrictPopup';
 import { FailsafeRelaxNotification } from '../components/pathplan/FailsafeRelaxNotification';
 import { MapVisualizationControls, MapVisualization } from '../components/pathplan/MapVisualizationControls';
-import { vincentyDistance, recalculateWaypointDistances } from '../utils/missionCalculator';
+import { vincentyDistance, recalculateWaypointDistances, calcBearing } from '../utils/missionCalculator';
 import { textToWaypointPath } from '../utils/textToPath';
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system/legacy';
@@ -47,6 +47,7 @@ export default function PathPlanScreen() {
     roverPosition,
     missionWaypoints,
     setMissionWaypoints,
+    missionMode,
     gpsFailsafeMode,
     setGpsFailsafeMode,
     gpsFailsafeStatus,
@@ -55,6 +56,10 @@ export default function PathPlanScreen() {
     onFailsafeRestart,
     services,
     socket,
+    showUploadPreview,
+    setShowUploadPreview,
+    showManualConnectionCanvas,
+    setShowManualConnectionCanvas,
   } = useRover();
 
   const [globalServoEnabled, setGlobalServoEnabled] = useState(true);
@@ -193,7 +198,6 @@ export default function PathPlanScreen() {
   const [uploadPreviewWaypoints, setUploadPreviewWaypoints] = useState<PathPlanWaypoint[] | null>(null);
   const [uploadPreviewName, setUploadPreviewName] = useState<string>('');
   const [uploadPreviewValidationErrors, setUploadPreviewValidationErrors] = useState<ValidationError[]>([]);
-  const [showUploadPreview, setShowUploadPreview] = useState<boolean>(false);
   const [uploadProgress, setUploadProgress] = useState<number>(0);
   const [showUploadProgress, setShowUploadProgress] = useState<boolean>(false);
   const [downloadProgress, setDownloadProgress] = useState<number>(0);
@@ -214,6 +218,39 @@ export default function PathPlanScreen() {
   const [drawSettings, setDrawSettings] = useState<DrawSettings | null>(null);
   const [homePosition, setHomePosition] = useState<{ lat: number; lng: number } | null>(null);
   const [isPinningHome, setIsPinningHome] = useState(false);
+
+  // Measure tool state
+  const [measurePoints, setMeasurePoints] = useState<{ lat: number; lon: number; seq: number; waypointId?: number }[]>([]);
+  const [measureResult, setMeasureResult] = useState<{ distance: number; heading: number } | null>(null);
+
+  // Clear measure state when tool changes away from measure
+  React.useEffect(() => {
+    if (activeDrawingTool !== 'measure') {
+      setMeasurePoints([]);
+      setMeasureResult(null);
+    }
+  }, [activeDrawingTool]);
+
+  const handleMeasureWaypointSelect = React.useCallback((id: number) => {
+    const wp = waypoints.find(w => w.id === id);
+    if (!wp) return;
+    setMeasurePoints(prev => {
+      if (prev.length >= 2) return prev; // already have 2, clear first via ✕
+      const newPts = [...prev, { lat: wp.lat, lon: wp.lon, seq: prev.length + 1, waypointId: id }];
+      if (newPts.length === 2) {
+        const dist = vincentyDistance(
+          { lat: newPts[0].lat, lon: newPts[0].lon },
+          { lat: newPts[1].lat, lon: newPts[1].lon }
+        );
+        const hdg = calcBearing(
+          { lat: newPts[0].lat, lon: newPts[0].lon },
+          { lat: newPts[1].lat, lon: newPts[1].lon }
+        );
+        setMeasureResult({ distance: dist, heading: hdg });
+      }
+      return newPts;
+    });
+  }, [waypoints]);
 
   // Manual control state
   const [showManualControl, setShowManualControl] = useState(false);
@@ -410,6 +447,27 @@ export default function PathPlanScreen() {
   };
 
   const handleMapPress = (coord: { latitude: number; longitude: number }) => {
+    // Measure tool — collect up to 2 points, then compute distance + heading
+    if (activeDrawingTool === 'measure') {
+      setMeasurePoints(prev => {
+        if (prev.length >= 2) return prev; // already have 2, ignore extra taps
+        const newPoints = [...prev, { lat: coord.latitude, lon: coord.longitude, seq: prev.length + 1 }];
+        if (newPoints.length === 2) {
+          const dist = vincentyDistance(
+            { lat: newPoints[0].lat, lon: newPoints[0].lon },
+            { lat: newPoints[1].lat, lon: newPoints[1].lon }
+          );
+          const hdg = calcBearing(
+            { lat: newPoints[0].lat, lon: newPoints[0].lon },
+            { lat: newPoints[1].lat, lon: newPoints[1].lon }
+          );
+          setMeasureResult({ distance: dist, heading: hdg });
+        }
+        return newPoints;
+      });
+      return;
+    }
+
     // Check if we're in home pinning mode
     if (isPinningHome) {
       setHomePosition({ lat: coord.latitude, lng: coord.longitude });
@@ -1360,6 +1418,7 @@ export default function PathPlanScreen() {
               lon: wp.lon,
               distance: wp.distance ?? 0,
               alt: wp.alt,
+              mark: wp.mark,
               status: 'Pending' as const,
               time: new Date().toISOString(),
               remark: '',
@@ -1675,6 +1734,10 @@ export default function PathPlanScreen() {
               manualConnections={manualPathConnections}
               visualization={mapVisualization}
               onVisualizationToggle={handleMapVisualizationToggle}
+              measurePoints={measurePoints}
+              measureResult={measureResult}
+              onMeasureClear={() => { setMeasurePoints([]); setMeasureResult(null); }}
+              onMeasureWaypointSelect={handleMeasureWaypointSelect}
             />
           </View>
         ) : (
@@ -1689,6 +1752,7 @@ export default function PathPlanScreen() {
                   onShowSurveyGridTool={() => setShowSurveyGridDialog(true)}
                   onShowTextTool={() => setShowTextDialog(true)}
                   onShowDrawTool={() => setShowDrawDialog(true)}
+                  onShowManualConnection={() => setShowManualConnectionCanvas(true)}
                   isCollapsed={isDrawingToolsCollapsed}
                   onToggleCollapse={() => setIsDrawingToolsCollapsed(!isDrawingToolsCollapsed)}
                 />
@@ -1707,6 +1771,7 @@ export default function PathPlanScreen() {
                 globalServoEnabled={globalServoEnabled}
                 missionName={missionName}
                 onMissionNameChange={setMissionName}
+                missionMode={missionMode}
               />
             </View>
 
@@ -1730,6 +1795,10 @@ export default function PathPlanScreen() {
                   manualConnections={manualPathConnections}
                   visualization={mapVisualization}
                   onVisualizationToggle={handleMapVisualizationToggle}
+                  measurePoints={measurePoints}
+                  measureResult={measureResult}
+                  onMeasureClear={() => { setMeasurePoints([]); setMeasureResult(null); }}
+              onMeasureWaypointSelect={handleMeasureWaypointSelect}
                 />
               </View>
             </View>
@@ -1763,6 +1832,53 @@ export default function PathPlanScreen() {
               onCancel={() => {
                 setShowConnectionChoice(false);
                 setManualPathConnections([]);
+              }}
+            />
+
+            {/* Manual Connection Canvas from Drawing Tools Button */}
+            <ManualPathConnectionCanvas
+              visible={showManualConnectionCanvas}
+              waypoints={waypoints}
+              roverPosition={telemetry.global?.lat ? {
+                lat: telemetry.global.lat,
+                lng: telemetry.global.lon,
+                heading: telemetry.attitude?.yaw_deg
+              } : null}
+              onConnectionsComplete={(connectedIds) => {
+                // Remove duplicates to prevent React key errors
+                const uniqueConnectedIds = [...new Set(connectedIds)];
+                setManualPathConnections(uniqueConnectedIds);
+
+                // ONLY keep connected waypoints in order (remove unconnected ones)
+                const connectedWaypoints = uniqueConnectedIds.map(id =>
+                  waypoints.find(wp => wp.id === id)
+                ).filter(Boolean) as PathPlanWaypoint[];
+
+                // Recalculate distances between connected waypoints
+                const waypointsWithDistances = connectedWaypoints.map((wp, idx) => {
+                  if (idx === 0) {
+                    return { ...wp, distance: 0 };
+                  }
+                  const prevWp = connectedWaypoints[idx - 1];
+                  const dist = vincentyDistance(
+                    { lat: prevWp.lat, lon: prevWp.lon },
+                    { lat: wp.lat, lon: wp.lon }
+                  );
+                  return { ...wp, distance: dist };
+                });
+
+                // Update waypoints to ONLY show connected ones with recalculated distances
+                updateWaypoints(waypointsWithDistances);
+                setShowManualConnectionCanvas(false);
+                Alert.alert('✓ Path Created', `Path created with ${uniqueConnectedIds.length} marking points. Unconnected marking points removed.`);
+              }}
+              onCancel={() => {
+                setShowManualConnectionCanvas(false);
+                setActiveDrawingTool(null);
+              }}
+              onDeleteWaypoints={(deletedIds) => {
+                const remaining = waypoints.filter(wp => !deletedIds.includes(wp.id));
+                updateWaypoints(remaining);
               }}
             />
 
@@ -1807,6 +1923,10 @@ export default function PathPlanScreen() {
                 onCancel={() => {
                   setIsConnectingPath(false);
                   setManualPathConnections([]);
+                }}
+                onDeleteWaypoints={(deletedIds) => {
+                  const remaining = waypoints.filter(wp => !deletedIds.includes(wp.id));
+                  updateWaypoints(remaining);
                 }}
               />
             )}
