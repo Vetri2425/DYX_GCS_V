@@ -260,16 +260,15 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
     marginBottom: 10,
-  },
-  headerLeft: {
-    flexDirection: 'column',
-    gap: 4,
+    paddingVertical: 6,
   },
   title: {
     fontSize: 13,
-    fontWeight: 'bold',
-    color: '#67E8F9',
-    letterSpacing: 0.5,
+    fontWeight: '700',
+    color: colors.accent,
+    letterSpacing: 1,
+    textAlign: 'center',
+    flex: 1,
   },
   progressCount: {
     fontSize: 13,

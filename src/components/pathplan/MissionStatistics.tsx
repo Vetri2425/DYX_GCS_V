@@ -1,6 +1,6 @@
 import React from 'react';
 import { View, Text, StyleSheet } from 'react-native';
-import { LinearGradient } from 'expo-linear-gradient';
+import { Ionicons } from '@expo/vector-icons';
 import { colors } from '../../theme/colors';
 import { PathPlanWaypoint } from '../../types/pathplan';
 
@@ -8,144 +8,140 @@ interface Props {
     waypoints: PathPlanWaypoint[];
 }
 
+// Card accent colors
+const CARD_COLORS = {
+    points: '#3b82f6',
+    rows: '#a855f7',
+    blocks: '#06b6d4',
+    distance: '#10b981',
+    duration: '#f59e0b',
+    status: '#22c55e',
+};
+
 export const MissionStatistics: React.FC<Props> = ({ waypoints }) => {
-    // Calculate stats
     const totalWaypoints = waypoints.length;
     const totalRows = new Set(waypoints.map(wp => wp.row).filter(Boolean)).size;
     const totalBlocks = new Set(waypoints.map(wp => wp.block).filter(Boolean)).size;
 
     const totalDistance = waypoints.reduce((sum, wp) => sum + (wp.distance || 0), 0);
-    const totalDistanceKm = (totalDistance / 1000).toFixed(3);
+    const totalDistanceM = totalDistance.toFixed(2);
 
-    // Estimate time (assuming 1.5 m/s)
-    const totalTimeSeconds = totalDistance / 1.5;
+    const totalTimeSeconds = totalDistance / 1;
     const hours = Math.floor(totalTimeSeconds / 3600);
     const minutes = Math.floor((totalTimeSeconds % 3600) / 60);
     const seconds = Math.floor(totalTimeSeconds % 60);
 
-    const altitudes = waypoints.map(wp => wp.alt).filter(a => a !== undefined);
-    const minAlt = altitudes.length ? Math.min(...altitudes) : 0;
-    const maxAlt = altitudes.length ? Math.max(...altitudes) : 0;
+    const isReady = totalWaypoints > 0;
+    const statusColor = isReady ? CARD_COLORS.status : '#6B7280';
 
     return (
         <View style={styles.container}>
+            {/* Header */}
             <View style={styles.header}>
-                <View style={styles.headerIcon}>
-                    <Text style={styles.iconText}>📊</Text>
+                <View style={styles.headerLeft}>
+                    <View style={styles.headerIconWrap}>
+                        <Ionicons name="stats-chart" size={16} color={colors.accent} />
+                    </View>
+                    <Text style={styles.headerTitle}>STATISTICS</Text>
                 </View>
-                <Text style={styles.headerTitle}>Mission Statistics</Text>
+                <View style={[styles.headerBadge, { borderColor: statusColor + '50', backgroundColor: statusColor + '15' }]}>
+                    <View style={[styles.headerBadgeDot, { backgroundColor: statusColor }]} />
+                    <Text style={[styles.headerBadgeText, { color: statusColor }]}>
+                        {isReady ? `${totalWaypoints} PTS` : 'EMPTY'}
+                    </Text>
+                </View>
             </View>
 
+            {/* Stats Grid - 2 columns × 3 rows */}
             <View style={styles.grid}>
-                {/* Total Waypoints */}
-                <LinearGradient
-                    colors={['rgba(37, 99, 235, 0.2)', 'rgba(30, 64, 175, 0.2)']}
-                    style={styles.card}
-                >
-                    <View style={styles.cardContent}>
-                        <View>
-                            <Text style={styles.cardLabel}>TOTAL MARKING POINTS</Text>
+                <View style={styles.gridRow}>
+                    <View style={styles.statCard}>
+                        <View style={[styles.cardAccent, { backgroundColor: CARD_COLORS.points }]} />
+                        <View style={styles.cardInner}>
+                            <View style={styles.cardTopRow}>
+                                <Text style={styles.cardLabel}>MARKING POINTS</Text>
+                                <View style={[styles.iconWrap, { borderColor: CARD_COLORS.points + '40' }]}>
+                                    <Ionicons name="location" size={14} color={CARD_COLORS.points} />
+                                </View>
+                            </View>
                             <Text style={styles.cardValue}>{totalWaypoints}</Text>
                         </View>
-                        <Text style={styles.cardIcon}>📍</Text>
                     </View>
-                </LinearGradient>
 
-                {/* Total Rows */}
-                <LinearGradient
-                    colors={['rgba(147, 51, 234, 0.2)', 'rgba(107, 33, 168, 0.2)']}
-                    style={styles.card}
-                >
-                    <View style={styles.cardContent}>
-                        <View>
-                            <Text style={styles.cardLabel}>TOTAL ROWS</Text>
+                    <View style={styles.statCard}>
+                        <View style={[styles.cardAccent, { backgroundColor: CARD_COLORS.rows }]} />
+                        <View style={styles.cardInner}>
+                            <View style={styles.cardTopRow}>
+                                <Text style={styles.cardLabel}>TOTAL ROWS</Text>
+                                <View style={[styles.iconWrap, { borderColor: CARD_COLORS.rows + '40' }]}>
+                                    <Ionicons name="reorder-three" size={14} color={CARD_COLORS.rows} />
+                                </View>
+                            </View>
                             <Text style={styles.cardValue}>{totalRows}</Text>
                         </View>
-                        <Text style={styles.cardIcon}>📊</Text>
                     </View>
-                </LinearGradient>
+                </View>
 
-                {/* Total Blocks */}
-                <LinearGradient
-                    colors={['rgba(8, 145, 178, 0.2)', 'rgba(21, 94, 117, 0.2)']}
-                    style={styles.card}
-                >
-                    <View style={styles.cardContent}>
-                        <View>
-                            <Text style={styles.cardLabel}>TOTAL BLOCKS</Text>
+                <View style={styles.gridRow}>
+                    <View style={styles.statCard}>
+                        <View style={[styles.cardAccent, { backgroundColor: CARD_COLORS.blocks }]} />
+                        <View style={styles.cardInner}>
+                            <View style={styles.cardTopRow}>
+                                <Text style={styles.cardLabel}>TOTAL BLOCKS</Text>
+                                <View style={[styles.iconWrap, { borderColor: CARD_COLORS.blocks + '40' }]}>
+                                    <Ionicons name="grid" size={14} color={CARD_COLORS.blocks} />
+                                </View>
+                            </View>
                             <Text style={styles.cardValue}>{totalBlocks}</Text>
                         </View>
-                        <Text style={styles.cardIcon}>🏗️</Text>
                     </View>
-                </LinearGradient>
 
-                {/* Total Distance */}
-                <LinearGradient
-                    colors={['rgba(22, 163, 74, 0.2)', 'rgba(21, 128, 61, 0.2)']}
-                    style={styles.card}
-                >
-                    <View style={styles.cardContent}>
-                        <View>
-                            <Text style={styles.cardLabel}>TOTAL DISTANCE</Text>
+                    <View style={styles.statCard}>
+                        <View style={[styles.cardAccent, { backgroundColor: CARD_COLORS.distance }]} />
+                        <View style={styles.cardInner}>
+                            <View style={styles.cardTopRow}>
+                                <Text style={styles.cardLabel}>TOTAL DISTANCE</Text>
+                                <View style={[styles.iconWrap, { borderColor: CARD_COLORS.distance + '40' }]}>
+                                    <Ionicons name="speedometer" size={14} color={CARD_COLORS.distance} />
+                                </View>
+                            </View>
                             <View style={styles.valueRow}>
-                                <Text style={styles.cardValue}>{totalDistanceKm}</Text>
-                                <Text style={styles.unit}>km</Text>
+                                <Text style={styles.cardValue}>{totalDistanceM}</Text>
+                                <Text style={[styles.unitText, { color: CARD_COLORS.distance }]}>m</Text>
                             </View>
                         </View>
-                        <Text style={styles.cardIcon}>📏</Text>
                     </View>
-                </LinearGradient>
+                </View>
 
-                {/* Est Duration */}
-                <LinearGradient
-                    colors={['rgba(234, 88, 12, 0.2)', 'rgba(154, 52, 18, 0.2)']}
-                    style={[styles.card, styles.wideCard]}
-                >
-                    <View style={styles.cardContent}>
-                        <View style={styles.timeContainer}>
-                            <Text style={styles.cardLabel}>EST. DURATION (@ 1.5 m/s)</Text>
-                            <View style={styles.timeRow}>
-                                <View style={styles.timeBlock}>
-                                    <Text style={styles.timeValue}>{hours}</Text>
-                                    <Text style={styles.timeUnit}>Hr</Text>
-                                </View>
-                                <Text style={styles.timeSeparator}>:</Text>
-                                <View style={styles.timeBlock}>
-                                    <Text style={styles.timeValue}>{minutes}</Text>
-                                    <Text style={styles.timeUnit}>Min</Text>
-                                </View>
-                                <Text style={styles.timeSeparator}>:</Text>
-                                <View style={styles.timeBlock}>
-                                    <Text style={styles.timeValue}>{seconds}</Text>
-                                    <Text style={styles.timeUnit}>Sec</Text>
+                <View style={styles.gridRow}>
+                    <View style={styles.statCard}>
+                        <View style={[styles.cardAccent, { backgroundColor: CARD_COLORS.duration }]} />
+                        <View style={styles.cardInner}>
+                            <View style={styles.cardTopRow}>
+                                <Text style={styles.cardLabel}>EST. DURATION</Text>
+                                <View style={[styles.iconWrap, { borderColor: CARD_COLORS.duration + '40' }]}>
+                                    <Ionicons name="time" size={14} color={CARD_COLORS.duration} />
                                 </View>
                             </View>
+                            <Text style={styles.cardValue}>{hours}:{String(minutes).padStart(2, '0')}:{String(seconds).padStart(2, '0')}</Text>
                         </View>
-                        <Text style={styles.cardIcon}>⏱️</Text>
                     </View>
-                </LinearGradient>
 
-                {/* Mission Status */}
-                <LinearGradient
-                    colors={['rgba(22, 163, 74, 0.2)', 'rgba(21, 128, 61, 0.2)']}
-                    style={[styles.card, styles.wideCard]}
-                >
-                    <View style={styles.cardContent}>
-                        <View>
-                            <Text style={styles.cardLabel}>MISSION STATUS</Text>
-                            <View style={styles.statusRow}>
-                                <View style={[styles.statusDot, totalWaypoints > 0 && styles.statusDotActive]} />
-                                <Text style={[styles.statusText, totalWaypoints > 0 && styles.statusTextActive]}>
-                                    {totalWaypoints > 0 ? 'Mission Ready' : 'No Data'}
-                                </Text>
+                    <View style={styles.statCard}>
+                        <View style={[styles.cardAccent, { backgroundColor: statusColor }]} />
+                        <View style={styles.cardInner}>
+                            <View style={styles.cardTopRow}>
+                                <Text style={styles.cardLabel}>MISSION STATUS</Text>
+                                <View style={[styles.iconWrap, { borderColor: statusColor + '40' }]}>
+                                    <Ionicons name={isReady ? 'checkmark-circle' : 'ellipse-outline'} size={14} color={statusColor} />
+                                </View>
                             </View>
-                            <Text style={styles.statusSubtext}>
-                                {totalWaypoints > 0 ? 'Mission valid' : 'Add marking points to begin'}
+                            <Text style={[styles.cardValue, { color: statusColor, fontSize: 16 }]}>
+                                {isReady ? 'Mission Ready' : 'No Data'}
                             </Text>
                         </View>
-                        <Text style={styles.cardIcon}>{totalWaypoints > 0 ? '✅' : '⚪'}</Text>
                     </View>
-                </LinearGradient>
+                </View>
             </View>
         </View>
     );
@@ -154,136 +150,129 @@ export const MissionStatistics: React.FC<Props> = ({ waypoints }) => {
 const styles = StyleSheet.create({
     container: {
         flex: 1,
-        backgroundColor: '#001F3F', // Darker blue background
+        backgroundColor: colors.panelBg,
         borderRadius: 12,
-        padding: 12,
+        borderWidth: 1,
+        borderColor: colors.border,
+        padding: 16,
+        gap: 12,
     },
+
+    // ── HEADER ──
     header: {
         flexDirection: 'row',
         alignItems: 'center',
-        marginBottom: 12,
-        gap: 8,
+        justifyContent: 'space-between',
+        paddingBottom: 12,
+        borderBottomWidth: 1,
+        borderBottomColor: colors.border,
     },
-    headerIcon: {
-        backgroundColor: 'rgba(6, 182, 212, 0.2)',
-        padding: 6,
-        borderRadius: 6,
+    headerLeft: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 10,
     },
-    iconText: {
-        fontSize: 10,
+    headerIconWrap: {
+        width: 32,
+        height: 32,
+        borderRadius: 10,
+        backgroundColor: 'rgba(59, 130, 246, 0.15)',
+        borderWidth: 1,
+        borderColor: 'rgba(59, 130, 246, 0.3)',
+        justifyContent: 'center',
+        alignItems: 'center',
     },
     headerTitle: {
-        color: '#67E8F9',
-        fontSize: 12,
-        fontWeight: 'bold',
+        color: colors.accent,
+        fontSize: 14,
+        fontWeight: '700',
+        letterSpacing: 3,
     },
-    grid: {
+    headerBadge: {
         flexDirection: 'row',
-        flexWrap: 'wrap',
-        justifyContent: 'space-between',
-        gap: 8,
-        height: '88%',
-    },
-    card: {
-        width: '48%',
-        height: '30%',
-        borderRadius: 8,
-        padding: 10,
+        alignItems: 'center',
+        gap: 5,
         borderWidth: 1,
-        borderColor: 'rgba(255, 255, 255, 0.1)',
-        marginBottom: 8,
+        borderRadius: 6,
+        paddingHorizontal: 8,
+        paddingVertical: 3,
     },
-    wideCard: {
-        flexBasis: '48%',
+    headerBadgeDot: {
+        width: 5,
+        height: 5,
+        borderRadius: 3,
     },
-    cardContent: {
-        flexDirection: 'row',
-        justifyContent: 'space-between',
-        alignItems: 'flex-start',
-        overflow: 'hidden',
-    },
-    cardLabel: {
-        color: 'rgba(103, 232, 249, 0.8)',
+    headerBadgeText: {
         fontSize: 8,
-        fontWeight: '600',
-        marginBottom: 4,
-        letterSpacing: 0.3,
-        flexShrink: 1,
+        fontWeight: '700',
+        letterSpacing: 1.5,
+    },
+
+    // ── GRID ──
+    grid: {
+        flex: 1,
+        gap: 8,
+    },
+    gridRow: {
+        flex: 1,
+        flexDirection: 'row',
+        gap: 8,
+    },
+
+    // ── STAT CARD (uniform for all 6) ──
+    statCard: {
+        flex: 1,
+        flexDirection: 'row',
+        backgroundColor: colors.cardBg,
+        borderRadius: 10,
+        overflow: 'hidden',
+        borderWidth: 1,
+        borderColor: colors.border,
+    },
+    cardAccent: {
+        width: 3,
+        alignSelf: 'stretch',
+    },
+    cardInner: {
+        flex: 1,
+        padding: 10,
+    },
+    cardTopRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        marginBottom: 6,
+    },
+    iconWrap: {
+        width: 26,
+        height: 26,
+        borderRadius: 13,
+        borderWidth: 1,
+        justifyContent: 'center',
+        alignItems: 'center',
     },
     cardValue: {
-        color: '#FFFFFF',
-        fontSize: 16,
-        fontWeight: 'bold',
-        flexShrink: 1,
+        color: '#ffffff',
+        fontSize: 22,
+        fontWeight: '800',
+        fontVariant: ['tabular-nums'],
+        textAlign: 'center',
+    },
+    cardLabel: {
+        color: 'rgba(103, 232, 249, 0.7)',
+        fontSize: 9,
+        fontWeight: '700',
+        letterSpacing: 1.5,
+        textTransform: 'uppercase',
     },
     valueRow: {
         flexDirection: 'row',
         alignItems: 'baseline',
-        gap: 4,
+        justifyContent: 'center',
+        gap: 3,
     },
-    unit: {
-        color: 'rgba(103, 232, 249, 0.7)',
-        fontSize: 10,
-    },
-    cardIcon: {
-        fontSize: 16,
-        opacity: 0.5,
-        flexShrink: 0,
-        marginLeft: 4,
-    },
-    timeContainer: {
-        flex: 1,
-        flexShrink: 1,
-        overflow: 'hidden',
-    },
-    timeRow: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 4,
-    },
-    timeBlock: {
-        alignItems: 'center',
-    },
-    timeValue: {
-        color: '#FFFFFF',
-        fontSize: 14,
-        fontWeight: 'bold',
-    },
-    timeUnit: {
-        color: 'rgba(251, 146, 60, 0.7)',
-        fontSize: 7,
-    },
-    timeSeparator: {
-        color: '#FFFFFF',
-        fontSize: 12,
-        marginBottom: 8,
-    },
-    statusRow: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 6,
-        marginBottom: 2,
-    },
-    statusDot: {
-        width: 8,
-        height: 8,
-        borderRadius: 4,
-        backgroundColor: '#6B7280',
-    },
-    statusDotActive: {
-        backgroundColor: '#22C55E',
-    },
-    statusText: {
-        color: '#9CA3AF',
-        fontSize: 11,
-        fontWeight: 'bold',
-        flexShrink: 1,
-    },
-    statusTextActive: {
-        color: '#4ADE80',
-    },
-    statusSubtext: {
-        color: 'rgba(74, 222, 128, 0.6)',
-        fontSize: 8,
+    unitText: {
+        fontSize: 13,
+        fontWeight: '600',
     },
 });

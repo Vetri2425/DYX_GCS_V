@@ -34,7 +34,10 @@
       "Bash(ssh:*)",
       "Bash(__NEW_LINE_5f24c45df9e10f37__ echo \"=== Verification: Mission Endpoints in Config ===\")",
       "Bash(__NEW_LINE_5f24c45df9e10f37__ echo \"=== Verification: WebSocket Subscription ===\")",
-      "Bash(__NEW_LINE_5f24c45df9e10f37__ echo \"=== Verification: Mission Parameters Methods ===\")"
+      "Bash(__NEW_LINE_5f24c45df9e10f37__ echo \"=== Verification: Mission Parameters Methods ===\")",
+      "Bash(grep -E \"\\(App|index\\)\\\\.tsx$\")",
+      "Bash(xargs grep -l \"activeTab\\\\|PersistentStorage\")",
+      "Bash(xargs grep -l \"Alert\\\\|Toast\")"
     ],
     "deny": [],
     "ask": []

@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, Text, StyleSheet, ScrollView } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity } from 'react-native';
 import { colors } from '../../theme/colors';
 import { Waypoint } from './types';
 import MissionReportExport from './MissionReportExport';
@@ -9,6 +9,7 @@ interface Props {
   waypoints: Waypoint[];
   onExport: () => void;
   onExportComplete?: () => void;
+  onClear?: () => void;
   statusMap: Record<number, {
     reached?: boolean;
     marked?: boolean;
@@ -31,7 +32,7 @@ interface Props {
   onReorder?: (fromIndex: number, direction: 'up' | 'down') => void; // reorder handler
 }
 
-export const WaypointsTable: React.FC<Props> = ({ waypoints, onExport, onExportComplete, statusMap, missionMode, currentIndex, pinnedCount = 4, onReorder }) => {
+export const WaypointsTable: React.FC<Props> = ({ waypoints, onExport, onExportComplete, onClear, statusMap, missionMode, currentIndex, pinnedCount = 4, onReorder }) => {
   // Format ISO timestamp to readable time string
   const formatTimestamp = (timestamp?: string): string => {
     if (!timestamp) return '—';
@@ -114,13 +115,21 @@ export const WaypointsTable: React.FC<Props> = ({ waypoints, onExport, onExportC
         {/* Header Row */}
         <View style={styles.headerRow}>
         <Text style={styles.title}>MISSION MARKING POINTS</Text>
-        <MissionReportExport
-          waypoints={waypoints}
-          statusMap={statusMap}
-          missionMode={missionMode}
-          onExport={onExport}
-          onExportComplete={onExportComplete}
-        />
+        <View style={styles.headerButtons}>
+          {onClear && (
+            <TouchableOpacity style={styles.clearButton} onPress={onClear}>
+              <Text style={styles.clearIcon}>🗑️</Text>
+              <Text style={styles.clearButtonText}>Clear</Text>
+            </TouchableOpacity>
+          )}
+          <MissionReportExport
+            waypoints={waypoints}
+            statusMap={statusMap}
+            missionMode={missionMode}
+            onExport={onExport}
+            onExportComplete={onExportComplete}
+          />
+        </View>
       </View>
 
       {/* Table */}
@@ -155,7 +164,7 @@ export const WaypointsTable: React.FC<Props> = ({ waypoints, onExport, onExportC
                 isCurrentWaypoint && styles.currentWaypointRow,
                 isSkipped && styles.skippedRow
               ]}>
-                <Text style={[styles.cell, styles.colSN, styles.cellYellow, isCurrentWaypoint && styles.currentWaypointText, isSkipped && styles.skippedText]}>{wp.sn}</Text>
+                <Text style={[styles.cell, styles.colSN, styles.cellYellow, isCurrentWaypoint && styles.currentWaypointText, isSkipped && styles.skippedText]}>{index + 1}</Text>
                 <Text style={[styles.cell, styles.colBlock, styles.cellYellow, isCurrentWaypoint && styles.currentWaypointText, isSkipped && styles.skippedText]}>{wp.block}</Text>
                 <Text style={[styles.cell, styles.colRow, isCurrentWaypoint && styles.currentWaypointText, isSkipped && styles.skippedText]}>{wp.row}</Text>
                 <Text style={[styles.cell, styles.colPile, isCurrentWaypoint && styles.currentWaypointText, isSkipped && styles.skippedText]}>{wp.pile}</Text>
@@ -173,7 +182,7 @@ export const WaypointsTable: React.FC<Props> = ({ waypoints, onExport, onExportC
                     isCurrentWaypoint && styles.currentWaypointText,
                     isSkipped && styles.skippedText,
                   ]}>
-                    {wpStatus?.status === 'completed' ? '✅ Completed' : wpStatus?.status === 'skipped' ? 'Skipped' : wpStatus?.marked ? '📍 Marked' : wpStatus?.reached ? '🚀 Reached' : wpStatus?.status === 'loading' ? 'Loading' : 'Pending'}
+                    {wpStatus?.status === 'completed' ? '✅ Completed' : wpStatus?.status === 'skipped' ? 'Skipped' : wpStatus?.marked ? '✦ Marked' : wpStatus?.reached ? '🚀 Reached' : wpStatus?.status === 'loading' ? 'Loading' : 'Pending'}
                   </Text>
                   {(() => {
                     const { text: accuracyText, color: accuracyColor } = getAccuracyDisplay(wpStatus);
@@ -228,10 +237,11 @@ const styles = StyleSheet.create({
     borderBottomColor: 'rgba(34, 211, 238, 0.3)',
   },
   title: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#67E8F9',
-    letterSpacing: 0.5,
+    fontSize: 13,
+    fontWeight: '700',
+    color: colors.accent,
+    letterSpacing: 1,
+    textAlign: 'center',
   },
 
   tableWrapper: {
@@ -330,5 +340,27 @@ const styles = StyleSheet.create({
     fontSize: 12,
     marginTop: 2,
     opacity: 0.8,
+  },
+  headerButtons: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  clearButton: {
+    flexDirection: 'row',
+    backgroundColor: '#EF4444',
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 10,
+    alignItems: 'center',
+    gap: 6,
+  },
+  clearIcon: {
+    fontSize: 14,
+  },
+  clearButtonText: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: '600',
   },
 });

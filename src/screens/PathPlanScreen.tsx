@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { View, StyleSheet, SafeAreaView, StatusBar, Alert, Modal, ScrollView, TouchableOpacity, Text } from 'react-native';
+import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { colors } from '../theme/colors';
 import { PathPlanWaypoint } from '../types/pathplan';
 import { useRover } from '../context/RoverContext';
@@ -11,8 +12,7 @@ import { DrawingToolsPanel } from '../components/pathplan/DrawingToolsPanel';
 import { CircleGeneratorDialog } from '../components/pathplan/CircleGeneratorDialog';
 import { SurveyGridDialog } from '../components/pathplan/SurveyGridDialog';
 import { TextAnnotationDialog } from '../components/pathplan/TextAnnotationDialog';
-import { FreeDrawDialog, DrawSettings } from '../components/pathplan/FreeDrawDialog';
-import { DrawingCanvas } from '../components/pathplan/DrawingCanvas';
+import { CADDrawingCanvas } from '../components/pathplan/CADDrawingCanvas';
 import { ManualPathConnectionCanvas } from '../components/pathplan/ManualPathConnectionCanvas';
 import { ManualMapConnection } from '../components/pathplan/ManualMapConnection';
 import { ManualConnectionChoice } from '../components/pathplan/ManualConnectionChoice';
@@ -100,7 +100,7 @@ export default function PathPlanScreen() {
           //console.log('[PathPlan] Servo config loaded:', cfg.servo_enabled);
         }
       } catch (err) {
-        console.error('[PathPlan] Failed to fetch servo config:', err);
+        // console.error('[PathPlan] Failed to fetch servo config:', err);
       }
     };
 
@@ -213,11 +213,9 @@ export default function PathPlanScreen() {
   const [showCircleDialog, setShowCircleDialog] = useState(false);
   const [showSurveyGridDialog, setShowSurveyGridDialog] = useState(false);
   const [showTextDialog, setShowTextDialog] = useState(false);
-  const [showDrawDialog, setShowDrawDialog] = useState(false);
+  const [showCADCanvas, setShowCADCanvas] = useState(false);
   const [isDrawingMode, setIsDrawingMode] = useState(false);
-  const [drawSettings, setDrawSettings] = useState<DrawSettings | null>(null);
   const [homePosition, setHomePosition] = useState<{ lat: number; lng: number } | null>(null);
-  const [isPinningHome, setIsPinningHome] = useState(false);
 
   // Measure tool state
   const [measurePoints, setMeasurePoints] = useState<{ lat: number; lon: number; seq: number; waypointId?: number }[]>([]);
@@ -274,9 +272,8 @@ export default function PathPlanScreen() {
   useEffect(() => {
     const loadPersistedState = async () => {
       try {
-        const [savedHomePosition, savedDrawSettings, savedDrawingMode, savedActiveTool, savedUIState, savedMapVisualization] = await Promise.all([
+        const [savedHomePosition, savedDrawingMode, savedActiveTool, savedUIState, savedMapVisualization] = await Promise.all([
           PersistentStorage.loadHomePosition(),
-          PersistentStorage.loadDrawSettings(),
           PersistentStorage.loadDrawingMode(),
           PersistentStorage.loadActiveTool(),
           PersistentStorage.loadPathPlanUIState(),
@@ -286,11 +283,6 @@ export default function PathPlanScreen() {
         if (savedHomePosition) {
           setHomePosition(savedHomePosition);
           console.log('[PathPlanScreen] 📂 Restored home position');
-        }
-
-        if (savedDrawSettings) {
-          setDrawSettings(savedDrawSettings);
-          console.log('[PathPlanScreen] 📂 Restored draw settings');
         }
 
         if (savedDrawingMode) {
@@ -388,15 +380,6 @@ export default function PathPlanScreen() {
       }, 500);
     }
 
-    // Draw settings - 500ms debounce
-    if (drawSettings) {
-      autoSaveTimersRef.current.drawSettings = setTimeout(() => {
-        PersistentStorage.saveDrawSettings(drawSettings).catch(error => {
-          console.error('[PathPlanScreen] Failed to persist draw settings:', error);
-        });
-      }, 500);
-    }
-
     // Drawing mode - 300ms debounce
     autoSaveTimersRef.current.drawingMode = setTimeout(() => {
       PersistentStorage.saveDrawingMode(isDrawingMode).catch(error => {
@@ -429,7 +412,7 @@ export default function PathPlanScreen() {
         console.error('[PathPlanScreen] Failed to persist map visualization settings:', error);
       });
     }, 300);
-  }, [homePosition, drawSettings, isDrawingMode, activeDrawingTool, selectedWaypoint, isDrawingToolsCollapsed, mapVisualization]);
+  }, [homePosition, isDrawingMode, activeDrawingTool, selectedWaypoint, isDrawingToolsCollapsed, mapVisualization]);
 
   // Single consolidated useEffect for all auto-saves
   useEffect(() => {
@@ -468,13 +451,9 @@ export default function PathPlanScreen() {
       return;
     }
 
-    // Check if we're in home pinning mode
-    if (isPinningHome) {
-      setHomePosition({ lat: coord.latitude, lng: coord.longitude });
-      setIsPinningHome(false);
-      Alert.alert('Home Position Set', `Home set at ${coord.latitude.toFixed(6)}, ${coord.longitude.toFixed(6)}`);
-      // Reopen draw dialog
-      setShowDrawDialog(true);
+    // Point tool validation: Only create waypoints if point tool is active
+    // Silently ignore if point tool is not active (no alert, no UI change)
+    if (activeDrawingTool !== 'line') {
       return;
     }
 
@@ -517,6 +496,12 @@ export default function PathPlanScreen() {
   };
 
   const handleWaypointDrag = (id: number, coord: { latitude: number; longitude: number }) => {
+    // Point tool validation: Only allow dragging if point tool is active
+    // Silently ignore if point tool is not active (user can drag but changes won't register)
+    if (activeDrawingTool !== 'line') {
+      return;
+    }
+
     // Update waypoint coordinates and recalculate distances
     const updatedWaypoints = waypoints.map((wp, index) => {
       if (wp.id === id) {
@@ -665,7 +650,6 @@ export default function PathPlanScreen() {
   const handleDrawingComplete = (coords: { latitude: number; longitude: number }[]) => {
     if (coords.length === 0) {
       setIsDrawingMode(false);
-      setDrawSettings(null);
       return;
     }
 
@@ -722,23 +706,6 @@ export default function PathPlanScreen() {
     }
 
     setIsDrawingMode(false);
-    setDrawSettings(null);
-  };
-
-  const handleStartDrawing = (settings: DrawSettings) => {
-    setDrawSettings(settings);
-    setIsDrawingMode(true);
-    setActiveDrawingTool('draw');
-    Alert.alert(
-      'Drawing Mode Active',
-      `Draw area: ${settings.drawingWidth}m × ${settings.drawingHeight}m\nMarking point spacing: ${settings.waypointSpacing}m\n\nTouch and drag on the map to draw. Double-tap to finish.`
-    );
-  };
-
-  const handlePinHomeMode = () => {
-    setShowDrawDialog(false);
-    setIsPinningHome(true);
-    Alert.alert('Pin Home Position', 'Tap on the map to set the home/start position for your drawing.');
   };
 
   // Manual control handlers
@@ -1728,7 +1695,6 @@ export default function PathPlanScreen() {
               activeDrawingTool={activeDrawingTool}
               onDrawingComplete={handleDrawingComplete}
               isDrawingMode={false}
-              drawSettings={null}
               onToggleFullscreen={toggleMapFullscreen}
               isManualConnectionMode={isConnectingPath}
               manualConnections={manualPathConnections}
@@ -1751,7 +1717,7 @@ export default function PathPlanScreen() {
                   onShowCircleTool={() => setShowCircleDialog(true)}
                   onShowSurveyGridTool={() => setShowSurveyGridDialog(true)}
                   onShowTextTool={() => setShowTextDialog(true)}
-                  onShowDrawTool={() => setShowDrawDialog(true)}
+                  onShowCADDrawing={() => setShowCADCanvas(true)}
                   onShowManualConnection={() => setShowManualConnectionCanvas(true)}
                   isCollapsed={isDrawingToolsCollapsed}
                   onToggleCollapse={() => setIsDrawingToolsCollapsed(!isDrawingToolsCollapsed)}
@@ -1789,7 +1755,6 @@ export default function PathPlanScreen() {
                   activeDrawingTool={activeDrawingTool}
                   onDrawingComplete={handleDrawingComplete}
                   isDrawingMode={false}
-                  drawSettings={null}
                   onToggleFullscreen={toggleMapFullscreen}
                   isManualConnectionMode={isConnectingPath}
                   manualConnections={manualPathConnections}
@@ -1802,19 +1767,6 @@ export default function PathPlanScreen() {
                 />
               </View>
             </View>
-
-            {/* White Canvas Drawing Mode Overlay */}
-            {isDrawingMode && drawSettings && (
-              <DrawingCanvas
-                visible={isDrawingMode}
-                drawSettings={drawSettings}
-                onDrawingComplete={handleDrawingComplete}
-                onCancel={() => {
-                  setIsConnectingPath(false);
-                  setManualPathConnections([]);
-                }}
-              />
-            )}
 
             {/* Manual Connection Choice Dialog */}
             <ManualConnectionChoice
@@ -2233,7 +2185,13 @@ export default function PathPlanScreen() {
                 }, 200);
                 addTimer(timer);
               }} style={{ flex: 1, paddingVertical: 12, paddingHorizontal: 12, backgroundColor: colors.blueBtn, borderRadius: 8 }}>
-                <Text style={{ color: colors.text, fontWeight: '700', textAlign: 'center' }}>📤 Upload New</Text>
+                <MaterialCommunityIcons
+                  name="upload-circle-outline"
+                  size={20}
+                  color={colors.text}
+                  style={{ marginBottom: 4 }}
+                />
+                <Text style={{ color: colors.text, fontWeight: '700', textAlign: 'center' }}>Upload New</Text>
               </TouchableOpacity>
 
               <TouchableOpacity onPress={() => {
@@ -2282,27 +2240,30 @@ export default function PathPlanScreen() {
         }
       />
 
-      {/* Free Draw Dialog */}
-      <FreeDrawDialog
-        visible={showDrawDialog}
-        onClose={() => setShowDrawDialog(false)}
-        onStartDrawing={handleStartDrawing}
-        onPinHome={handlePinHomeMode}
-        hasHomePosition={!!(homePosition || roverPosition)}
-        homePosition={homePosition || (roverPosition ? { lat: roverPosition.lat, lng: roverPosition.lng } : null)}
+      {/* CAD Drawing Canvas */}
+      <CADDrawingCanvas
+        visible={showCADCanvas}
+        onClose={() => setShowCADCanvas(false)}
+        onSaveWaypoints={(waypoints) => {
+          // Add waypoints to the mission
+          waypoints.forEach((wp, index) => {
+            const newWaypoint: Waypoint = {
+              id: Date.now() + index,
+              lat: wp.lat,
+              lng: wp.lng,
+              altitude: 10,
+              speed: 5,
+              action: 'none',
+              heading: 0,
+              gimbalPitch: -90,
+              capturePhoto: false,
+              hoverTime: 0,
+            };
+            setWaypoints(prev => [...prev, newWaypoint]);
+          });
+        }}
+        currentPosition={roverPosition || { lat: 13.0827, lng: 80.2707 }}
       />
-
-      {/* Home Pinning Overlay */}
-      {isPinningHome && (
-        <View style={styles.pinningOverlay}>
-          <View style={styles.pinningBanner}>
-            <Text style={styles.pinningText}>📍 Tap on map to set home position</Text>
-            <TouchableOpacity onPress={() => setIsPinningHome(false)} style={styles.pinningCancel}>
-              <Text style={styles.pinningCancelText}>Cancel</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      )}
 
       {/* Manual Control Modal */}
       <Modal
@@ -2424,7 +2385,12 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     overflow: 'hidden',
     borderWidth: 1,
-    borderColor: colors.border,
+    borderColor: 'rgba(59, 130, 246, 0.25)',
+    shadowColor: '#3B82F6',
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.15,
+    shadowRadius: 12,
+    elevation: 4,
   },
   rightPanel: {
     width: '25%',
@@ -2446,38 +2412,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingTop: 12,
     paddingBottom: 12,
-  },
-  pinningOverlay: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    zIndex: 1000,
-  },
-  pinningBanner: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: 'rgba(59, 130, 246, 0.95)',
-    paddingVertical: 12,
-    paddingHorizontal: 16,
-    gap: 16,
-  },
-  pinningText: {
-    color: colors.text,
-    fontSize: 14,
-    fontWeight: '600',
-  },
-  pinningCancel: {
-    backgroundColor: 'rgba(255,255,255,0.2)',
-    paddingVertical: 6,
-    paddingHorizontal: 12,
-    borderRadius: 6,
-  },
-  pinningCancelText: {
-    color: colors.text,
-    fontSize: 12,
-    fontWeight: '600',
   },
   // Drawing mode overlay styles
   drawingOverlay: {

@@ -112,7 +112,7 @@ export const MapVisualizationControls: React.FC<MapVisualizationControlsProps> =
           onPress={toggleMenu}
           activeOpacity={0.7}
         >
-          <MaterialCommunityIcons name="cog" size={18} color="#67e8f9" />
+          <MaterialCommunityIcons name="cog" size={18} color="rgba(103, 232, 249, 0.9)" />
         </TouchableOpacity>
 
         {/* Dropdown Menu */}
@@ -156,7 +156,7 @@ export const MapVisualizationControls: React.FC<MapVisualizationControlsProps> =
                       <MaterialCommunityIcons
                         name="check"
                         size={12}
-                        color="#0a1628"
+                        color="#ffffff"
                       />
                     )}
                   </View>
@@ -173,39 +173,44 @@ export const MapVisualizationControls: React.FC<MapVisualizationControlsProps> =
 const styles = StyleSheet.create({
   container: {
     position: 'absolute',
-    top: 10,
-    right: 50,
+    top: 12,
+    right: 56,
     zIndex: 1000,
   },
   settingsButton: {
-    width: 36,
-    height: 36,
-    backgroundColor: 'rgba(30, 41, 59, 0.9)',
+    width: 40,
+    height: 40,
+    backgroundColor: 'rgba(13, 42, 75, 0.92)',
     borderWidth: 1,
-    borderColor: 'rgba(103, 232, 249, 0.3)',
-    borderRadius: 8,
+    borderColor: 'rgba(59, 130, 246, 0.35)',
+    borderRadius: 10,
     justifyContent: 'center',
     alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.3,
+    shadowRadius: 6,
+    elevation: 4,
   },
   settingsButtonActive: {
-    backgroundColor: 'rgba(30, 41, 59, 0.95)',
-    borderColor: 'rgba(103, 232, 249, 0.6)',
+    backgroundColor: 'rgba(59, 130, 246, 0.2)',
+    borderColor: 'rgba(59, 130, 246, 0.6)',
   },
   dropdownMenu: {
     position: 'absolute',
     bottom: -280,
     right: 0,
     width: 220,
-    backgroundColor: 'rgba(30, 41, 59, 0.92)',
+    backgroundColor: 'rgba(13, 42, 75, 0.96)',
     borderWidth: 1,
-    borderColor: 'rgba(103, 232, 249, 0.3)',
-    borderRadius: 8,
+    borderColor: 'rgba(59, 130, 246, 0.3)',
+    borderRadius: 10,
     overflow: 'hidden',
     paddingVertical: 4,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
+    shadowOpacity: 0.35,
+    shadowRadius: 10,
     elevation: 10,
   },
   menuItem: {
@@ -215,8 +220,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 10,
     borderBottomWidth: 1,
-    borderBottomColor: 'rgba(103, 232, 249, 0.1)',
-    backgroundColor: 'rgba(30, 41, 59, 0.85)',
+    borderBottomColor: 'rgba(59, 130, 246, 0.1)',
   },
   menuItemContent: {
     flexDirection: 'row',
@@ -227,7 +231,7 @@ const styles = StyleSheet.create({
     marginRight: 10,
   },
   menuItemLabel: {
-    color: '#e2e8f0',
+    color: 'rgba(229, 241, 255, 0.85)',
     fontSize: 13,
     fontWeight: '500',
   },
@@ -235,13 +239,14 @@ const styles = StyleSheet.create({
     width: 18,
     height: 18,
     borderWidth: 1.5,
-    borderColor: '#67e8f9',
-    borderRadius: 3,
+    borderColor: 'rgba(59, 130, 246, 0.5)',
+    borderRadius: 4,
     justifyContent: 'center',
     alignItems: 'center',
     backgroundColor: 'transparent',
   },
   checkboxChecked: {
-    backgroundColor: '#67e8f9',
+    backgroundColor: '#3B82F6',
+    borderColor: '#3B82F6',
   },
 });

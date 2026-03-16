@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Alert } from 'react-native';
+import { MaterialCommunityIcons } from '@expo/vector-icons';
 import VoiceSettingsModal from './VoiceSettingsModal';
 import { FailsafeModeSelector } from '../pathplan/FailsafeModeSelector';
 import { colors } from '../../theme/colors';
@@ -13,7 +14,7 @@ export function HeaderBar({ missionMode = 'DGPS Mark' }: { missionMode?: string 
   const getModeIcon = (mode: string): string => {
     switch (mode.toLowerCase()) {
       case 'dgps mark':
-        return '📍';
+        return 'star-three-points-outline';
       case 'interval spray':
         return '💧';
       case 'survey':
@@ -81,7 +82,16 @@ export function HeaderBar({ missionMode = 'DGPS Mark' }: { missionMode?: string 
 
       <View style={styles.rightSection}>
         <View style={styles.modeBox}>
-          <Text style={styles.modeIcon}>{getModeIcon(missionMode)}</Text>
+          {getModeIcon(missionMode) === 'star-three-points-outline' ? (
+            <MaterialCommunityIcons
+              name="star-three-points-outline"
+              size={14}
+              color="#fff"
+              style={styles.modeIconMdi}
+            />
+          ) : (
+            <Text style={styles.modeIcon}>{getModeIcon(missionMode)}</Text>
+          )}
           <View>
             <Text style={styles.modeLabel}>MODE</Text>
             <Text style={styles.modeValue}>{missionMode}</Text>
@@ -278,6 +288,9 @@ const styles = StyleSheet.create({
   },
   modeIcon: {
     fontSize: 14,
+    marginRight: 6,
+  },
+  modeIconMdi: {
     marginRight: 6,
   },
   modeLabel: {

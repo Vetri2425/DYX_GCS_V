@@ -31,6 +31,7 @@ const DEFAULT_WS_URL =
 // Dynamic backend URL (can be changed at runtime)
 let dynamicBackendURL: string | null = null;
 let dynamicWsURL: string | null = null;
+let _offlineMode = false;
 
 /**
  * Initialize backend URL from storage
@@ -51,6 +52,14 @@ export async function initializeBackendURL(): Promise<void> {
 export function setBackendURL(url: string): void {
   dynamicBackendURL = url;
   dynamicWsURL = url.replace('http://', 'ws://').replace('https://', 'wss://') + '/socket.io';
+  _offlineMode = url.includes('localhost') || url.includes('127.0.0.1');
+}
+
+/**
+ * Check if the app is running in offline mode (no real backend)
+ */
+export function isOfflineMode(): boolean {
+  return _offlineMode;
 }
 
 /**

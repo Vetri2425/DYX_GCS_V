@@ -261,10 +261,7 @@ export const VehicleStatusCard: React.FC<Props> = ({ status, telemetry, isConnec
     <View style={styles.card}>
       {/* Header */}
       <View style={styles.header}>
-        <View style={styles.iconContainer}>
-          <Text style={styles.icon}>🚁</Text>
-        </View>
-        <Text style={styles.title}>Robot Status</Text>
+        <Text style={styles.title}>ROBOT STATUS</Text>
         <View style={[styles.statusDot, { backgroundColor: connectionStatusColor }]} />
       </View>
 
@@ -291,15 +288,7 @@ export const VehicleStatusCard: React.FC<Props> = ({ status, telemetry, isConnec
             <Text style={styles.accuracyValue}>{status.satellites}</Text>
           </View>
         </View>
-        {/* Satellite Signal Status Row */}
-        {status.satelliteSignal && (
-          <View key="satellite-signal" style={styles.statusRow}>
-            <Text style={styles.label}>Sat Signal</Text>
-            <View style={[styles.accuracyBox, { backgroundColor: satelliteColor }]}>
-              <Text style={styles.accuracyValue}>{status.satelliteSignal}</Text>
-            </View>
-          </View>
-        )}
+
         <View key="hrms" style={styles.statusRow}>
           <Text style={styles.label}>HRMS</Text>
           <View style={[styles.accuracyBox, { backgroundColor: hrmsColor }]}>
@@ -347,8 +336,11 @@ const styles = StyleSheet.create({
   header: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 4,
-    paddingBottom: 4,
+    justifyContent: 'space-between',
+    marginBottom: 12,
+    paddingBottom: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
   },
   iconContainer: {
     backgroundColor: 'rgba(64, 132, 241, 0.8)',
@@ -356,13 +348,12 @@ const styles = StyleSheet.create({
     borderRadius: 4,
     marginRight: 6,
   },
-  icon: {
-    fontSize: 12,
-  },
   title: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#FFFFFF',
+    fontSize: 13,
+    fontWeight: '700',
+    color: colors.accent,
+    letterSpacing: 1,
+    textAlign: 'center',
     flex: 1,
   },
   statusDot: {

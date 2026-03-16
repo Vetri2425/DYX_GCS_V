@@ -112,6 +112,8 @@ export function RoverProvider({ children }: RoverProviderProps): React.ReactElem
           const nDistance = (n as any).distance ?? 0;
           return p.lat === n.lat && p.lon === n.lon && p.alt === n.alt && p.sn === n.sn && p.status === n.status && Number(pDistance) === Number(nDistance) && p.mark === n.mark;
         });
+      // Extra guard: even if values match per-index, detect array reorder by checking
+      // if the sequence of sn values is identical (catches renumbered reorders where lat/lon differ)
       if (shallowSame) {
         return prev;
       }

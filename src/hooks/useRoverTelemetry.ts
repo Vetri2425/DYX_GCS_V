@@ -10,6 +10,7 @@ import io from 'socket.io-client';
 import type { Socket, ManagerOptions, SocketOptions } from 'socket.io-client';
 import {
   getBackendURL,
+  isOfflineMode,
   SOCKET_CONFIG,
   API_ENDPOINTS,
   SOCKET_EVENTS,
@@ -132,7 +133,9 @@ async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
 
     return (await response.json()) as T;
   } catch (error) {
-    console.error('[fetchJson] Error:', error);
+    if (!isOfflineMode()) {
+      console.error('[fetchJson] Error:', error);
+    }
     throw error;
   }
 }
@@ -1174,9 +1177,10 @@ export function useRoverTelemetry(): UseRoverTelemetryResult {
 
         socket.on('connect_error', (error: any) => {
           const backendUrl = getHttpBase();
-          console.error('[SOCKET] Connection error:', error.message || error);
-          console.error('[SOCKET] Backend URL:', backendUrl);
-          console.error('[SOCKET] Error details:', {
+          const log = isOfflineMode() ? console.warn : console.error;
+          log('[SOCKET] Connection error:', error.message || error);
+          log('[SOCKET] Backend URL:', backendUrl);
+          log('[SOCKET] Error details:', {
             code: error.code,
             type: error.type,
             data: error.data,
@@ -1185,13 +1189,13 @@ export function useRoverTelemetry(): UseRoverTelemetryResult {
 
           // Provide user-friendly error messages
           if (error.code === 'ECONNREFUSED') {
-            console.error('[SOCKET] ❌ Backend server is not running or not accessible');
+            log('[SOCKET] ❌ Backend server is not running or not accessible');
           } else if (error.code === 'ETIMEDOUT') {
-            console.error('[SOCKET] ❌ Connection timed out - backend may be overloaded or network issues');
+            log('[SOCKET] ❌ Connection timed out - backend may be overloaded or network issues');
           } else if (error.code === 'ENOTFOUND') {
-            console.error('[SOCKET] ❌ DNS resolution failed - check IP address');
+            log('[SOCKET] ❌ DNS resolution failed - check IP address');
           } else {
-            console.error('[SOCKET] ❌ Unknown connection error');
+            log('[SOCKET] ❌ Unknown connection error');
           }
 
           resetTelemetry();
@@ -1215,7 +1219,7 @@ export function useRoverTelemetry(): UseRoverTelemetryResult {
         });
 
         socket.on('error', (error: any) => {
-          console.error('[SOCKET] Error:', error);
+          if (!isOfflineMode()) { console.error('[SOCKET] Error:', error); }
           setConnectionState('error');
         });
 
@@ -1232,12 +1236,12 @@ export function useRoverTelemetry(): UseRoverTelemetryResult {
         });
 
         socket.io.on('reconnect_error', (error: any) => {
-          console.error('[SOCKET] Reconnect error:', error);
+          if (!isOfflineMode()) { console.error('[SOCKET] Reconnect error:', error); }
           setConnectionState('error');
         });
 
         socket.io.on('reconnect_failed', () => {
-          console.error('[SOCKET] Reconnect failed');
+          if (!isOfflineMode()) { console.error('[SOCKET] Reconnect failed'); }
           clearReconnectTimer();
           setConnectionState('error');
         });
@@ -1522,7 +1526,7 @@ export function useRoverTelemetry(): UseRoverTelemetryResult {
 
         pingIntervalRef.current = pingInterval;
       } catch (error) {
-        console.error('[SOCKET] Initialization failed:', error);
+        if (!isOfflineMode()) { console.error('[SOCKET] Initialization failed:', error); }
         setConnectionState('error');
         scheduleReconnect();
       }

@@ -355,7 +355,7 @@ const MissionControlCard: React.FC<MissionControlCardProps> = ({
                 accessibilityLabel="Toggle bulk skip"
               >
                 <Text style={[styles.bulkToggleText, isBulkMode ? styles.bulkToggleTextActive : {}]}>
-                  {isBulkMode ? 'B' : 'b'}
+                  {isBulkMode ? 'B' : 'B'}
                 </Text>
               </TouchableOpacity>
             </TouchableOpacity>
@@ -651,7 +651,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.accent,
   },
   nextButton: {
-    backgroundColor: '#B45309',
+    backgroundColor: '#7F00FF',
   },
   skipButton: {
     backgroundColor: '#0891B2',
@@ -699,7 +699,7 @@ const styles = StyleSheet.create({
     letterSpacing: 0.5,
   },
   buttonDisabled: {
-    opacity: 0.5,
+    opacity: 0.3,
   },
   modeToggle: {
     flexDirection: 'row',
@@ -710,7 +710,7 @@ const styles = StyleSheet.create({
   },
   modeButton: {
     flex: 1,
-    paddingVertical: 16,
+    paddingVertical: 17,
     backgroundColor: '#475569',
     alignItems: 'center',
     borderRadius: 10,

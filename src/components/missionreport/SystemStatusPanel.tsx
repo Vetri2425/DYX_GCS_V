@@ -125,7 +125,6 @@ export const SystemStatusPanel: React.FC<Props> = ({
       {/* System Status Card */}
       <View style={styles.statusCard}>
         <View style={styles.statusHeader}>
-          <Ionicons name="settings" size={14} color={colors.text} style={styles.gearIcon} />
           <Text style={styles.statusTitle}>SYSTEM STATUS</Text>
         </View>
         <View style={styles.statusPad}>
@@ -202,16 +201,17 @@ const styles = StyleSheet.create({
   statusHeader: {
     flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'center',
     marginBottom: 12,
   },
-  gearIcon: {
-    marginRight: 6,
-  },
+
   statusTitle: {
-    fontSize: 12,
+    fontSize: 13,
     fontWeight: '700',
-    color: colors.text,
-    letterSpacing: 0.5,
+    color: colors.accent,
+    letterSpacing: 1,
+    textAlign: 'center',
+    flex: 1,
   },
   statusPad: {
     backgroundColor: colors.primary,

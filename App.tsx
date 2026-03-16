@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { NavigationContainer } from '@react-navigation/native';
 import TabNavigator from './src/navigation/TabNavigator';
-import { StatusBar } from 'react-native';
+import { LogBox, StatusBar } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { RoverProvider } from './src/context/RoverContext';
 import { ComponentReadinessProvider } from './src/context/ComponentReadinessContext';
@@ -14,6 +14,17 @@ import { JetsonDevice } from './src/utils/jetsonDiscovery';
 import RoverDiscoveryScreen from './src/screens/RoverDiscoveryScreen';
 
 GlobalCrashHandler.initialize();
+
+// Suppress noisy network errors in LogBox when developing offline (no backend/rover)
+LogBox.ignoreLogs([
+  '[fetchJson] Error',
+  'Network request failed',
+  '[SOCKET]',
+  'Socket not connected',
+  'WebSocket',
+  'connect ECONNREFUSED',
+  'Failed to fetch',
+]);
 
 function AppContent() {
   useImmersiveMode();

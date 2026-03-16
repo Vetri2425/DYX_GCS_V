@@ -164,7 +164,7 @@ export const MissionMap: React.FC<Props> = ({
   <div id="map"></div>
 
   <div class="custom-controls">
-    <button class="control-btn" onclick="centerOnRover()">📍</button>
+    <button class="control-btn" onclick="centerOnRover()">✦</button>
     <button class="control-btn" onclick="fitToMission()">🗺️</button>
     <button class="control-btn" onclick="toggleFullscreen()">⛶</button>
   </div>
@@ -577,7 +577,7 @@ export const MissionMap: React.FC<Props> = ({
 
     // Debug log to verify updates are being processed (10% sample rate to avoid spam)
     // if (Math.random() < 0.1) {
-    //   console.log('[MissionMap] 📍 Updating rover position:', {
+    //   console.log('[MissionMap] ✦ Updating rover position:', {
     //     lat: roverLat.toFixed(7),
     //     lon: roverLon.toFixed(7),
     //     heading: heading !== null ? heading.toFixed(1) + '°' : 'N/A',

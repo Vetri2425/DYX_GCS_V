@@ -102,7 +102,7 @@ export const CircleGeneratorDialog: React.FC<CircleGeneratorDialogProps> = ({
             {/* Header */}
             <View style={styles.header}>
               <Text style={styles.headerIcon}>🌀</Text>
-              <Text style={styles.title}>Circle Mission Generator</Text>
+              <Text style={styles.title}>CIRCLE MISSION GENERATOR</Text>
               <View style={styles.badge}>
                 <Text style={styles.badgeText}>Enhanced</Text>
               </View>
@@ -303,9 +303,11 @@ const styles = StyleSheet.create({
     fontSize: 24,
   },
   title: {
-    fontSize: 18,
+    fontSize: 13,
     fontWeight: '700',
-    color: colors.text,
+    color: colors.accent,
+    letterSpacing: 1,
+    textAlign: 'center',
     flex: 1,
   },
   badge: {

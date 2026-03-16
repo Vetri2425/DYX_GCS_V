@@ -563,7 +563,7 @@ export const generatePDFHTML = (
 
     ${errorLocationsList}
 
-    <h2>📍 MISSION WAYPOINTS LOG</h2>
+    <h2>✦ MISSION WAYPOINTS LOG</h2>
     <table>
       <thead>
         <tr>

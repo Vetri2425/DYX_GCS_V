@@ -1,4 +1,4 @@
-import React, { useCallback, memo, useState } from 'react';
+import React, { useCallback, memo, useState, useRef, useEffect } from 'react';
 import { View, Text, StyleSheet, Platform, TouchableOpacity as RNTouchableOpacity } from 'react-native';
 import { TouchableOpacity } from 'react-native-gesture-handler';
 import { Ionicons } from '@expo/vector-icons';
@@ -19,60 +19,86 @@ interface Props {
     missionMode?: string;
 }
 
-// ─── Web Drag-and-Drop Row ────────────────────────────────────────────────────
-const WebDraggableRow: React.FC<{
+// ─── Smooth Web Drag Row ──────────────────────────────────────────────────────
+const WebRow: React.FC<{
     item: PathPlanWaypoint;
     index: number;
-    isDragDisabled: boolean;
     onDelete?: (id: number) => void;
     onToggleMark?: (id: number, mark: boolean) => void;
     globalServoEnabled?: boolean;
-    onDragStart: (index: number) => void;
-    onDragEnter: (index: number) => void;
-    onDragEnd: () => void;
-    isDragOver: boolean;
-    isDragging: boolean;
     isMarkHidden?: boolean;
-}> = memo(({ item, index, isDragDisabled, onDelete, onToggleMark, globalServoEnabled = true, onDragStart, onDragEnter, onDragEnd, isDragOver, isDragging, isMarkHidden = false }) => {
+    isDragDisabled: boolean;
+    dragState: { fromIndex: number; overIndex: number; settling?: boolean } | null;
+    onPointerDownHandle: (index: number, y: number) => void;
+}> = memo(({ item, index, onDelete, onToggleMark, globalServoEnabled = true, isMarkHidden = false, isDragDisabled, dragState, onPointerDownHandle }) => {
+    const isBeingDragged = dragState?.fromIndex === index;
+    const isOver = dragState !== null && dragState.overIndex === index && dragState.fromIndex !== index;
+
+    // Calculate visual shift: rows between from and over shift up or down
+    let translateY = 0;
+    if (dragState && !isBeingDragged) {
+        const { fromIndex, overIndex } = dragState;
+        if (fromIndex < overIndex && index > fromIndex && index <= overIndex) {
+            translateY = -56; // shift up by row height
+        } else if (fromIndex > overIndex && index < fromIndex && index >= overIndex) {
+            translateY = 56; // shift down by row height
+        }
+    }
+
     return (
         <div
-            draggable={!isDragDisabled}
-            onDragStart={isDragDisabled ? undefined : () => onDragStart(index)}
-            onDragEnter={isDragDisabled ? undefined : () => onDragEnter(index)}
-            onDragEnd={isDragDisabled ? undefined : onDragEnd}
-            onDragOver={(e) => { e.preventDefault(); }}
+            data-row-index={index}
             style={{
                 display: 'flex',
                 flexDirection: 'row',
                 alignItems: 'center',
-                backgroundColor: isDragging
+                backgroundColor: isBeingDragged
                     ? 'rgba(59, 130, 246, 0.3)'
-                    : isDragOver
-                        ? 'rgba(6, 182, 212, 0.2)'
-                        : index % 2 === 0 ? '#112e4a' : '#0a2540',
+                    : index % 2 === 0 ? colors.cardBg : colors.panelBg,
                 paddingTop: 7,
                 paddingBottom: 7,
                 paddingLeft: 16,
                 paddingRight: 16,
-                minHeight: 60,
-                borderBottom: isDragOver ? '2px solid #22d3ee' : '1px solid rgba(34, 211, 238, 0.1)',
+                minHeight: 56,
+                height: 56,
+                borderBottom: `1px solid ${colors.border}`,
                 width: '100%',
-                cursor: isDragDisabled ? 'default' : 'grab',
                 boxSizing: 'border-box',
-                opacity: isDragging ? 0.5 : 1,
-                transition: 'background-color 0.15s, border-color 0.15s',
                 userSelect: 'none',
+                position: 'relative',
+                zIndex: isBeingDragged ? 100 : 1,
+                transform: `translateY(${translateY}px)`,
+                transition: isBeingDragged
+                    ? 'none'
+                    : dragState
+                        ? 'transform 0.1s cubic-bezier(0.2, 0, 0, 1), background-color 0.08s'
+                        : 'none',
+                opacity: isBeingDragged ? 0.85 : 1,
+                boxShadow: isBeingDragged ? '0 8px 24px rgba(0,0,0,0.4)' : 'none',
+                willChange: 'transform',
             } as React.CSSProperties}
         >
             {/* Drag Handle */}
-            <div style={{ width: 29, display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
+            <div
+                onPointerDown={isDragDisabled ? undefined : (e) => {
+                    e.preventDefault();
+                    onPointerDownHandle(index, e.clientY);
+                }}
+                style={{
+                    width: 29,
+                    display: 'flex',
+                    justifyContent: 'center',
+                    alignItems: 'center',
+                    cursor: isDragDisabled ? 'default' : 'grab',
+                    touchAction: 'none',
+                }}
+            >
                 <Ionicons
                     name="chevron-expand-outline"
                     size={24}
-                    color={isDragDisabled ? '#4a5568' : '#67E8F9'}
+                    color={isDragDisabled ? colors.textMuted : colors.accent}
                 />
             </div>
-            {/* Data Cells */}
             <Text style={[styles.cell, styles.colSeq]}>{index + 1}</Text>
             <Text style={[styles.cell, styles.colBlock]}>{item.block || '-'}</Text>
             <Text style={[styles.cell, styles.colRow]}>{item.row || '-'}</Text>
@@ -81,7 +107,6 @@ const WebDraggableRow: React.FC<{
             <Text style={[styles.cell, styles.colLon]}>{item.lon?.toFixed(7) ?? '0.0000000'}</Text>
             <Text style={[styles.cell, styles.colAlt]}>{item.alt?.toFixed(2) || '0.00'}</Text>
             <Text style={[styles.cell, styles.colDist]}>{item.distance?.toFixed(2) || '0.00'}</Text>
-            {/* Mark Checkbox */}
             {!isMarkHidden && (
                 <div style={{ flex: 0.6, display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
                     <input
@@ -92,43 +117,84 @@ const WebDraggableRow: React.FC<{
                             const currentValue = item.mark !== undefined ? item.mark : globalServoEnabled;
                             onToggleMark?.(item.id, !currentValue);
                         }}
-                        style={{ width: 22, height: 22, cursor: 'pointer', accentColor: '#22d3ee' }}
+                        style={{ width: 22, height: 22, cursor: 'pointer', accentColor: colors.accent }}
                     />
                 </div>
             )}
-            {/* Delete Button */}
             {onDelete && (
                 <RNTouchableOpacity style={styles.deleteBtn} onPress={() => onDelete(item.id)}>
-                    <Text style={{ color: '#F87171', fontSize: 14, fontWeight: '600' }}>Delete</Text>
+                    <Text style={{ color: colors.danger, fontSize: 13, fontWeight: '700' }}>Delete</Text>
                 </RNTouchableOpacity>
             )}
         </div>
     );
 });
-WebDraggableRow.displayName = 'WebDraggableRow';
+WebRow.displayName = 'WebRow';
 
-// ─── Web Draggable List ───────────────────────────────────────────────────────
+// ─── Smooth Web Draggable List (pointer-event based, 90fps+) ─────────────────
 const WebDraggableList: React.FC<Props> = ({ waypoints, onReorder, onDelete, onToggleMark, globalServoEnabled, missionMode }) => {
-    const [dragFromIndex, setDragFromIndex] = useState<number | null>(null);
-    const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
     const isDragDisabled = waypoints.length <= 1;
     const isMarkHidden = missionMode?.toLowerCase() === 'continuous' || missionMode?.toLowerCase() === 'dash';
 
-    const handleDragStart = useCallback((index: number) => {
-        setDragFromIndex(index);
-    }, []);
+    const [dragState, setDragState] = useState<{ fromIndex: number; overIndex: number; settling?: boolean } | null>(null);
+    const dragRef = useRef<{ fromIndex: number; startY: number; currentY: number; raf: number | null }>({ fromIndex: -1, startY: 0, currentY: 0, raf: null });
 
-    const handleDragEnter = useCallback((index: number) => {
-        setDragOverIndex(index);
-    }, []);
+    const ROW_HEIGHT = 56;
 
-    const handleDragEnd = useCallback(() => {
-        if (dragFromIndex !== null && dragOverIndex !== null && dragFromIndex !== dragOverIndex) {
-            onReorder(dragFromIndex, dragOverIndex);
+    const updateOverIndex = useCallback(() => {
+        const ref = dragRef.current;
+        const delta = ref.currentY - ref.startY;
+        const indexShift = Math.round(delta / ROW_HEIGHT);
+        const newOver = Math.max(0, Math.min(waypoints.length - 1, ref.fromIndex + indexShift));
+
+        setDragState(prev => {
+            if (prev && prev.overIndex === newOver) return prev;
+            return { fromIndex: ref.fromIndex, overIndex: newOver };
+        });
+
+        ref.raf = null;
+    }, [waypoints.length]);
+
+    const handlePointerMove = useCallback((e: PointerEvent) => {
+        dragRef.current.currentY = e.clientY;
+        if (!dragRef.current.raf) {
+            dragRef.current.raf = requestAnimationFrame(updateOverIndex);
         }
-        setDragFromIndex(null);
-        setDragOverIndex(null);
-    }, [dragFromIndex, dragOverIndex, onReorder]);
+    }, [updateOverIndex]);
+
+    const handlePointerUp = useCallback(() => {
+        window.removeEventListener('pointermove', handlePointerMove);
+        window.removeEventListener('pointerup', handlePointerUp);
+
+        if (dragRef.current.raf) {
+            cancelAnimationFrame(dragRef.current.raf);
+            dragRef.current.raf = null;
+        }
+
+        // Capture final state, commit reorder instantly, then clear drag in same frame
+        const finalState = dragState;
+        setDragState(null);
+        if (finalState && finalState.fromIndex !== finalState.overIndex) {
+            onReorder(finalState.fromIndex, finalState.overIndex);
+        }
+    }, [handlePointerMove, onReorder, dragState]);
+
+    const handlePointerDownHandle = useCallback((index: number, clientY: number) => {
+        dragRef.current = { fromIndex: index, startY: clientY, currentY: clientY, raf: null };
+        setDragState({ fromIndex: index, overIndex: index });
+
+        window.addEventListener('pointermove', handlePointerMove);
+        window.addEventListener('pointerup', handlePointerUp);
+    }, [handlePointerMove, handlePointerUp]);
+
+    // Cleanup on unmount
+    useEffect(() => {
+        return () => {
+            window.removeEventListener('pointermove', handlePointerMove);
+            window.removeEventListener('pointerup', handlePointerUp);
+            if (dragRef.current.raf) cancelAnimationFrame(dragRef.current.raf);
+        };
+    }, [handlePointerMove, handlePointerUp]);
 
     if (waypoints.length === 0) {
         return (
@@ -141,11 +207,19 @@ const WebDraggableList: React.FC<Props> = ({ waypoints, onReorder, onDelete, onT
 
     return (
         <div
-            style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', borderBottomLeftRadius: 16, borderBottomRightRadius: 16, overflow: 'hidden' } as React.CSSProperties}
-            onDragOver={(e) => e.preventDefault()}
+            style={{
+                flex: 1,
+                overflowY: 'auto',
+                display: 'flex',
+                flexDirection: 'column',
+                borderBottomLeftRadius: 16,
+                borderBottomRightRadius: 16,
+                overflow: 'hidden',
+                touchAction: 'none',
+            } as React.CSSProperties}
         >
             {waypoints.map((item, index) => (
-                <WebDraggableRow
+                <WebRow
                     key={`wp-${item.id}`}
                     item={item}
                     index={index}
@@ -153,12 +227,9 @@ const WebDraggableList: React.FC<Props> = ({ waypoints, onReorder, onDelete, onT
                     onDelete={onDelete}
                     onToggleMark={onToggleMark}
                     globalServoEnabled={globalServoEnabled}
-                    onDragStart={handleDragStart}
-                    onDragEnter={handleDragEnter}
-                    onDragEnd={handleDragEnd}
-                    isDragOver={dragOverIndex === index && dragFromIndex !== index}
-                    isDragging={dragFromIndex === index}
                     isMarkHidden={isMarkHidden}
+                    dragState={dragState}
+                    onPointerDownHandle={handlePointerDownHandle}
                 />
             ))}
         </div>
@@ -196,7 +267,7 @@ const NativeWaypointRow = memo((
                     <Ionicons
                         name="chevron-expand-outline"
                         size={24}
-                        color={isDragDisabled ? '#4a5568' : '#67E8F9'}
+                        color={isDragDisabled ? colors.textMuted : colors.accent}
                     />
                 </TouchableOpacity>
                 <Text style={[styles.cell, styles.colSeq]}>{index + 1}</Text>
@@ -219,7 +290,7 @@ const NativeWaypointRow = memo((
                         <Ionicons
                             name={(item.mark !== undefined ? item.mark : globalServoEnabled) ? 'checkbox' : 'square-outline'}
                             size={24}
-                            color={(item.mark !== undefined ? item.mark : globalServoEnabled) ? '#22d3ee' : '#4a5568'}
+                            color={(item.mark !== undefined ? item.mark : globalServoEnabled) ? colors.accent : colors.textMuted}
                         />
                     </RNTouchableOpacity>
                 )}
@@ -230,7 +301,7 @@ const NativeWaypointRow = memo((
                         disabled={isActive}
                         hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
                     >
-                        <Text style={{ color: '#F87171', fontSize: 14, fontWeight: '600' }}>Delete</Text>
+                        <Text style={{ color: colors.danger, fontSize: 13, fontWeight: '700' }}>Delete</Text>
                     </TouchableOpacity>
                 )}
             </View>
@@ -299,18 +370,18 @@ const styles = StyleSheet.create({
     listContainer: { flex: 1, borderBottomLeftRadius: 16, borderBottomRightRadius: 16, overflow: 'hidden' },
     row: {
         flexDirection: 'row',
-        backgroundColor: '#112e4a',
+        backgroundColor: colors.cardBg,
         paddingVertical: 9,
         paddingHorizontal: 10,
-        minHeight: 60,
+        minHeight: 56,
         alignItems: 'center',
         borderBottomWidth: 1,
-        borderBottomColor: 'rgba(34, 211, 238, 0.1)',
+        borderBottomColor: colors.border,
         width: '100%',
     },
-    rowAlt: { backgroundColor: '#0a2540' },
+    rowAlt: { backgroundColor: colors.panelBg },
     rowActive: {
-        backgroundColor: 'rgba(59, 130, 246, 0.3)',
+        backgroundColor: 'rgba(59, 130, 246, 0.25)',
         elevation: 5,
         shadowColor: '#000',
         shadowOffset: { width: 0, height: 4 },
@@ -320,7 +391,7 @@ const styles = StyleSheet.create({
     cell: {
         color: '#ffffff',
         textAlign: 'center',
-        fontSize: 21,
+        fontSize: 20,
     },
     dragHandle: {
         width: 29,
@@ -345,12 +416,11 @@ const styles = StyleSheet.create({
     },
     emptyText: {
         color: colors.textSecondary,
-        fontSize: 18,
-        marginBottom: 8,
+        fontSize: 16,
+        marginBottom: 6,
     },
     emptyHint: {
-        color: colors.textSecondary,
-        fontSize: 14,
-        opacity: 0.7,
+        color: colors.textMuted,
+        fontSize: 13,
     },
 });

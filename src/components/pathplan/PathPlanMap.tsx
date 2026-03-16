@@ -109,22 +109,25 @@ export const PathPlanMap: React.FC<Props> = ({
   // const TRAIL_FADE_START_SEC = 15; // Start fading after 15 seconds
   // const TRAIL_MAX_AGE_SEC = 60; // Remove points older than 60 seconds
 
-  // Initialize PanResponder for measure overlay dragging with reduced sensitivity
+  // Initialize PanResponder for measure overlay dragging (created once)
+  const measureOverlayPosRef = useRef(measureOverlayPos);
+  measureOverlayPosRef.current = measureOverlayPos;
+
   useEffect(() => {
     measurePanResponderRef.current = PanResponder.create({
-      onStartShouldSetPanResponder: () => true,
-      onMoveShouldSetPanResponder: () => true,
+      onStartShouldSetPanResponder: () => false,
+      onMoveShouldSetPanResponder: (_, gestureState) =>
+        Math.abs(gestureState.dx) > 5 || Math.abs(gestureState.dy) > 5,
       onPanResponderGrant: () => {
-        measureDragStartRef.current = { x: measureOverlayPos.x, y: measureOverlayPos.y };
+        measureDragStartRef.current = { x: measureOverlayPosRef.current.x, y: measureOverlayPosRef.current.y };
       },
-      onPanResponderMove: (evt, gestureState) => {
-        // Reduce sensitivity by dividing movement by 2
-        const newX = Math.max(0, measureDragStartRef.current.x + gestureState.dx * 0.5);
-        const newY = Math.max(0, measureDragStartRef.current.y + gestureState.dy * 0.5);
+      onPanResponderMove: (_, gestureState) => {
+        const newX = Math.max(0, measureDragStartRef.current.x + gestureState.dx);
+        const newY = Math.max(0, measureDragStartRef.current.y + gestureState.dy);
         setMeasureOverlayPos({ x: newX, y: newY });
       },
     });
-  }, [measureOverlayPos]);
+  }, []);
 
   // Generate HTML ONLY ONCE on component mount - never regenerate
   const mapHTML = useMemo(() => {
@@ -152,90 +155,142 @@ export const PathPlanMap: React.FC<Props> = ({
     * { margin: 0; padding: 0; box-sizing: border-box; }
     html, body, #map { width: 100%; height: 100%; }
     .leaflet-control-zoom { display: none; }
-    
+
+    /* ── Control Buttons (top-right) ── */
     .custom-controls {
       position: absolute;
-      top: 10px;
-      right: 10px;
+      top: 12px;
+      right: 12px;
       z-index: 1000;
       display: flex;
       flex-direction: column;
       gap: 8px;
     }
-    
+
     .control-btn {
-      width: 36px;
-      height: 36px;
-      background: rgba(30, 41, 59, 0.9);
-      border: 1px solid rgba(103, 232, 249, 0.3);
-      border-radius: 8px;
+      width: 40px;
+      height: 40px;
+      background: rgba(13, 42, 75, 0.92);
+      border: 1px solid rgba(59, 130, 246, 0.35);
+      border-radius: 10px;
       display: flex;
       align-items: center;
       justify-content: center;
       cursor: pointer;
-      font-size: 16px;
-      color: white;
+      color: rgba(103, 232, 249, 0.9);
+      transition: background 0.15s, border-color 0.15s, box-shadow 0.15s;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+      padding: 0;
     }
-    
+    .control-btn:active {
+      background: rgba(59, 130, 246, 0.25);
+      border-color: rgba(59, 130, 246, 0.7);
+      box-shadow: 0 0 12px rgba(59, 130, 246, 0.3);
+    }
+    .control-btn svg { width: 20px; height: 20px; }
+
+    /* ── Zoom Controls (top-left) ── */
     .zoom-controls {
       position: absolute;
-      top: 10px;
-      left: 10px;
+      top: 12px;
+      left: 12px;
       z-index: 1000;
       display: flex;
       flex-direction: column;
-      gap: 6px;
+      gap: 0;
+      border-radius: 10px;
+      overflow: hidden;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+      border: 1px solid rgba(59, 130, 246, 0.35);
     }
-    
+
     .zoom-btn {
-      width: 32px;
-      height: 32px;
-      background: rgba(30, 41, 59, 0.9);
-      border: 1px solid rgba(103, 232, 249, 0.3);
-      border-radius: 8px;
+      width: 38px;
+      height: 38px;
+      background: rgba(13, 42, 75, 0.92);
+      border: none;
+      border-bottom: 1px solid rgba(59, 130, 246, 0.2);
       display: flex;
       align-items: center;
       justify-content: center;
       cursor: pointer;
-      font-size: 18px;
-      font-weight: bold;
-      color: white;
+      font-size: 20px;
+      font-weight: 600;
+      color: rgba(103, 232, 249, 0.9);
+      transition: background 0.15s;
     }
-    
+    .zoom-btn:last-child { border-bottom: none; }
+    .zoom-btn:active {
+      background: rgba(59, 130, 246, 0.25);
+    }
+
+    /* ── Position Overlay (bottom-right) ── */
     .position-overlay {
       position: absolute;
-      bottom: 10px;
-      right: 10px;
+      bottom: 12px;
+      right: 12px;
       z-index: 1000;
-      background: rgba(30, 41, 59, 0.95);
-      padding: 10px 12px;
+      background: rgba(13, 42, 75, 0.94);
+      padding: 0;
       border-radius: 10px;
-      border: 1px solid rgba(103, 232, 249, 0.3);
-      min-width: 140px;
+      border: 1px solid rgba(59, 130, 246, 0.3);
+      min-width: 160px;
       font-family: monospace;
       font-size: 10px;
       color: white;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.35);
+      overflow: hidden;
     }
-    
+    .position-accent {
+      height: 3px;
+      background: linear-gradient(90deg, #3B82F6, rgba(103,232,249,0.6));
+      border-radius: 10px 10px 0 0;
+    }
+    .position-inner {
+      padding: 8px 12px 10px;
+    }
     .position-title {
-      font-size: 10px;
-      font-weight: 600;
-      margin-bottom: 4px;
-      color: rgba(103, 232, 249, 1);
+      font-size: 9px;
+      font-weight: 700;
+      letter-spacing: 1.2px;
+      margin-bottom: 6px;
+      color: rgba(103, 232, 249, 0.85);
+      text-transform: uppercase;
     }
-    
     .position-coord {
-      color: rgba(148, 163, 184, 1);
+      color: rgba(229, 241, 255, 0.85);
+      font-size: 11px;
+      line-height: 1.5;
     }
+
+    /* ── Waypoint pulse animation ── */
+    @keyframes wp-pulse {
+      0% { box-shadow: 0 0 0 0 rgba(59,130,246,0.5); }
+      70% { box-shadow: 0 0 0 10px rgba(59,130,246,0); }
+      100% { box-shadow: 0 0 0 0 rgba(59,130,246,0); }
+    }
+    .wp-selected-pulse {
+      animation: wp-pulse 1.8s ease-out infinite;
+      border-radius: 50%;
+    }
+
+    /* ── Polyline glow filter ── */
+    .leaflet-overlay-pane svg { filter: drop-shadow(0 0 3px rgba(249,115,22,0.4)); }
   </style>
 </head>
 <body>
   <div id="map"></div>
   
   <div class="custom-controls">
-    <button class="control-btn" onclick="centerOnRover()">🎯</button>
-    <button class="control-btn" onclick="fitToMission()">📍</button>
-    <button class="control-btn" onclick="toggleFullscreen()">⛶</button>
+    <button class="control-btn" onclick="centerOnRover()" title="Center on Rover">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><line x1="12" y1="2" x2="12" y2="6"/><line x1="12" y1="18" x2="12" y2="22"/><line x1="2" y1="12" x2="6" y2="12"/><line x1="18" y1="12" x2="22" y2="12"/></svg>
+    </button>
+    <button class="control-btn" onclick="fitToMission()" title="Fit Mission">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="5" cy="18" r="2"/><circle cx="12" cy="5" r="2"/><circle cx="19" cy="18" r="2"/><line x1="6.5" y1="16.5" x2="10.5" y2="6.5"/><line x1="13.5" y1="6.5" x2="17.5" y2="16.5"/><line x1="7" y1="18" x2="17" y2="18"/></svg>
+    </button>
+    <button class="control-btn" onclick="toggleFullscreen()" title="Fullscreen">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><polyline points="21 15 21 21 15 21"/><polyline points="3 9 3 3 9 3"/></svg>
+    </button>
   </div>
   
   <div class="zoom-controls">
@@ -244,9 +299,12 @@ export const PathPlanMap: React.FC<Props> = ({
   </div>
   
   <div class="position-overlay">
-    <div class="position-title">Robot Position</div>
-    <div class="position-coord" id="rover-lat">Lat: ${roverPosition.lat.toFixed(7)}</div>
-    <div class="position-coord" id="rover-lon">Lon: ${roverPosition.lon.toFixed(7)}</div>
+    <div class="position-accent"></div>
+    <div class="position-inner">
+      <div class="position-title">Robot Position</div>
+      <div class="position-coord" id="rover-lat">Lat: ${roverPosition.lat.toFixed(7)}</div>
+      <div class="position-coord" id="rover-lon">Lon: ${roverPosition.lon.toFixed(7)}</div>
+    </div>
   </div>
 
   <script>
@@ -271,6 +329,7 @@ export const PathPlanMap: React.FC<Props> = ({
     
     let roverMarker = null;
     let missionPolyline = null;
+    let missionGlowLine = null;
     const waypointMarkers = [];
 
     // TRAIL DISABLED: Single trail polyline for efficient rendering
@@ -282,12 +341,16 @@ export const PathPlanMap: React.FC<Props> = ({
       if (wp.isSelected) fill = '#3B82F6';
       
       const size = wp.isSelected ? 48 : 36;
+      const shadow = 'filter: drop-shadow(0 2px 4px rgba(0,0,0,0.5));';
+      const pulseClass = wp.isSelected ? 'wp-selected-pulse' : '';
       
       const svgIcon = \`
-        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="\${size}" height="\${size}" fill="\${fill}">
+        <div class="\${pulseClass}" style="display:inline-block;">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="\${size}" height="\${size}" fill="\${fill}" style="\${shadow}">
           <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7z"/>
           <text x="12" y="10.5" font-family="sans-serif" font-size="12" font-weight="bold" fill="white" text-anchor="middle" dy=".3em">\${index + 1}</text>
         </svg>
+        </div>
       \`;
       
       return L.divIcon({
@@ -300,9 +363,15 @@ export const PathPlanMap: React.FC<Props> = ({
     
     if (waypoints.length > 1) {
       const pathCoords = waypoints.map(wp => [wp.lat, wp.lon]);
+      missionGlowLine = L.polyline(pathCoords, {
+        color: '#f97316',
+        weight: 6,
+        opacity: 0.2,
+      }).addTo(map);
       missionPolyline = L.polyline(pathCoords, {
         color: '#f97316',
-        weight: 2,
+        weight: 2.5,
+        opacity: 0.9,
       }).addTo(map);
     }
     
@@ -345,6 +414,7 @@ export const PathPlanMap: React.FC<Props> = ({
         window.dragPreviewState.draggingWpIndex = index;
         // Hide main polyline during drag for cleaner visuals
         if (missionPolyline) missionPolyline.setStyle({ opacity: 0.3 });
+        if (missionGlowLine) missionGlowLine.setStyle({ opacity: 0.1 });
         
         // Activate ortho guide ONLY if:
         // 1. User intentionally clicked this waypoint first, OR
@@ -389,6 +459,7 @@ export const PathPlanMap: React.FC<Props> = ({
           window.orthoGuideState.isIntentionallyActivated = false;
         }
         if (missionPolyline) missionPolyline.setStyle({ opacity: 1 });
+        if (missionGlowLine) missionGlowLine.setStyle({ opacity: 0.2 });
         const newPos = e.target.getLatLng();
         window.ReactNativeWebView.postMessage(JSON.stringify({
           type: 'waypointDrag',
@@ -513,6 +584,9 @@ export const PathPlanMap: React.FC<Props> = ({
     
     // ========== MEASURE TOOL STATE ==========
     window.isMeasureToolActive = false;
+
+    // ========== POINT TOOL STATE ==========
+    window.isPointToolActive = false;
 
     window.calculateBearing = function(lat1, lon1, lat2, lon2) {
       const dLon = (lon2 - lon1) * Math.PI / 180;
@@ -656,8 +730,8 @@ export const PathPlanMap: React.FC<Props> = ({
     map.on('mousemove', function(e) {
       if (!window.orthoGuideState) return;
       
-      // DISABLE ortho snap in manual connection mode or measure tool
-      if (window.isManualConnectionMode || window.isMeasureToolActive) {
+      // DISABLE ortho snap in manual connection mode, measure tool, or when point tool is NOT active
+      if (window.isManualConnectionMode || window.isMeasureToolActive || !window.isPointToolActive) {
         window.clearOrthoGuide();
         return;
       }
@@ -1139,7 +1213,7 @@ export const PathPlanMap: React.FC<Props> = ({
 
     // Create a stable key to detect actual changes including manual connections
     const waypointsKey = waypoints.map(wp => `${wp.id}-${wp.lat}-${wp.lon}`).join('|') +
-      `|manualMode:${isManualConnectionMode}|manualConns:${manualConnections.join(',')}|connMode:${manualConnectionMode}|selected:${selectedWaypoint}`;
+      `|manualMode:${isManualConnectionMode}|manualConns:${manualConnections.join(',')}|connMode:${manualConnectionMode}|selected:${selectedWaypoint}|pointTool:${activeDrawingTool === 'line'}`;
 
     // Only update if waypoints actually changed OR if this is the first update after map ready
     if (waypointsKey === lastWaypointsRef.current && lastWaypointsRef.current !== '') return;
@@ -1164,8 +1238,12 @@ export const PathPlanMap: React.FC<Props> = ({
             (function() {
                 const newWaypoints = ${waypointsData};
                 const isManualMode = ${isManualConnectionMode};
+                const isPointToolActive = ${activeDrawingTool === 'line'};
                 const manualConnections = ${manualConnectionsData};
                 const connectionMode = ${JSON.stringify(manualConnectionMode)};
+
+                // Update point tool state immediately so other handlers see it
+                window.isPointToolActive = isPointToolActive;
 
                 // Update global waypoints reference for fitToMission
                 window.currentWaypoints = newWaypoints;
@@ -1471,6 +1549,10 @@ export const PathPlanMap: React.FC<Props> = ({
                     map.removeLayer(missionPolyline);
                     missionPolyline = null;
                 }
+                if (missionGlowLine) {
+                    map.removeLayer(missionGlowLine);
+                    missionGlowLine = null;
+                }
 
                 // Add polyline based on mode
                 if (isManualMode && manualConnections.length > 1) {
@@ -1480,9 +1562,16 @@ export const PathPlanMap: React.FC<Props> = ({
 
                     if (connectedWaypoints.length > 1) {
                         const pathCoords = connectedWaypoints.map(wp => [wp.lat, wp.lon]);
+                        missionGlowLine = L.polyline(pathCoords, {
+                            color: '#4ADE80',
+                            weight: 7,
+                            opacity: 0.2,
+                            dashArray: '5, 10',
+                        }).addTo(map);
                         missionPolyline = L.polyline(pathCoords, {
                             color: '#4ADE80',
                             weight: 3,
+                            opacity: 0.9,
                             dashArray: '5, 10',
                         }).addTo(map);
                     }
@@ -1490,9 +1579,15 @@ export const PathPlanMap: React.FC<Props> = ({
                     // Show single connected waypoint (no line yet)
                 } else if (!isManualMode && newWaypoints.length > 1) {
                     const pathCoords = newWaypoints.map(wp => [wp.lat, wp.lon]);
+                    missionGlowLine = L.polyline(pathCoords, {
+                        color: '#f97316',
+                        weight: 6,
+                        opacity: 0.2,
+                    }).addTo(map);
                     missionPolyline = L.polyline(pathCoords, {
                         color: '#f97316',
-                        weight: 2,
+                        weight: 2.5,
+                        opacity: 0.9,
                     }).addTo(map);
                 }
 
@@ -1519,7 +1614,7 @@ export const PathPlanMap: React.FC<Props> = ({
                     
                     const marker = L.marker([wp.lat, wp.lon], {
                         icon: markerIcon,
-                        draggable: !isManualMode,
+                        draggable: !isManualMode && isPointToolActive,
                     }).addTo(map);
 
                     if (!isManualMode || connectionMode === 'pan') {
@@ -1586,6 +1681,7 @@ export const PathPlanMap: React.FC<Props> = ({
                             window.dragPreviewState.isDragging = true;
                             window.dragPreviewState.draggingWpIndex = index;
                             if (missionPolyline) missionPolyline.setStyle({ opacity: 0.3 });
+                            if (missionGlowLine) missionGlowLine.setStyle({ opacity: 0.1 });
                             
                             // Activate ortho guide ONLY if:
                             // 1. User intentionally clicked this waypoint first, OR
@@ -1630,6 +1726,7 @@ export const PathPlanMap: React.FC<Props> = ({
                                 window.orthoGuideState.isIntentionallyActivated = false;
                             }
                             if (missionPolyline) missionPolyline.setStyle({ opacity: 1 });
+                            if (missionGlowLine) missionGlowLine.setStyle({ opacity: 0.2 });
                             const newPos = e.target.getLatLng();
                             window.ReactNativeWebView.postMessage(JSON.stringify({
                                 type: 'waypointDrag',
@@ -1662,7 +1759,7 @@ export const PathPlanMap: React.FC<Props> = ({
         `;
 
     webViewRef.current.injectJavaScript(updateWaypointsScript);
-  }, [waypoints, selectedWaypoint, mapReady, isManualConnectionMode, manualConnections, manualConnectionMode]);
+  }, [waypoints, selectedWaypoint, mapReady, isManualConnectionMode, manualConnections, manualConnectionMode, activeDrawingTool]);
 
   // TRAIL DISABLED: Update rover position without trail
   useEffect(() => {
@@ -1679,7 +1776,7 @@ export const PathPlanMap: React.FC<Props> = ({
 
     // Debug log to verify updates are being processed (10% sample rate to avoid spam)
     if (Math.random() < 0.1) {
-      console.log('[PathPlanMap] 📍 Updating rover position:', {
+      console.log('[PathPlanMap] ✦ Updating rover position:', {
         lat: roverPosition.lat.toFixed(7),
         lon: roverPosition.lon.toFixed(7),
         heading: heading !== null ? heading.toFixed(1) + '°' : 'N/A'
@@ -1827,12 +1924,14 @@ export const PathPlanMap: React.FC<Props> = ({
     webViewRef.current.injectJavaScript(updateVisualizationScript);
   }, [visualization, mapReady, isManualConnectionMode]);
 
-  // Update measure tool active state
+  // Update measure tool active state and point tool state
   useEffect(() => {
     if (!mapReady || !webViewRef.current) return;
     const isMeasureActive = activeDrawingTool === 'measure';
+    const isPointToolActive = activeDrawingTool === 'line';
     const script = `
       window.isMeasureToolActive = ${isMeasureActive};
+      window.isPointToolActive = ${isPointToolActive};
       true;
     `;
     webViewRef.current.injectJavaScript(script);
@@ -1909,7 +2008,7 @@ export const PathPlanMap: React.FC<Props> = ({
       <WebView
         ref={webViewRef}
         source={{ html: mapHTML }}
-        style={{ flex: 1, backgroundColor: '#1e293b' }}
+        style={{ flex: 1, backgroundColor: '#0D2A4B' }}
         onMessage={(event) => {
           try {
             const message = JSON.parse(event.nativeEvent.data);
@@ -1979,17 +2078,18 @@ export const PathPlanMap: React.FC<Props> = ({
             position: 'absolute',
             left: contextMenu.x,
             top: contextMenu.y,
-            backgroundColor: colors.secondary,
-            borderRadius: 8,
+            backgroundColor: 'rgba(13, 42, 75, 0.96)',
+            borderRadius: 10,
             borderWidth: 1,
-            borderColor: colors.border,
+            borderColor: 'rgba(59, 130, 246, 0.3)',
             shadowColor: '#000',
-            shadowOffset: { width: 0, height: 2 },
-            shadowOpacity: 0.5,
-            shadowRadius: 4,
-            elevation: 5,
+            shadowOffset: { width: 0, height: 4 },
+            shadowOpacity: 0.4,
+            shadowRadius: 8,
+            elevation: 8,
             zIndex: 2000,
             minWidth: 180,
+            overflow: 'hidden',
           }}
         >
           {onDeleteWaypoint && (
@@ -2002,11 +2102,14 @@ export const PathPlanMap: React.FC<Props> = ({
                 paddingVertical: 12,
                 paddingHorizontal: 16,
                 borderBottomWidth: 1,
-                borderBottomColor: colors.border,
+                borderBottomColor: 'rgba(59, 130, 246, 0.15)',
+                flexDirection: 'row',
+                alignItems: 'center',
+                gap: 8,
               }}
             >
-              <Text style={{ color: '#ef4444', fontSize: 14, fontWeight: '500' }}>
-                🗑️ Delete Waypoint
+              <Text style={{ color: '#ef4444', fontSize: 14, fontWeight: '600' }}>
+                Delete Waypoint
               </Text>
             </TouchableOpacity>
           )}
@@ -2022,10 +2125,13 @@ export const PathPlanMap: React.FC<Props> = ({
               style={{
                 paddingVertical: 12,
                 paddingHorizontal: 16,
+                flexDirection: 'row',
+                alignItems: 'center',
+                gap: 8,
               }}
             >
-              <Text style={{ color: '#22c55e', fontSize: 14, fontWeight: '500' }}>
-                ➕ Insert Waypoint After
+              <Text style={{ color: '#22c55e', fontSize: 14, fontWeight: '600' }}>
+                Insert Waypoint After
               </Text>
             </TouchableOpacity>
           )}
@@ -2047,7 +2153,7 @@ export const PathPlanMap: React.FC<Props> = ({
           {...measurePanResponderRef.current?.panHandlers}
         >
           <View style={styles.measureHeader}>
-            <Text style={styles.measureTitle}>📏 Measure</Text>
+            <Text style={styles.measureTitle}>⬡ MEASURE</Text>
             <TouchableOpacity onPress={onMeasureClear} style={styles.measureClearBtn}>
               <Text style={styles.measureClearText}>✕</Text>
             </TouchableOpacity>
@@ -2090,25 +2196,25 @@ export const PathPlanMap: React.FC<Props> = ({
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#1e293b',
+    backgroundColor: '#0D2A4B',
   },
   compassOverlay: {
     position: 'absolute',
-    bottom: 12,
-    left: 12,
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    backgroundColor: 'rgba(30, 41, 59, 0.95)',
-    borderWidth: 2,
-    borderColor: 'rgba(103, 232, 249, 0.3)',
+    bottom: 14,
+    left: 14,
+    width: 46,
+    height: 46,
+    borderRadius: 23,
+    backgroundColor: 'rgba(13, 42, 75, 0.94)',
+    borderWidth: 1.5,
+    borderColor: 'rgba(59, 130, 246, 0.35)',
     alignItems: 'center',
     justifyContent: 'center',
-    elevation: 5,
+    elevation: 6,
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.3,
-    shadowRadius: 4,
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.35,
+    shadowRadius: 6,
   },
   headingArrow: {
     position: 'absolute',
@@ -2133,25 +2239,36 @@ const styles = StyleSheet.create({
   },
   measureOverlay: {
     position: 'absolute',
-    backgroundColor: 'rgba(30, 41, 59, 0.95)',
-    borderRadius: 10,
+    backgroundColor: 'rgba(13, 42, 75, 0.95)',
+    borderRadius: 12,
     borderWidth: 1,
-    borderColor: 'rgba(245, 158, 11, 0.5)',
-    padding: 10,
-    minWidth: 180,
+    borderColor: 'rgba(245, 158, 11, 0.4)',
+    padding: 0,
+    minWidth: 190,
     zIndex: 1000,
+    overflow: 'hidden',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.35,
+    shadowRadius: 8,
+    elevation: 8,
   },
   measureHeader: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginBottom: 6,
+    paddingHorizontal: 12,
+    paddingTop: 8,
+    paddingBottom: 6,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(245, 158, 11, 0.15)',
   },
   measureTitle: {
-    fontSize: 11,
+    fontSize: 10,
     fontWeight: '700',
     color: '#f59e0b',
-    fontFamily: 'monospace',
+    letterSpacing: 0.8,
+    textTransform: 'uppercase',
   },
   measureClearBtn: {
     paddingHorizontal: 6,
@@ -2169,6 +2286,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 6,
     marginBottom: 2,
+    paddingHorizontal: 12,
   },
   measureSeq: {
     fontSize: 10,
@@ -2179,20 +2297,25 @@ const styles = StyleSheet.create({
   },
   measureCoord: {
     fontSize: 10,
-    color: 'rgba(148,163,184,1)',
+    color: 'rgba(229, 241, 255, 0.7)',
     fontFamily: 'monospace',
   },
   measureHint: {
     fontSize: 10,
-    color: 'rgba(103,232,249,0.8)',
+    color: 'rgba(103,232,249,0.7)',
     marginTop: 4,
+    paddingHorizontal: 12,
+    paddingBottom: 8,
     fontStyle: 'italic',
   },
   measureResultBlock: {
-    marginTop: 8,
+    marginTop: 0,
     borderTopWidth: 1,
-    borderTopColor: 'rgba(245,158,11,0.3)',
-    paddingTop: 6,
+    borderTopColor: 'rgba(245,158,11,0.2)',
+    paddingTop: 8,
+    paddingBottom: 8,
+    paddingHorizontal: 12,
+    backgroundColor: 'rgba(245, 158, 11, 0.05)',
   },
   measureResultRow: {
     flexDirection: 'row',
@@ -2202,11 +2325,11 @@ const styles = StyleSheet.create({
   },
   measureResultLabel: {
     fontSize: 10,
-    color: 'rgba(148,163,184,1)',
+    color: 'rgba(229, 241, 255, 0.6)',
     fontFamily: 'monospace',
   },
   measureResultValue: {
-    fontSize: 11,
+    fontSize: 12,
     fontWeight: '700',
     color: '#f59e0b',
     fontFamily: 'monospace',

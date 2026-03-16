@@ -423,7 +423,6 @@ export default function MissionReportScreen() {
       battery: `${telemetry.battery.percentage.toFixed(1)}% (${telemetry.battery.voltage.toFixed(2)}V)`,
       gps: getFixTypeLabel(telemetry.rtk.fix_type),
       satellites: telemetry.global.satellites_visible,
-      satelliteSignal: `${telemetry.global.satellites_visible}/10`,
       hrms: `${(hrmsValue || 0).toFixed(3)} m`,
       vrms: `${(vrmsValue || 0).toFixed(3)} m`,
       imu: telemetry.imu_status,
@@ -443,7 +442,7 @@ export default function MissionReportScreen() {
 
     // Debug log map props updates (10% sample rate)
     if (DEBUG_MISSION_LOGS && Math.random() < 0.1) {
-      missionLog('[MissionReportScreen] 📍 Map props updated:', {
+      missionLog('[MissionReportScreen] ✦ Map props updated:', {
         lat: props.roverLat.toFixed(7),
         lon: props.roverLon.toFixed(7),
         heading: props.heading !== null ? props.heading.toFixed(1) + '°' : 'N/A',
@@ -1699,13 +1698,13 @@ export default function MissionReportScreen() {
           const currentWaypointNumber = event.current_waypoint;
           setCurrentIndex(prev => {
             if (prev !== newIndex) {
-              console.log(`[MissionReportScreen] 📍 Current waypoint changed: index ${prev} -> ${newIndex} (waypoint #${currentWaypointNumber})`);
-              console.log(`[MissionReportScreen] 📍 Looking for waypoint with sn=${currentWaypointNumber} in ${waypointsRef.current.length} waypoints`);
+              console.log(`[MissionReportScreen] ✦ Current waypoint changed: index ${prev} -> ${newIndex} (waypoint #${currentWaypointNumber})`);
+              console.log(`[MissionReportScreen] ✦ Looking for waypoint with sn=${currentWaypointNumber} in ${waypointsRef.current.length} waypoints`);
               
               // Find and log the target waypoint
               const targetWaypoint = waypointsRef.current.find(wp => wp.sn === currentWaypointNumber);
               if (targetWaypoint) {
-                console.log(`[MissionReportScreen] 📍 Found target waypoint:`, {
+                console.log(`[MissionReportScreen] ✦ Found target waypoint:`, {
                   sn: targetWaypoint.sn,
                   block: targetWaypoint.block,
                   row: targetWaypoint.row,
@@ -1725,7 +1724,6 @@ export default function MissionReportScreen() {
         if (event.mission_mode) {
           const backendMode = String(event.mission_mode).toLowerCase();
           const nextMode = mapBackendMissionModeToUiMode(event.mission_mode);
-          console.log(`[MissionReportScreen] Backend reported mission mode: ${backendMode} (current UI mode: ${modeRef.current}, mission type: ${missionModeRef.current})`);
 
           if (nextMode && nextMode !== modeRef.current) {
             console.log(`[MissionReportScreen] Syncing Mission Control mode from backend: ${modeRef.current} -> ${nextMode}`);
@@ -1979,6 +1977,7 @@ export default function MissionReportScreen() {
           waypoints={getDisplayMissionData().waypoints}
           onExport={handleExport}
           onExportComplete={handleExportComplete}
+          onClear={() => setShowClearLogsDialog(true)}
           statusMap={getDisplayMissionData().statusMap}
           missionMode={getDisplayMissionData().missionMode}
           currentIndex={currentIndex}

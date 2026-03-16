@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Image } from 'react-native';
+import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { colors } from '../../theme/colors';
 import { SettingsScreen } from '../../screens/SettingsScreen';
 import { useRover } from '../../context/RoverContext';
@@ -8,8 +9,8 @@ import { DashConfigDialog } from '../pathplan/DashConfigDialog';
 import { setMissionMode as setBackendMissionMode } from '../../services/missionModeService';
 
 interface Props {
-  activeTab: 'Dashboard' | 'Marking Plan' | 'Mission Progress' | 'Analytics';
-  onTabChange: (tab: 'Dashboard' | 'Marking Plan' | 'Mission Progress' | 'Analytics') => void;
+  activeTab: 'Dashboard' | 'Marking Plan' | 'Mission Progress';
+  onTabChange: (tab: 'Dashboard' | 'Marking Plan' | 'Mission Progress') => void;
 }
 
 export const AppHeader: React.FC<Props> = ({
@@ -24,7 +25,7 @@ export const AppHeader: React.FC<Props> = ({
   const getModeIcon = (mode: string): string => {
     switch (mode.toLowerCase()) {
       case 'dgps mark':
-        return '📍';
+        return 'star-three-points-outline';
       case 'interval spray':
         return '💧';
       case 'survey':
@@ -133,15 +134,6 @@ export const AppHeader: React.FC<Props> = ({
             </Text>
           </TouchableOpacity>
 
-          <TouchableOpacity
-            style={[styles.tab, activeTab === 'Analytics' && styles.tabActive]}
-            onPress={() => onTabChange('Analytics')}
-            activeOpacity={0.7}
-          >
-            <Text style={[styles.tabText, activeTab === 'Analytics' && styles.tabTextActive]}>
-              Analytics
-            </Text>
-          </TouchableOpacity>
         </View>
       </View>
 
@@ -163,7 +155,16 @@ export const AppHeader: React.FC<Props> = ({
           accessibilityLabel="Change mission mode"
           accessibilityRole="button"
         >
-          <Text style={styles.modeIcon}>{getModeIcon(missionMode)}</Text>
+          {getModeIcon(missionMode) === 'star-three-points-outline' ? (
+            <MaterialCommunityIcons
+              name="star-three-points-outline"
+              size={14}
+              color="#67E8F9"
+              style={styles.modeIconMdi}
+            />
+          ) : (
+            <Text style={styles.modeIcon}>{getModeIcon(missionMode)}</Text>
+          )}
           <View>
             <Text style={styles.modeLabel}>MODE</Text>
             <Text style={styles.modeValue}>{missionMode}</Text>
@@ -286,6 +287,9 @@ const styles = StyleSheet.create({
   },
   modeIcon: {
     fontSize: 14,
+    marginRight: 6,
+  },
+  modeIconMdi: {
     marginRight: 6,
   },
   modeLabel: {

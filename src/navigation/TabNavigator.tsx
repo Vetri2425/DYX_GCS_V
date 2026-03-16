@@ -3,7 +3,6 @@ import { View } from 'react-native';
 import DashboardScreen from '../screens/DashboardScreen';
 import PathPlanScreen from '../screens/PathPlanScreen';
 import MissionReportScreen from '../screens/MissionReportScreen';
-import MissionAnalyticsDashboard from '../screens/MissionAnalyticsDashboard';
 import { AppHeader } from '../components/shared/AppHeader';
 import { ErrorBoundary } from '../components/shared/ErrorBoundary';
 import { colors } from '../theme/colors';
@@ -12,7 +11,7 @@ import { useRover } from '../context/RoverContext';
 
 export default function TabNavigator() {
   const { missionMode } = useRover();
-  const [activeTab, setActiveTab] = useState<'Dashboard' | 'Marking Plan' | 'Mission Progress' | 'Analytics'>('Mission Progress');
+  const [activeTab, setActiveTab] = useState<'Dashboard' | 'Marking Plan' | 'Mission Progress'>('Mission Progress');
   const [mountedTabs, setMountedTabs] = useState<Set<string>>(new Set(['Mission Progress']));
   const [isLoadingTab, setIsLoadingTab] = useState(true);
   const previousTabRef = useRef<string>('Mission Progress');
@@ -24,9 +23,9 @@ export default function TabNavigator() {
     const loadLastActiveTab = async () => {
       try {
         const lastTab = await PersistentStorage.loadActiveTab();
-        if (lastTab && (lastTab === 'Dashboard' || lastTab === 'Marking Plan' || lastTab === 'Mission Progress' || lastTab === 'Analytics')) {
+        if (lastTab && (lastTab === 'Dashboard' || lastTab === 'Marking Plan' || lastTab === 'Mission Progress')) {
           console.log('[TabNavigator] 📂 Restoring last active tab:', lastTab);
-          setActiveTab(lastTab as 'Dashboard' | 'Marking Plan' | 'Mission Progress' | 'Analytics');
+          setActiveTab(lastTab as 'Dashboard' | 'Marking Plan' | 'Mission Progress');
           setMountedTabs(new Set([lastTab]));
           previousTabRef.current = lastTab;
         } else {
@@ -43,7 +42,7 @@ export default function TabNavigator() {
   }, []);
 
   // Handle tab changes with cleanup delay to prevent memory spikes
-  const handleTabChange = useCallback((newTab: 'Dashboard' | 'Marking Plan' | 'Mission Progress' | 'Analytics') => {
+  const handleTabChange = useCallback((newTab: 'Dashboard' | 'Marking Plan' | 'Mission Progress') => {
     if (!mountedRef.current) {
       console.warn('[TabNavigator] Component unmounted, ignoring tab change');
       return;
@@ -124,13 +123,6 @@ export default function TabNavigator() {
           <View style={{ flex: 1, display: activeTab === 'Mission Progress' ? 'flex' : 'none' }}>
             <ErrorBoundary componentName="Mission Progress Screen">
               <MissionReportScreen />
-            </ErrorBoundary>
-          </View>
-        )}
-        {mountedTabs.has('Analytics') && (
-          <View style={{ flex: 1, display: activeTab === 'Analytics' ? 'flex' : 'none' }}>
-            <ErrorBoundary componentName="Analytics Screen">
-              <MissionAnalyticsDashboard />
             </ErrorBoundary>
           </View>
         )}

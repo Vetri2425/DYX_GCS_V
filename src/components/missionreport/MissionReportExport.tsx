@@ -390,6 +390,7 @@ const MissionReportExport: React.FC<MissionReportExportProps> = ({
         <Text style={styles.exportIcon}>📊</Text>
         <Text style={styles.exportButtonText}>Export Report</Text>
       </TouchableOpacity>
+      
 
       {/* Export Modal */}
       <Modal

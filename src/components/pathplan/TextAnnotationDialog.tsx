@@ -66,7 +66,7 @@ export const TextAnnotationDialog: React.FC<TextAnnotationDialogProps> = ({
           {/* Header */}
           <View style={styles.header}>
             <Text style={styles.headerIcon}>📝</Text>
-            <Text style={styles.headerTitle}>Text Annotation</Text>
+            <Text style={styles.headerTitle}>TEXT ANNOTATION</Text>
           </View>
 
           <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
@@ -273,9 +273,11 @@ const styles = StyleSheet.create({
     fontSize: 24,
   },
   headerTitle: {
-    fontSize: 18,
+    fontSize: 13,
     fontWeight: '700',
-    color: colors.text,
+    color: colors.accent,
+    letterSpacing: 1,
+    textAlign: 'center',
   },
   content: {
     padding: 16,
