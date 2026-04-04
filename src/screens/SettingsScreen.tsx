@@ -15,7 +15,9 @@ import { colors } from '../theme/colors';
 import { useRover } from '../context/RoverContext';
 import { FailsafeModeSelector } from '../components/pathplan/FailsafeModeSelector';
 import { ServoConfigModal } from '../components/settings/ServoConfigModal';
+import { ParamBrowserModal } from '../components/settings/ParamBrowserModal';
 import { NTRIPProfile } from '../types/ntrip';
+import { LoraRTKStatus } from '../types/rtk';
 import { NTRIPProfileList } from '../components/missionreport/NTRIPProfileList';
 import { NTRIPProfileEditor } from '../components/missionreport/NTRIPProfileEditor';
 
@@ -25,7 +27,7 @@ interface SettingsScreenProps {
 }
 
 const SettingsScreenComponent: React.FC<SettingsScreenProps> = ({ visible, onClose }) => {
-  const { gpsFailsafeMode, setGpsFailsafeMode, telemetry, services, onMissionEvent } = useRover();
+  const { gpsFailsafeMode, setGpsFailsafeMode, telemetry, services, connectionState, onMissionEvent } = useRover();
   const [showFailsafeSelector, setShowFailsafeSelector] = useState(false);
 
   // TTS State
@@ -75,6 +77,25 @@ const SettingsScreenComponent: React.FC<SettingsScreenProps> = ({ visible, onClo
     password: '',
   });
   const rtkMonitorRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // LoRa RTK State
+
+  // MAVLink Param Browser State
+  const [showParamBrowser, setShowParamBrowser] = useState(false);
+  const [rtkSource, setRtkSource] = useState<'ntrip' | 'lora'>('ntrip');
+  const [loraRunning, setLoraRunning] = useState(false);
+  const [loraConnected, setLoraConnected] = useState(false);
+  const [loraStatus, setLoraStatus] = useState<LoraRTKStatus>({
+    status: 'disconnected',
+    message: 'Idle',
+    messages_received: 0,
+    bytes_received: 0,
+    error_count: 0,
+    is_connected: false,
+    is_running: false,
+  });
+  const [loraFeedback, setLoraFeedback] = useState<string | null>(null);
+  const [loraError, setLoraError] = useState<string | null>(null);
 
   // Toast/Success Message State
   const [successMessage, setSuccessMessage] = useState<string>('');
@@ -133,6 +154,10 @@ const SettingsScreenComponent: React.FC<SettingsScreenProps> = ({ visible, onClo
   const handleOpenRTKModal = () => {
     setModalScreen('list');
     setSelectedProfile(null);
+    setRtkFeedback(null);
+    setRtkError(null);
+    setLoraFeedback(null);
+    setLoraError(null);
     setShowRTKModal(true);
   };
 
@@ -234,6 +259,104 @@ const SettingsScreenComponent: React.FC<SettingsScreenProps> = ({ visible, onClo
   const handleCancelRTKEdit = () => {
     setModalScreen('list');
     setSelectedProfile(null);
+  };
+
+  // LoRa real-time status subscription when RTK modal is open
+  useEffect(() => {
+    if (!showRTKModal || !services?.onLoraRTKStatus) return;
+
+    const unsubscribe = services.onLoraRTKStatus((payload: LoraRTKStatus) => {
+      setLoraStatus((prev) => ({ ...prev, ...payload }));
+      const connected = Boolean(payload.is_connected) || payload.status === 'connected' || payload.status === 'streaming';
+      const running = Boolean(payload.is_running) || payload.status === 'streaming';
+      setLoraConnected(connected);
+      setLoraRunning(running);
+    });
+
+    // Get initial LoRa status
+    const initLoraStatus = async () => {
+      try {
+        const status = await services.getRTKStatus();
+        if (status.success && status.lora) {
+          setLoraRunning(Boolean(status.lora.running));
+          setLoraConnected(Boolean(status.lora.status?.is_connected));
+          if (status.lora.status) {
+            setLoraStatus((prev) => ({ ...prev, ...status.lora.status }));
+          }
+        }
+      } catch (err) {
+        console.error('[Settings] Failed to get initial LoRa status:', err);
+      }
+    };
+    initLoraStatus();
+    services.getLoraRTKStatus?.();
+
+    return unsubscribe;
+  }, [showRTKModal, services]);
+
+  // LoRa Handlers
+  const handleStartLora = async () => {
+    setLoraFeedback(null);
+    setLoraError(null);
+
+    try {
+      // Stop NTRIP first if running
+      if (isRTKStreamRunning) {
+        await services.stopRTK();
+        setIsRTKStreamRunning(false);
+        setActiveProfileId(null);
+        stopRTKMonitor();
+      }
+
+      const response = await services.startLoRaStream();
+      if (response.success) {
+        setLoraFeedback(response.message ?? 'LoRa stream started successfully.');
+        setLoraRunning(true);
+        if (response.status) {
+          setLoraStatus((prev) => ({ ...prev, ...response.status }));
+        }
+      } else {
+        setLoraError(response.message ?? 'Failed to start LoRa stream.');
+      }
+    } catch (err) {
+      setLoraError(err instanceof Error ? err.message : 'Failed to start LoRa stream.');
+    }
+  };
+
+  const handleStopLora = async () => {
+    setLoraFeedback(null);
+    setLoraError(null);
+
+    try {
+      const response = await services.stopLoRaStream();
+      if (response.success) {
+        setLoraFeedback(response.message ?? 'LoRa stream stopped successfully.');
+        setLoraRunning(false);
+        setLoraConnected(false);
+      } else {
+        setLoraError(response.message ?? 'Failed to stop LoRa stream.');
+      }
+    } catch (err) {
+      setLoraError(err instanceof Error ? err.message : 'Failed to stop LoRa stream.');
+    }
+  };
+
+  const handleSwitchRTKSource = async (source: 'ntrip' | 'lora') => {
+    if (source === rtkSource) return;
+    // Stop the other source if active
+    if (source === 'ntrip' && loraRunning) {
+      await services.stopLoRaStream().catch(() => undefined);
+      setLoraRunning(false);
+    } else if (source === 'lora' && isRTKStreamRunning) {
+      await services.stopNTRIPStream().catch(() => undefined);
+      setIsRTKStreamRunning(false);
+      stopRTKMonitor();
+    }
+    setRtkSource(source);
+    setRtkFeedback(null);
+    setRtkError(null);
+    setLoraFeedback(null);
+    setLoraError(null);
   };
 
   // GPS failsafe mode is now persisted by backend, no need for AsyncStorage
@@ -773,14 +896,20 @@ const SettingsScreenComponent: React.FC<SettingsScreenProps> = ({ visible, onClo
 
               <View style={styles.settingRow}>
                 <View style={styles.settingInfo}>
-                  <Text style={styles.settingLabel}>NTRIP Connection</Text>
+                  <Text style={styles.settingLabel}>
+                    {loraRunning ? 'LoRa Connection' : 'NTRIP Connection'}
+                  </Text>
                   <Text style={styles.settingDescription}>
-                    {isRTKStreamRunning ? `Connected • ${rtkTotalBytes} bytes received` : 'Not connected - Configure NTRIP caster'}
+                    {isRTKStreamRunning
+                      ? `NTRIP Connected • ${rtkTotalBytes} bytes received`
+                      : loraRunning
+                        ? `LoRa Connected • ${loraStatus.bytes_received ?? 0} bytes received`
+                        : 'Not connected - Configure NTRIP or LoRa'}
                   </Text>
                 </View>
-                <View style={[styles.statusBadge, isRTKStreamRunning ? styles.statusBadgeOn : styles.statusBadgeOff]}>
+                <View style={[styles.statusBadge, (isRTKStreamRunning || loraRunning) ? styles.statusBadgeOn : styles.statusBadgeOff]}>
                   <Text style={styles.statusBadgeText}>
-                    {isRTKStreamRunning ? 'ACTIVE' : 'INACTIVE'}
+                    {(isRTKStreamRunning || loraRunning) ? 'ACTIVE' : 'INACTIVE'}
                   </Text>
                 </View>
               </View>
@@ -799,23 +928,25 @@ const SettingsScreenComponent: React.FC<SettingsScreenProps> = ({ visible, onClo
                     {isRTKStreamRunning ? 'Manage RTK Connection' : 'Configure RTK Injection'}
                   </Text>
                   <Text style={styles.configureButtonDescription}>
-                    {isRTKSubmitting ? 'Processing...' : 'Set up NTRIP caster profiles and start RTK stream'}
+                    {isRTKSubmitting ? 'Processing...' : 'Set up NTRIP caster or LoRa receiver'}
                   </Text>
                 </View>
                 <Text style={styles.configureButtonArrow}>›</Text>
               </TouchableOpacity>
 
-              {isRTKStreamRunning && (
+              {(isRTKStreamRunning || loraRunning) && (
                 <TouchableOpacity
                   style={[styles.configureButton, { backgroundColor: '#dc2626', marginTop: 12 }]}
-                  onPress={handleStopRTKStream}
+                  onPress={loraRunning ? handleStopLora : handleStopRTKStream}
                   disabled={isRTKSubmitting}
                 >
                   <Text style={styles.configureButtonIcon}>⏹️</Text>
                   <View style={styles.configureButtonContent}>
-                    <Text style={[styles.configureButtonTitle, { color: '#fff' }]}>Stop RTK Stream</Text>
+                    <Text style={[styles.configureButtonTitle, { color: '#fff' }]}>
+                      Stop {loraRunning ? 'LoRa' : 'NTRIP'} Stream
+                    </Text>
                     <Text style={[styles.configureButtonDescription, { color: '#fca5a5' }]}>
-                      Disconnect from NTRIP caster
+                      Disconnect from {loraRunning ? 'LoRa receiver' : 'NTRIP caster'}
                     </Text>
                   </View>
                 </TouchableOpacity>
@@ -826,7 +957,7 @@ const SettingsScreenComponent: React.FC<SettingsScreenProps> = ({ visible, onClo
             <View style={styles.section}>
               <View style={styles.sectionHeader}>
                 <Text style={styles.sectionIcon}>🛡️</Text>
-                <Text style={styles.sectionTitle}>GPS Failsafe Mode</Text>
+                <Text style={styles.sectionTitle}>GPS Mode Config</Text>
               </View>
 
               <View style={styles.settingRow}>
@@ -864,15 +995,15 @@ const SettingsScreenComponent: React.FC<SettingsScreenProps> = ({ visible, onClo
             <View style={styles.section}>
               <View style={styles.sectionHeader}>
                 <Text style={styles.sectionIcon}>⚡</Text>
-                <Text style={styles.sectionTitle}>Servo Configuration</Text>
+                <Text style={styles.sectionTitle}>Spray Configuration</Text>
               </View>
 
               {/* Read-only status toggle */}
               <View style={styles.settingRow}>
                 <View style={styles.settingInfo}>
-                  <Text style={styles.settingLabel}>Servo Status</Text>
+                  <Text style={styles.settingLabel}>Spray Status</Text>
                   <Text style={styles.settingDescription}>
-                    Current servo state (read-only)
+                    Current spray state (read-only)
                   </Text>
                 </View>
                 <View style={[styles.statusBadge, servoEnabled ? styles.statusBadgeOn : styles.statusBadgeOff]}>
@@ -892,7 +1023,7 @@ const SettingsScreenComponent: React.FC<SettingsScreenProps> = ({ visible, onClo
               >
                 <Text style={styles.configureButtonIcon}>{isLoadingServoModal ? '⏳' : '⚙️'}</Text>
                 <View style={styles.configureButtonContent}>
-                  <Text style={styles.configureButtonTitle}>Configure Servo Settings</Text>
+                  <Text style={styles.configureButtonTitle}>Configure Spray Settings</Text>
                   <Text style={styles.configureButtonDescription}>
                     {isLoadingServoModal ? 'Loading config...' : 'Adjust channel, PWM values, timing parameters'}
                   </Text>
@@ -909,7 +1040,40 @@ const SettingsScreenComponent: React.FC<SettingsScreenProps> = ({ visible, onClo
               )}
             </View>
 
-            {/* 4. Voice Settings Section */}
+            {/* 4. MAVLink Parameters Section */}
+            <View style={styles.section}>
+              <View style={styles.sectionHeader}>
+                <Text style={styles.sectionIcon}>⚙️</Text>
+                <Text style={styles.sectionTitle}>MAVLink Parameters</Text>
+              </View>
+
+              <TouchableOpacity
+                style={styles.configureButton}
+                onPress={() => setShowParamBrowser(true)}
+                disabled={connectionState !== 'connected'}
+              >
+                <Text style={styles.configureButtonIcon}>📋</Text>
+                <View style={styles.configureButtonContent}>
+                  <Text style={styles.configureButtonTitle}>Browse & Edit Parameters</Text>
+                  <Text style={styles.configureButtonDescription}>
+                    {connectionState !== 'connected'
+                      ? 'Connect to rover to access parameters'
+                      : 'View and modify ArduRover parameters by group'}
+                  </Text>
+                </View>
+                <Text style={styles.configureButtonArrow}>›</Text>
+              </TouchableOpacity>
+
+              {connectionState === 'connected' && (
+                <View style={styles.infoBox}>
+                  <Text style={styles.infoText}>
+                    💡 Tip: Use group filters to find params faster (NAVL1, ATC_STR, WP, etc.)
+                  </Text>
+                </View>
+              )}
+            </View>
+
+            {/* 5. Voice Settings Section */}
             <View style={styles.section}>
               <View style={styles.sectionHeader}>
                 <Text style={styles.sectionIcon}>🔊</Text>
@@ -1110,6 +1274,12 @@ const SettingsScreenComponent: React.FC<SettingsScreenProps> = ({ visible, onClo
           onSave={handleServoSave}
         />
 
+        {/* MAVLink Param Browser Modal */}
+        <ParamBrowserModal
+          visible={showParamBrowser}
+          onClose={() => setShowParamBrowser(false)}
+        />
+
         {/* RTK Profile Manager Modal */}
         <Modal
           visible={showRTKModal}
@@ -1126,34 +1296,136 @@ const SettingsScreenComponent: React.FC<SettingsScreenProps> = ({ visible, onClo
                 </TouchableOpacity>
               </View>
 
-              <View style={rtkModalStyles.modalBody}>
-                {modalScreen === 'list' ? (
-                  <NTRIPProfileList
-                    onSelectProfile={handleSelectRTKProfile}
-                    onAddNew={handleAddNewRTKProfile}
-                    onEditProfile={handleEditRTKProfile}
-                    isConnecting={isRTKSubmitting}
-                    activeProfileId={activeProfileId}
-                    isStreamRunning={isRTKStreamRunning}
-                  />
-                ) : (
-                  <NTRIPProfileEditor
-                    profile={selectedProfile}
-                    onSave={handleRTKProfileSaved}
-                    onCancel={handleCancelRTKEdit}
-                  />
-                )}
+              {/* Source Toggle: NTRIP | LoRa */}
+              <View style={rtkModalStyles.sourceToggle}>
+                <TouchableOpacity
+                  style={[rtkModalStyles.toggleButton, rtkSource === 'ntrip' && rtkModalStyles.toggleActive]}
+                  onPress={() => handleSwitchRTKSource('ntrip')}
+                >
+                  <Text style={[rtkModalStyles.toggleText, rtkSource === 'ntrip' && rtkModalStyles.toggleTextActive]}>
+                    📡 NTRIP
+                  </Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[rtkModalStyles.toggleButton, rtkSource === 'lora' && rtkModalStyles.toggleActive]}
+                  onPress={() => handleSwitchRTKSource('lora')}
+                >
+                  <Text style={[rtkModalStyles.toggleText, rtkSource === 'lora' && rtkModalStyles.toggleTextActive]}>
+                    📻 LoRa
+                  </Text>
+                </TouchableOpacity>
               </View>
 
-              {rtkFeedback && (
-                <View style={rtkModalStyles.feedbackBox}>
-                  <Text style={rtkModalStyles.feedbackText}>{rtkFeedback}</Text>
+              {/* NTRIP Tab */}
+              {rtkSource === 'ntrip' && (
+                <View style={rtkModalStyles.modalBody}>
+                  {modalScreen === 'list' ? (
+                    <NTRIPProfileList
+                      onSelectProfile={handleSelectRTKProfile}
+                      onAddNew={handleAddNewRTKProfile}
+                      onEditProfile={handleEditRTKProfile}
+                      isConnecting={isRTKSubmitting}
+                      activeProfileId={activeProfileId}
+                      isStreamRunning={isRTKStreamRunning}
+                    />
+                  ) : (
+                    <NTRIPProfileEditor
+                      profile={selectedProfile}
+                      onSave={handleRTKProfileSaved}
+                      onCancel={handleCancelRTKEdit}
+                    />
+                  )}
+
+                  {rtkFeedback && (
+                    <View style={rtkModalStyles.feedbackBox}>
+                      <Text style={rtkModalStyles.feedbackText}>{rtkFeedback}</Text>
+                    </View>
+                  )}
+
+                  {rtkError && (
+                    <View style={rtkModalStyles.errorBox}>
+                      <Text style={rtkModalStyles.errorText}>{rtkError}</Text>
+                    </View>
+                  )}
                 </View>
               )}
 
-              {rtkError && (
-                <View style={rtkModalStyles.errorBox}>
-                  <Text style={rtkModalStyles.errorText}>{rtkError}</Text>
+              {/* LoRa Tab */}
+              {rtkSource === 'lora' && (
+                <View style={rtkModalStyles.modalBody}>
+                  <ScrollView contentContainerStyle={{ paddingBottom: 20 }}>
+                    {/* LoRa Status Header */}
+                    <View style={rtkModalStyles.loraStatusHeader}>
+                      <Text style={rtkModalStyles.loraSectionTitle}>LoRa USB Receiver</Text>
+                      <View style={[rtkModalStyles.loraPill, loraRunning ? rtkModalStyles.loraPillSuccess : rtkModalStyles.loraPillDanger]}>
+                        <Text style={rtkModalStyles.loraPillText}>{loraRunning ? 'Streaming' : 'Stopped'}</Text>
+                      </View>
+                    </View>
+
+                    {/* LoRa Stats Grid */}
+                    <View style={rtkModalStyles.loraStatsGrid}>
+                      <View style={rtkModalStyles.loraStatBox}>
+                        <Text style={rtkModalStyles.loraStatLabel}>Connection</Text>
+                        <Text style={[rtkModalStyles.loraStatValue, { color: loraConnected ? '#10b981' : '#ef4444' }]}>
+                          {loraConnected ? 'Connected' : 'Not Connected'}
+                        </Text>
+                      </View>
+                      <View style={rtkModalStyles.loraStatBox}>
+                        <Text style={rtkModalStyles.loraStatLabel}>Messages</Text>
+                        <Text style={rtkModalStyles.loraStatValue}>{loraStatus.messages_received ?? 0}</Text>
+                      </View>
+                      <View style={rtkModalStyles.loraStatBox}>
+                        <Text style={rtkModalStyles.loraStatLabel}>Bytes</Text>
+                        <Text style={rtkModalStyles.loraStatValue}>
+                          {((loraStatus.bytes_received ?? 0) / 1024).toFixed(2)} KB
+                        </Text>
+                      </View>
+                      <View style={rtkModalStyles.loraStatBox}>
+                        <Text style={rtkModalStyles.loraStatLabel}>Errors</Text>
+                        <Text style={[rtkModalStyles.loraStatValue, (loraStatus.error_count ?? 0) > 0 ? { color: '#ef4444' } : {}]}>
+                          {loraStatus.error_count ?? 0}
+                        </Text>
+                      </View>
+                    </View>
+
+                    {/* LoRa Status Message */}
+                    <View style={rtkModalStyles.loraMessageBox}>
+                      <Text style={rtkModalStyles.loraMessageLabel}>Status</Text>
+                      <Text style={rtkModalStyles.loraMessageValue}>
+                        {loraStatus.message || 'Waiting for status...'}
+                      </Text>
+                    </View>
+
+                    {/* LoRa Action Buttons */}
+                    <View style={rtkModalStyles.loraButtonRow}>
+                      <TouchableOpacity
+                        style={[rtkModalStyles.loraButton, rtkModalStyles.loraButtonStart, loraRunning && rtkModalStyles.loraButtonDisabled]}
+                        onPress={handleStartLora}
+                        disabled={loraRunning}
+                      >
+                        <Text style={rtkModalStyles.loraButtonText}>▶ Start Stream</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        style={[rtkModalStyles.loraButton, rtkModalStyles.loraButtonStop, !loraRunning && rtkModalStyles.loraButtonDisabled]}
+                        onPress={handleStopLora}
+                        disabled={!loraRunning}
+                      >
+                        <Text style={rtkModalStyles.loraButtonText}>⏹ Stop Stream</Text>
+                      </TouchableOpacity>
+                    </View>
+
+                    {loraFeedback && (
+                      <View style={rtkModalStyles.feedbackBox}>
+                        <Text style={rtkModalStyles.feedbackText}>{loraFeedback}</Text>
+                      </View>
+                    )}
+
+                    {loraError && (
+                      <View style={rtkModalStyles.errorBox}>
+                        <Text style={rtkModalStyles.errorText}>{loraError}</Text>
+                      </View>
+                    )}
+                  </ScrollView>
                 </View>
               )}
 
@@ -1651,6 +1923,127 @@ const rtkModalStyles = StyleSheet.create({
   },
   errorText: {
     color: '#ef4444',
+    fontSize: 14,
+  },
+  // Source Toggle
+  sourceToggle: {
+    flexDirection: 'row',
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: '#3b82f6',
+    borderRadius: 10,
+    overflow: 'hidden',
+  },
+  toggleButton: {
+    flex: 1,
+    paddingVertical: 12,
+    alignItems: 'center',
+    backgroundColor: '#1a1a2e',
+  },
+  toggleActive: {
+    backgroundColor: '#3b82f6',
+  },
+  toggleText: {
+    color: '#94a3b8',
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  toggleTextActive: {
+    color: '#ffffff',
+  },
+  // LoRa Tab Styles
+  loraStatusHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  loraSectionTitle: {
+    color: '#ffffff',
+    fontSize: 16,
+    fontWeight: '700',
+  },
+  loraPill: {
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: 12,
+  },
+  loraPillSuccess: {
+    backgroundColor: '#10b981',
+  },
+  loraPillDanger: {
+    backgroundColor: '#ef4444',
+  },
+  loraPillText: {
+    color: '#ffffff',
+    fontWeight: '700',
+    fontSize: 12,
+  },
+  loraStatsGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginBottom: 12,
+  },
+  loraStatBox: {
+    flex: 1,
+    minWidth: '45%',
+    backgroundColor: '#0f172a',
+    borderRadius: 10,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: '#374151',
+  },
+  loraStatLabel: {
+    color: '#94a3b8',
+    fontSize: 12,
+    marginBottom: 4,
+  },
+  loraStatValue: {
+    color: '#ffffff',
+    fontSize: 15,
+    fontWeight: '700',
+  },
+  loraMessageBox: {
+    backgroundColor: '#0f172a',
+    borderRadius: 10,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: '#374151',
+    marginBottom: 16,
+  },
+  loraMessageLabel: {
+    color: '#94a3b8',
+    fontSize: 12,
+    marginBottom: 4,
+  },
+  loraMessageValue: {
+    color: '#ffffff',
+    fontSize: 14,
+  },
+  loraButtonRow: {
+    flexDirection: 'row',
+    gap: 12,
+    marginBottom: 12,
+  },
+  loraButton: {
+    flex: 1,
+    paddingVertical: 14,
+    borderRadius: 10,
+    alignItems: 'center',
+  },
+  loraButtonStart: {
+    backgroundColor: '#3b82f6',
+  },
+  loraButtonStop: {
+    backgroundColor: '#ef4444',
+  },
+  loraButtonDisabled: {
+    opacity: 0.4,
+  },
+  loraButtonText: {
+    color: '#ffffff',
+    fontWeight: '700',
     fontSize: 14,
   },
   manualEntrySection: {

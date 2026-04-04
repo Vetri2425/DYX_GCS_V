@@ -183,6 +183,15 @@ export const API_ENDPOINTS = {
   // LED Controller
   LED_STATUS: '/api/led/status',
 
+  // MAVLink Param Control (Task 01)
+  PARAMS_LIST: '/api/params',
+  PARAMS_GROUPS: '/api/params/groups',
+
+  // QuickTune
+  QUICKTUNE_SCRIPT_CHECK: '/api/quicktune/script',
+  QUICKTUNE_SCRIPT_UPLOAD: '/api/quicktune/script/upload',
+  QUICKTUNE_AUX_FUNCTION: '/api/quicktune/aux_function',
+
   // Configuration
   MISSION_CONFIG: '/api/mission/config',
   SPRAYER_CONFIG: '/api/config/sprayer',
@@ -218,6 +227,9 @@ export const SOCKET_EVENTS = {
   // Connection
   PING: 'ping',
   PONG: 'pong',
+
+  // QuickTune
+  QUICKTUNE_LOG: 'quicktune_log',
 };
 
 export default {

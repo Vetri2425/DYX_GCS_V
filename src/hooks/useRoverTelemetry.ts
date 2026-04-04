@@ -113,6 +113,7 @@ const createDefaultTelemetry = (): RoverTelemetry => ({
   xtrack_cm: undefined,
   wp_brg: undefined,
   position_error_cm: undefined, // Total position error = sqrt(wp_dist² + xtrack²)
+  distance_to_next_m: undefined, // Backend mission distance to next waypoint in meters
 });
 
 // Helper: Fetch JSON with proper error handling
@@ -581,6 +582,10 @@ const toTelemetryEnvelopeFromBridge = (data: any): TelemetryEnvelope | null => {
   }
 
   // New fields from Pixhawk NTUN (CurrentState) - top level telemetry
+  // DEBUG: Log distance-to-next from telemetry
+  if (data.wp_dist_cm !== undefined || data.distance_to_next !== undefined || data.dist_to_wp !== undefined) {
+    console.log('[TELEMETRY] 📏 Distance to next WP raw:', { wp_dist_cm: data.wp_dist_cm, distance_to_next: data.distance_to_next, dist_to_wp: data.dist_to_wp });
+  }
   if (typeof data.wp_dist_cm === 'number') {
     envelope.wp_dist_cm = data.wp_dist_cm;
     touched = true;
@@ -745,6 +750,12 @@ export interface RoverServices {
   // LED Controller
   setLEDController: (enabled: boolean) => Promise<ServiceResponse>;
   getLEDControllerStatus: () => Promise<ServiceResponse & { enabled?: boolean; state?: string; hardware_available?: boolean }>;
+
+  // MAVLink Param Control (Task 01)
+  getParams: (group?: string) => Promise<import('../types/params').ParamListResponse>;
+  getParam: (name: string) => Promise<import('../types/params').ParamGetResponse>;
+  setParam: (name: string, value: number) => Promise<import('../types/params').ParamSetResponse>;
+  getParamGroups: () => Promise<import('../types/params').ParamGroupsResponse>;
 }
 
 export interface UseRoverTelemetryResult {
@@ -866,6 +877,9 @@ export function useRoverTelemetry(): UseRoverTelemetryResult {
     if (envelope.position_error_cm !== undefined) {
       next.position_error_cm = envelope.position_error_cm;
     }
+    if (envelope.distance_to_next_m !== undefined) {
+      next.distance_to_next_m = envelope.distance_to_next_m;
+    }
 
     next.lastMessageTs = envelope.timestamp ?? Date.now();
 
@@ -900,6 +914,7 @@ export function useRoverTelemetry(): UseRoverTelemetryResult {
     if (envelope.xtrack_cm !== undefined) changed = changed || prev.xtrack_cm !== next.xtrack_cm;
     if (envelope.wp_brg !== undefined) changed = changed || prev.wp_brg !== next.wp_brg;
     if (envelope.position_error_cm !== undefined) changed = changed || prev.position_error_cm !== next.position_error_cm;
+    if (envelope.distance_to_next_m !== undefined) changed = changed || prev.distance_to_next_m !== next.distance_to_next_m;
 
     if (!changed) {
       // No meaningful change; update timestamps but skip dispatch to prevent loops
@@ -1333,6 +1348,10 @@ export function useRoverTelemetry(): UseRoverTelemetryResult {
             // console.log('[MISSION_STATUS] 🎯 Parsing GPS data from mission_status event!');
             const envelope = toTelemetryEnvelopeFromBridge(data);
             if (envelope) {
+              // Extract distance_to_next_m from mission_status (sent at 20Hz by backend)
+              if (typeof data.distance_to_next_m === 'number') {
+                envelope.distance_to_next_m = data.distance_to_next_m;
+              }
               // console.log('[MISSION_STATUS] ✅ GPS telemetry parsed, applying to UI');
               applyEnvelopeRef.current(envelope);
             }
@@ -1973,6 +1992,25 @@ export function useRoverTelemetry(): UseRoverTelemetryResult {
 
       // LED Controller Status (via HTTP GET)
       getLEDControllerStatus: () => getService(API_ENDPOINTS.LED_STATUS),
+
+      // MAVLink Param Control (Task 01)
+      getParams: async (group?: string) => {
+        const url = group
+          ? `${API_ENDPOINTS.PARAMS_LIST}?group=${encodeURIComponent(group)}`
+          : API_ENDPOINTS.PARAMS_LIST;
+        return getService<import('../types/params').ParamListResponse>(url);
+      },
+      getParam: async (name: string) => {
+        const url = `/api/params/${encodeURIComponent(name)}`;
+        return getService<import('../types/params').ParamGetResponse>(url);
+      },
+      setParam: async (name: string, value: number) => {
+        const url = `/api/params/${encodeURIComponent(name)}`;
+        return postService(url, { value }) as Promise<import('../types/params').ParamSetResponse>;
+      },
+      getParamGroups: async () => {
+        return getService<import('../types/params').ParamGroupsResponse>(API_ENDPOINTS.PARAMS_GROUPS);
+      },
 
       // Emergency Stop
       emergencyStop: async () => {

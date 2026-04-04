@@ -13,7 +13,7 @@ interface Props {
   statusMap: Record<number, {
     reached?: boolean;
     marked?: boolean;
-    status?: 'completed' | 'loading' | 'skipped' | 'reached' | 'marked' | 'pending';
+    status?: 'completed' | 'loading' | 'skipped' | 'reached' | 'marked' | 'pending' | 'spray_on' | 'spray_off' | 'passed' | 'mission_end';
     timestamp?: string;
     pile?: string | number;
     rowNo?: string | number;
@@ -82,30 +82,45 @@ export const WaypointsTable: React.FC<Props> = ({ waypoints, onExport, onExportC
     return { text: '', color: undefined };
   };
 
-  // Calculate display status and color based on statusMap
+  // Calculate display status and color — uses status string as single source of truth
+  // Avoids boolean/string field conflicts (reached:true vs status:'reached')
   const getWaypointStatus = (wp: Waypoint, index: number) => {
     const wpStatus = statusMap[wp.sn];
-    
+    const s = wpStatus?.status;
+
     let statusDisplay = 'Pending';
     let statusColor = '#94A3B8'; // Gray for pending
-    
-    if (wpStatus?.status === 'completed') {
+
+    if (s === 'completed') {
       statusDisplay = 'Completed';
       statusColor = '#10B981'; // Green
-    } else if (wpStatus?.marked) {
-      statusDisplay = 'Marked';
-      statusColor = '#3B82F6'; // Blue
-    } else if (wpStatus?.reached) {
-      statusDisplay = 'Reached';
-      statusColor = '#F59E0B'; // Orange
-    } else if (wpStatus?.status === 'loading') {
-      statusDisplay = 'Loading';
-      statusColor = '#FBBF24'; // Yellow
-    } else if (wpStatus?.status === 'skipped') {
+    } else if (s === 'skipped') {
       statusDisplay = 'Skipped';
       statusColor = '#94A3B8'; // Gray
+    } else if (s === 'marked') {
+      statusDisplay = 'Marked';
+      statusColor = '#3B82F6'; // Blue
+    } else if (s === 'reached') {
+      statusDisplay = 'Reached';
+      statusColor = '#F59E0B'; // Orange
+    } else if (s === 'loading') {
+      statusDisplay = 'Loading';
+      statusColor = '#FBBF24'; // Yellow
+    } else if (s === 'spray_on') {
+      statusDisplay = 'Spray ON';
+      statusColor = '#3B82F6'; // Blue
+    } else if (s === 'spray_off') {
+      statusDisplay = 'Spray OFF';
+      statusColor = '#3B82F6'; // Blue
+    } else if (s === 'passed') {
+      statusDisplay = 'Passed';
+      statusColor = '#2DD4BF'; // Teal
+    } else if (s === 'mission_end') {
+      statusDisplay = 'Done';
+      statusColor = '#10B981'; // Green (same as completed)
     }
-    
+    // s === 'pending' or undefined → stays 'Pending' / gray
+
     return { statusDisplay, statusColor, wpStatus };
   };
 
@@ -182,7 +197,17 @@ export const WaypointsTable: React.FC<Props> = ({ waypoints, onExport, onExportC
                     isCurrentWaypoint && styles.currentWaypointText,
                     isSkipped && styles.skippedText,
                   ]}>
-                    {wpStatus?.status === 'completed' ? '✅ Completed' : wpStatus?.status === 'skipped' ? 'Skipped' : wpStatus?.marked ? '✦ Marked' : wpStatus?.reached ? '🚀 Reached' : wpStatus?.status === 'loading' ? 'Loading' : 'Pending'}
+                    {(() => {
+                      const s = wpStatus?.status;
+                      if (s === 'completed') return '✅ Completed';
+                      if (s === 'skipped') return 'Skipped';
+                      if (s === 'marked') return '✦ Marked';
+                      if (s === 'reached') return '🚀 Reached';
+                      if (s === 'loading') return 'Loading';
+                      if (s === 'spray_on' || s === 'spray_off' || s === 'passed' || s === 'mission_end') return wpStatus?.remark || statusDisplay;
+                      if (wpStatus) return 'Pending'; // entry exists but no recognized status
+                      return ''; // no entry yet — waypoint not visited
+                    })()}
                   </Text>
                   {(() => {
                     const { text: accuracyText, color: accuracyColor } = getAccuracyDisplay(wpStatus);

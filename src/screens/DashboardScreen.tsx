@@ -1,8 +1,10 @@
-import React, { useMemo, useEffect, useRef } from 'react';
-import { View, Text, StyleSheet, ScrollView, useWindowDimensions } from 'react-native';
+import React, { useMemo, useEffect, useRef, useState } from 'react';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, useWindowDimensions } from 'react-native';
 import { MaterialCommunityIcons, Ionicons } from '@expo/vector-icons';
 import { colors } from '../theme/colors';
 import { useRover } from '../context/RoverContext';
+import { RobotSettingsModal } from '../components/dashboard/RobotSettingsModal';
+import QuickTuneScreen from './QuickTuneScreen';
 
 function getFixTypeLabel(fixType: number): string {
   const labels: { [key: number]: string } = {
@@ -25,6 +27,8 @@ export default function DashboardScreen() {
   const { telemetry, connectionState, roverPosition } = useRover();
   const { width } = useWindowDimensions();
   const mountedRef = useRef(true);
+  const [showRobotSettings, setShowRobotSettings] = useState(false);
+  const [showQuickTune, setShowQuickTune] = useState(false);
 
   const isTablet = width > 600;
   const columnWidth = isTablet ? (width - 24 - 12) / 2 : ('100%' as any);
@@ -132,6 +136,47 @@ export default function DashboardScreen() {
               </View>
             </View>
           </View>
+        </View>
+
+        {/* ── QUICK TUNE CARD ── */}
+        <View style={styles.card}>
+          <View style={[styles.cardAccent, { backgroundColor: colors.warning }]} />
+          <TouchableOpacity
+            style={styles.cardBody}
+            onPress={() => setShowQuickTune(true)}
+            disabled={connectionState !== 'connected'}
+          >
+            <View style={styles.cardHeaderRow}>
+              <View style={styles.cardHeaderLeft}>
+                <View style={[styles.cardIconWrap, { borderColor: colors.warning + '40' }]}>
+                  <Ionicons name="settings-outline" size={18} color={colors.warning} />
+                </View>
+                <Text style={styles.cardLabel}>QUICK TUNE</Text>
+              </View>
+              <View style={[styles.statusBadge, { backgroundColor: colors.warning + '20', borderColor: colors.warning }]}>
+                <View style={[styles.statusBadgeDot, { backgroundColor: colors.warning }]} />
+                <Text style={[styles.statusBadgeText, { color: colors.warning }]}>
+                  AUTO
+                </Text>
+              </View>
+            </View>
+            <Text style={styles.quickTuneDesc}>
+              Auto-tune steering and speed PID gains using Circle mode
+            </Text>
+            <View style={styles.quickTuneFooter}>
+              <View style={styles.quickTuneChip}>
+                <MaterialCommunityIcons name="steering" size={12} color={colors.accent} />
+                <Text style={styles.quickTuneChipText}>Steering PID</Text>
+              </View>
+              <View style={styles.quickTuneChip}>
+                <MaterialCommunityIcons name="speedometer" size={12} color={colors.success} />
+                <Text style={styles.quickTuneChipText}>Speed Gains</Text>
+              </View>
+              {connectionState !== 'connected' && (
+                <Text style={styles.disconnectedText}>Connect to configure</Text>
+              )}
+            </View>
+          </TouchableOpacity>
         </View>
 
         {/* ── MISSION PROGRESS ── */}
@@ -293,6 +338,47 @@ export default function DashboardScreen() {
           </View>
         </View>
 
+        {/* ── ROBOT SETTINGS CARD ── */}
+        <View style={styles.card}>
+          <View style={[styles.cardAccent, { backgroundColor: colors.accent }]} />
+          <TouchableOpacity
+            style={styles.cardBody}
+            onPress={() => setShowRobotSettings(true)}
+            disabled={connectionState !== 'connected'}
+          >
+            <View style={styles.cardHeaderRow}>
+              <View style={styles.cardHeaderLeft}>
+                <View style={[styles.cardIconWrap, { borderColor: colors.accent + '40' }]}>
+                  <Ionicons name="settings-outline" size={18} color={colors.accent} />
+                </View>
+                <Text style={styles.cardLabel}>ROBOT SETTINGS</Text>
+              </View>
+              <View style={[styles.statusBadge, { backgroundColor: colors.accent + '20', borderColor: colors.accent }]}>
+                <View style={[styles.statusBadgeDot, { backgroundColor: colors.accent }]} />
+                <Text style={[styles.statusBadgeText, { color: colors.accentLight }]}>
+                  CONFIG
+                </Text>
+              </View>
+            </View>
+            <Text style={styles.robotSettingsText}>
+              Configure GPS, Serial, Motor Drive, WP Navigation
+            </Text>
+            <View style={styles.robotSettingsFooter}>
+              <View style={styles.robotTypeChip}>
+                <Ionicons name="options-outline" size={12} color={colors.success} />
+                <Text style={styles.robotTypeChipText}>22 Parameters</Text>
+              </View>
+              <View style={styles.robotTypeChip}>
+                <Ionicons name="grid-outline" size={12} color={colors.accent} />
+                <Text style={styles.robotTypeChipText}>4 Categories</Text>
+              </View>
+              {connectionState !== 'connected' && (
+                <Text style={styles.disconnectedText}>Connect to configure</Text>
+              )}
+            </View>
+          </TouchableOpacity>
+        </View>
+
         {/* ── FOOTER ── */}
         {roverPosition && (
           <View style={styles.footerRow}>
@@ -304,6 +390,18 @@ export default function DashboardScreen() {
         )}
         <View style={{ height: 40 }} />
       </ScrollView>
+
+      {/* Robot Settings Modal */}
+      <RobotSettingsModal
+        visible={showRobotSettings}
+        onClose={() => setShowRobotSettings(false)}
+      />
+
+      {/* QuickTune Modal */}
+      <QuickTuneScreen
+        visible={showQuickTune}
+        onClose={() => setShowQuickTune(false)}
+      />
     </View>
   );
 }
@@ -635,6 +733,70 @@ const styles = StyleSheet.create({
     fontStyle: 'italic',
     textAlign: 'center',
     paddingVertical: 12,
+  },
+
+  // ── ROBOT SETTINGS CARD ──
+  robotSettingsText: {
+    color: colors.textSecondary,
+    fontSize: 13,
+    fontWeight: '500',
+    marginTop: 4,
+  },
+  robotSettingsFooter: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+    marginTop: 8,
+    alignItems: 'center',
+  },
+  robotTypeChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    backgroundColor: colors.panelBg,
+    borderRadius: 6,
+  },
+  robotTypeChipText: {
+    fontSize: 11,
+    color: colors.text,
+    fontWeight: '500',
+  },
+
+  // ── QUICK TUNE CARD ──
+  quickTuneDesc: {
+    color: colors.textSecondary,
+    fontSize: 13,
+    fontWeight: '500',
+    marginTop: 4,
+  },
+  quickTuneFooter: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+    marginTop: 8,
+    alignItems: 'center',
+  },
+  quickTuneChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    backgroundColor: colors.panelBg,
+    borderRadius: 6,
+  },
+  quickTuneChipText: {
+    fontSize: 11,
+    color: colors.text,
+    fontWeight: '500',
+  },
+  disconnectedText: {
+    fontSize: 11,
+    color: colors.danger,
+    fontWeight: '500',
+    fontStyle: 'italic',
   },
 
   // ── FOOTER ──

@@ -1,4 +1,4 @@
-export type Mode = 'AUTO' | 'MANUAL';
+export type Mode = 'AUTO' | 'MANUAL' | 'CONTINUOUS' | 'DASH';
 
 export interface Waypoint {
   sn: number;

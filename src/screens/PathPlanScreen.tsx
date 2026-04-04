@@ -451,6 +451,12 @@ export default function PathPlanScreen() {
       return;
     }
 
+    // Block waypoint creation when any manual connection overlay is open
+    // (Android WebView can leak touch events through native overlays)
+    if (showManualConnectionCanvas || isConnectingPath) {
+      return;
+    }
+
     // Point tool validation: Only create waypoints if point tool is active
     // Silently ignore if point tool is not active (no alert, no UI change)
     if (activeDrawingTool !== 'line') {
@@ -551,6 +557,11 @@ export default function PathPlanScreen() {
   }, [missionWaypoints, setMissionWaypoints]);
 
   const handleAddWaypoints = (coords: { latitude: number; longitude: number }[]) => {
+    // Block adding waypoints when manual connection overlay is open
+    if (showManualConnectionCanvas || isConnectingPath) {
+      return;
+    }
+
     if (coords.length === 0) {
       Alert.alert('No Marking Points', 'No coordinates to add.');
       return;
@@ -1718,7 +1729,10 @@ export default function PathPlanScreen() {
                   onShowSurveyGridTool={() => setShowSurveyGridDialog(true)}
                   onShowTextTool={() => setShowTextDialog(true)}
                   onShowCADDrawing={() => setShowCADCanvas(true)}
-                  onShowManualConnection={() => setShowManualConnectionCanvas(true)}
+                  onShowManualConnection={() => {
+                    setActiveDrawingTool(null); // Clear drawing tool to prevent map from creating new waypoints
+                    setShowManualConnectionCanvas(true);
+                  }}
                   isCollapsed={isDrawingToolsCollapsed}
                   onToggleCollapse={() => setIsDrawingToolsCollapsed(!isDrawingToolsCollapsed)}
                 />
@@ -2290,7 +2304,7 @@ export default function PathPlanScreen() {
         currentMode={gpsFailsafeMode}
         onModeChange={setGpsFailsafeMode}
         onClose={() => setShowFailsafeModeSelector(false)}
-        disabled={telemetry.mission.status !== 'IDLE'}
+        disabled={['running', 'RUNNING', 'active', 'ACTIVE'].includes(telemetry.mission.status)}
       />
 
       {/* GPS Failsafe Strict Mode Popup */}

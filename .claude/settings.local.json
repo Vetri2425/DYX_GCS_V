@@ -37,7 +37,14 @@
       "Bash(__NEW_LINE_5f24c45df9e10f37__ echo \"=== Verification: Mission Parameters Methods ===\")",
       "Bash(grep -E \"\\(App|index\\)\\\\.tsx$\")",
       "Bash(xargs grep -l \"activeTab\\\\|PersistentStorage\")",
-      "Bash(xargs grep -l \"Alert\\\\|Toast\")"
+      "Bash(xargs grep -l \"Alert\\\\|Toast\")",
+      "Bash(./gradlew assembleRelease --stacktrace)",
+      "Bash(adb install:*)",
+      "Bash(adb shell:*)",
+      "mcp__claude_ai_Figma__generate_diagram",
+      "Bash(qwen --version)",
+      "Bash(wc -l \"C:/Users/FLASH/.claude/tasks/qwen_\"*.log)",
+      "Bash(npx jest:*)"
     ],
     "deny": [],
     "ask": []

@@ -1,0 +1,73 @@
+QUICK TUNE PROCEDURE:
+---------------------
+
+WHAT IT DOES:-
+--------------
+The Rover Quick Tune Lua script simplifies the process of finding good PID gains for rover steering and speed controllers.
+
+The script should be run while the rover is in Circle mode. It records the steering and throttle outputs and the resulting response (e.g. rover’s turn rate and speed) for at least 10 seconds in order to calculate the feed-forward gains. The P and I gains are then set to a ratio of the feed-forward’s. Once complete the gains are saved automatically.
+
+By default the gains will be tuned in this order:
+
+ATC_STR_RAT_FF, then ATC_STR_RAT_P and I are set to ratios of the FF
+
+CRUISE_SPEED and CRUISE_THROTTLE, then ATC_SPEED_P and I are set to ratios of the FF
+
+The script will also adjust filter settings:
+
+ATC_STR_RAT_FLTD and FLTT will be set to half of the INS_GYRO_FILTER value
+
+
+STEP 1:
+-------
+Installing the Script:-
+-----------------------
+Set SCR_ENABLE = 1 to enable scripting and then reboot the Cube Orange Plus
+
+Download rover-quicktune.lua file from GitHub to your PC 
+
+Connect Cube Orange Plus to Mission Planner's PC with Micro USB Cable 
+
+Upload the rover quicktune lua script in the following path of the Cube Orange Plus
+
+MissionPlanner>CONFIG>MAVFtp>APM>scripts>rover-quicktune.lua
+
+Reboot the Cube Orange Plus and set RTUN_ENABLE = 1
+
+If an RC switch will be used to start/stop the tune set RCx_OPTION = 300 where “x” is the RC input channel number.
+
+Alternatively set one of Mission Planner’s Aux Function tab’s rows to “Scripting1”
+
+
+STEP 2:
+-------
+Running Quick Tune:-
+--------------------
+
+Go to an open area with good GPS reception
+
+Connect with a ground station (e.g. Mission Planner) and ensure that the Messages tab can be seen. This is where output from the tune will appear
+
+Move the RC switch to the low position OR push Mission Planner's Aux Function’s “Low” button
+
+Set CIRC_RADIUS to the minimum turn radius for the rover's size (e.g. 4 mtr)
+
+Set CIRC_SPEED to about half the rover’s maximum speed (e.g. 1m/s)
+
+Arm the rover, drive to an open area and switch to Circle mode
+
+Begin the tune by moving the RC switch to the middle position or push Mission Planner's Aux Function’s “Mid” button
+
+Monitor the progress of the tune using the Mission Planner's Messages tab
+
+If the RC steering and throttle sticks are moved from their center position the tuning will be paused until a few seconds after they are moved back to their center position
+
+If the rover begins oscillating violently cancel the tune by moving the RC switch to the low position OR push Mission Planner's Aux Function’s “Low” button
+
+Once the tune has completed the new gains will be saved automatically
+
+Put Hold mode and Disarm the rover.
+
+
+
+

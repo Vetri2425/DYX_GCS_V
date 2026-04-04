@@ -37,7 +37,11 @@ export type MissionReportExportProps = {
         | 'skipped'
         | 'reached'
         | 'marked'
-        | 'pending';
+        | 'pending'
+        | 'spray_on'
+        | 'spray_off'
+        | 'passed'
+        | 'mission_end';
       timestamp?: string;
       pile?: string | number;
       rowNo?: string | number;
@@ -154,6 +158,14 @@ const MissionReportExport: React.FC<MissionReportExportProps> = ({
         let statusDisplay = 'Pending';
         if (wpStatus?.status === 'completed') {
           statusDisplay = 'Completed';
+        } else if (wpStatus?.status === 'spray_on') {
+          statusDisplay = 'Spray ON';
+        } else if (wpStatus?.status === 'spray_off') {
+          statusDisplay = 'Spray OFF';
+        } else if (wpStatus?.status === 'passed') {
+          statusDisplay = 'Passed';
+        } else if (wpStatus?.status === 'mission_end') {
+          statusDisplay = 'Done';
         } else if (wpStatus?.marked) {
           statusDisplay = 'Marked';
         } else if (wpStatus?.reached) {

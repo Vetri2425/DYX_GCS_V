@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { View, Text, StyleSheet, ScrollView } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import { colors } from '../../theme/colors';
 import { VehicleStatus } from './types';
 import { RoverTelemetry } from '../../types/telemetry';
@@ -10,15 +11,14 @@ interface Props {
   isConnected: boolean;
 }
 
-// Layout constants for quick adjustments
-// Edit these values to change the card size without touching the StyleSheet below.
+// Layout constants — DO NOT change these, they control the fit in the parent layout
 const VEHICLE_CARD_LAYOUT: { height?: number | string; minHeight?: number; width?: number | string; flex?: number } = {
-  height: 345, // px or percentage string like '30%'
+  height: 345,
   minHeight: 120,
   width: '100%',
 };
 
-// Compute colors from raw telemetry values (pure functions, no side effects)
+// ── Color helpers (pure, no side effects) ──────────────────────────────────
 const getRtkColor = (telemetry: any): string => {
   if (!telemetry) return colors.danger;
   const fixType = telemetry.rtk.fix_type;
@@ -38,7 +38,7 @@ const getBatteryColor = (telemetry: any): string => {
 const getAccuracyColor = (value: number): string => {
   if (value < 0.1) return colors.success;
   if (value < 5) return colors.warning;
-  if (value < 10) return '#3B82F6';
+  if (value < 10) return colors.accent;
   return colors.danger;
 };
 
@@ -47,11 +47,11 @@ const getSatelliteColor = (telemetry: any): string => {
   const satCount = telemetry.global.satellites_visible;
   if (satCount >= 14) return colors.success;
   if (satCount >= 6) return colors.warning;
-  if (satCount >= 2) return '#3B82F6';
+  if (satCount >= 2) return colors.accent;
   return colors.danger;
 };
 
-// Hook: debounces a color value to prevent rapid flickering while keeping text values instant
+// Debounce color changes to prevent rapid flickering
 function useDebouncedColor(computeColor: () => string, dep: any, delay = 350): string {
   const [color, setColor] = useState(computeColor);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -59,7 +59,6 @@ function useDebouncedColor(computeColor: () => string, dep: any, delay = 350): s
 
   useEffect(() => {
     const next = computeColor();
-    // Apply immediately on first render so initial state is correct
     if (isFirstRender.current) {
       isFirstRender.current = false;
       setColor(next);
@@ -67,257 +66,83 @@ function useDebouncedColor(computeColor: () => string, dep: any, delay = 350): s
     }
     if (timerRef.current) clearTimeout(timerRef.current);
     timerRef.current = setTimeout(() => setColor(next), delay);
-    return () => {
-      if (timerRef.current) clearTimeout(timerRef.current);
-    };
+    return () => { if (timerRef.current) clearTimeout(timerRef.current); };
   }, [dep]);
 
   return color;
 }
 
+// Row config type
+type StatusRowItem = {
+  key: string;
+  label: string;
+  value: string | number;
+  color: string;
+  icon: keyof typeof Ionicons.glyphMap;
+};
+
 export const VehicleStatusCard: React.FC<Props> = ({ status, telemetry, isConnected }) => {
+  const connectionColor = isConnected ? colors.success : colors.danger;
 
-  const connectionStatusColor = isConnected ? colors.success : colors.danger;
+  const rtkColor      = useDebouncedColor(() => getRtkColor(telemetry),      telemetry?.rtk?.fix_type);
+  const batteryColor  = useDebouncedColor(() => getBatteryColor(telemetry),  telemetry?.battery?.percentage);
+  const hrmsColor     = useDebouncedColor(() => getAccuracyColor((telemetry as any)?.hrms ?? 0), (telemetry as any)?.hrms);
+  const vrmsColor     = useDebouncedColor(() => getAccuracyColor((telemetry as any)?.vrms ?? 0), (telemetry as any)?.vrms);
+  const satColor      = useDebouncedColor(() => getSatelliteColor(telemetry), telemetry?.global?.satellites_visible);
 
-  // Colors are debounced to prevent flickering; text values from `status` update instantly
-  const rtkStatusColor   = useDebouncedColor(() => getRtkColor(telemetry),      telemetry?.rtk?.fix_type);
-  const batteryColor     = useDebouncedColor(() => getBatteryColor(telemetry),   telemetry?.battery?.percentage);
-  const hrmsColor        = useDebouncedColor(() => getAccuracyColor((telemetry as any)?.hrms ?? 0),  (telemetry as any)?.hrms);
-  const vrmsColor        = useDebouncedColor(() => getAccuracyColor((telemetry as any)?.vrms ?? 0),  (telemetry as any)?.vrms);
-  const satelliteColor   = useDebouncedColor(() => getSatelliteColor(telemetry), telemetry?.global?.satellites_visible);
-
-
-
-  /*
-  const handleSelectProfile = async (profile: NTRIPProfile) => {
-    if (!services) {
-      Alert.alert('Error', 'RTK services not available');
-      return;
-    }
-
-    setIsSubmitting(true);
-    setFeedback(null);
-    setError(null);
-
-    try {
-      const ntripUrl = `rtcm://${profile.username}:${profile.password}@${profile.casterAddress}:${profile.port}/${profile.mountpoint}`;
-      console.log('[RTK] Starting stream with URL:', ntripUrl);
-      const response = await services.injectRTK(ntripUrl.trim());
-
-      if (response.success) {
-        setFeedback(response.message ?? 'RTK stream started successfully.');
-        setIsStreamRunning(true);
-        setActiveProfileId(profile.id);
-
-        // Immediately start monitoring to sync state from backend
-        startMonitor();
-
-        // Wait a moment then verify actual connection status
-        setTimeout(async () => {
-          try {
-            const status = await services.getRTKStatus();
-            console.log('[RTK] Status check after start:', status);
-            if (status.success) {
-              if (status.running) {
-                console.log('[RTK] Connection verified - stream is running');
-                Alert.alert('Success', `Connected to ${profile.name}`);
-              } else {
-                console.error('[RTK] Stream failed to connect - backend reported not running');
-                setError('Stream started but connection failed. Check credentials and network.');
-                setIsStreamRunning(false);
-                setActiveProfileId(null);
-                stopMonitor();
-                Alert.alert('Connection Failed', 'Stream started but backend connection failed.\n\nCheck:\n• NTRIP credentials\n• Network connectivity\n• Caster availability');
-              }
-            }
-          } catch (err) {
-            console.warn('[RTK] Failed to verify connection status:', err);
-            // Monitor already running, keep it going
-          }
-        }, 1000); // Wait 1 second for backend to establish connection
-      } else {
-        setError(response.message ?? 'Failed to start RTK stream.');
-        Alert.alert('Connection Failed', response.message ?? 'Failed to start RTK stream.');
-      }
-    } catch (err) {
-      const errorMsg = err instanceof Error ? err.message : 'Failed to start RTK stream.';
-      setError(errorMsg);
-      Alert.alert('Error', errorMsg);
-    } finally {
-      setIsSubmitting(false);
-    }
-  };
-
-  const handleAddNewProfile = () => {
-    setSelectedProfile(null);
-    setModalScreen('editor');
-  };
-
-  const handleEditProfile = (profile: NTRIPProfile) => {
-    setSelectedProfile(profile);
-    setModalScreen('editor');
-  };
-
-  const handleProfileSaved = (profile: NTRIPProfile) => {
-    setModalScreen('list');
-    setSelectedProfile(null);
-  };
-
-  const handleCancelEdit = () => {
-    setModalScreen('list');
-    setSelectedProfile(null);
-  };
-
-  const handleStartStream = async () => {
-    if (!services) {
-      Alert.alert('Error', 'RTK services not available');
-      return;
-    }
-
-    const requiredFields: (keyof RTKConfig)[] = [
-      'casterAddress', 'port', 'mountpoint', 'username', 'password',
-    ];
-    const missingFields = requiredFields.filter(field => !config[field].trim());
-    if (missingFields.length > 0) {
-      setError(`Missing required fields: ${missingFields.join(', ')}`);
-      return;
-    }
-
-    setIsSubmitting(true);
-    setFeedback(null);
-    setError(null);
-
-    try {
-      const ntripUrl = `rtcm://${config.username}:${config.password}@${config.casterAddress}:${config.port}/${config.mountpoint}`;
-      console.log('[RTK] Starting stream with URL:', ntripUrl);
-      const response = await services.injectRTK(ntripUrl.trim());
-
-      if (response.success) {
-        setFeedback(response.message ?? 'RTK stream started successfully.');
-        setIsStreamRunning(true);
-
-        // Wait a moment then verify actual connection status
-        setTimeout(async () => {
-          try {
-            const status = await services.getRTKStatus();
-            console.log('[RTK] Status check after start:', status);
-            if (status.success) {
-              if (status.running) {
-                console.log('[RTK] Connection verified - stream is running');
-                startMonitor();
-              } else {
-                console.error('[RTK] Stream failed to connect - backend reported not running');
-                setError('Stream started but connection failed. Check credentials and network.');
-                setIsStreamRunning(false);
-                Alert.alert('Connection Failed', 'Stream started but backend connection failed.\n\nCheck:\n• NTRIP credentials\n• Network connectivity\n• Caster availability');
-              }
-            }
-          } catch (err) {
-            console.warn('[RTK] Failed to verify connection status:', err);
-            // Still try to start monitor in case status check failed but stream is OK
-            startMonitor();
-          }
-        }, 1000); // Wait 1 second for backend to establish connection
-      } else {
-        setError(response.message ?? 'Failed to start RTK stream.');
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to start RTK stream.');
-    } finally {
-      setIsSubmitting(false);
-    }
-  };
-
-  const handleStopStream = async () => {
-    if (!services) {
-      Alert.alert('Error', 'RTK services not available');
-      return;
-    }
-
-    setIsSubmitting(true);
-    setFeedback(null);
-    setError(null);
-
-    try {
-      const response = await services.stopRTK();
-
-      if (response.success) {
-        setFeedback(response.message ?? 'RTK stream stopped successfully.');
-        setIsStreamRunning(false);
-        setActiveProfileId(null);
-        stopMonitor();
-      } else {
-        setError(response.message ?? 'Failed to stop RTK stream.');
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to stop RTK stream.');
-    } finally {
-      setIsSubmitting(false);
-    }
-  };
-  */
+  const rows: StatusRowItem[] = [
+    { key: 'battery',    label: 'Battery',    value: status.battery,    color: batteryColor,  icon: 'battery-charging' },
+    { key: 'gps',        label: 'GPS / RTK',  value: status.gps,        color: rtkColor,      icon: 'cellular' },
+    { key: 'satellites', label: 'Satellites', value: status.satellites,  color: satColor,      icon: 'radio' },
+    { key: 'hrms',       label: 'HRMS',       value: status.hrms,       color: hrmsColor,     icon: 'analytics' },
+    { key: 'vrms',       label: 'VRMS',       value: status.vrms,       color: vrmsColor,     icon: 'analytics-outline' },
+    { key: 'imu',        label: 'IMU',        value: status.imu,        color: colors.accent, icon: 'compass' },
+    ...(status.mode ? [{ key: 'mode', label: 'Mode', value: status.mode, color: colors.accent, icon: 'settings-sharp' as keyof typeof Ionicons.glyphMap }] : []),
+  ];
 
   return (
     <View style={styles.card}>
       {/* Header */}
       <View style={styles.header}>
-        <Text style={styles.title}>ROBOT STATUS</Text>
-        <View style={[styles.statusDot, { backgroundColor: connectionStatusColor }]} />
+        <View style={styles.headerLeft}>
+          <View style={styles.headerIconWrap}>
+            <Ionicons name="hardware-chip" size={16} color={colors.accent} />
+          </View>
+          <Text style={styles.headerTitle}>ROBOT STATUS</Text>
+        </View>
+        <View style={[styles.headerBadge, { backgroundColor: isConnected ? 'rgba(16,185,129,0.1)' : 'rgba(239,68,68,0.1)', borderColor: isConnected ? 'rgba(16,185,129,0.3)' : 'rgba(239,68,68,0.3)' }]}>
+          <View style={[styles.headerBadgeDot, { backgroundColor: connectionColor }]} />
+          <Text style={[styles.headerBadgeText, { color: connectionColor }]}>
+            {isConnected ? 'ONLINE' : 'OFFLINE'}
+          </Text>
+        </View>
       </View>
 
-      {/* Status Items - Scrollable List */}
-      <ScrollView style={styles.statusList} showsVerticalScrollIndicator={true}>
-        <View key="battery" style={styles.statusRow}>
-          <Text style={styles.label}>Battery</Text>
-          <View style={[styles.accuracyBox, { backgroundColor: batteryColor }]}>
-            <Text style={styles.accuracyValue}>{status.battery}</Text>
-          </View>
-        </View>
+      {/* Status rows */}
+      <ScrollView style={styles.list} showsVerticalScrollIndicator={false}>
+        {rows.map((row, idx) => (
+          <View
+            key={row.key}
+            style={[styles.row, idx === rows.length - 1 && styles.rowLast]}
+          >
+            {/* Left: icon + label */}
+            <View style={styles.rowLeft}>
+              <View style={[styles.rowIconWrap, { borderColor: `${row.color}40` }]}>
+                <Ionicons name={row.icon} size={13} color={row.color} />
+              </View>
+              <Text style={styles.rowLabel}>{row.label}</Text>
+            </View>
 
-        {/* GPS/RTK - Status display only (button moved to Settings) */}
-        <View key="gps-rtk" style={styles.statusRow}>
-          <Text style={styles.label}>GPS/RTK</Text>
-          <View style={[styles.accuracyBox, { backgroundColor: rtkStatusColor }]}>
-            <Text style={styles.accuracyValue}>{status.gps}</Text>
-          </View>
-        </View>
-
-        <View key="satellites" style={styles.statusRow}>
-          <Text style={styles.label}>Satellites</Text>
-          <View style={[styles.accuracyBox, { backgroundColor: satelliteColor }]}>
-            <Text style={styles.accuracyValue}>{status.satellites}</Text>
-          </View>
-        </View>
-
-        <View key="hrms" style={styles.statusRow}>
-          <Text style={styles.label}>HRMS</Text>
-          <View style={[styles.accuracyBox, { backgroundColor: hrmsColor }]}>
-            <Text style={styles.accuracyValue}>{status.hrms}</Text>
-          </View>
-        </View>
-        <View key="vrms" style={styles.statusRow}>
-          <Text style={styles.label}>VRMS</Text>
-          <View style={[styles.accuracyBox, { backgroundColor: vrmsColor }]}>
-            <Text style={styles.accuracyValue}>{status.vrms}</Text>
-          </View>
-        </View>
-        <View key="imu" style={styles.statusRow}>
-          <Text style={styles.label}>IMU</Text>
-          <View style={[styles.accuracyBox, { backgroundColor: colors.info }]}>
-            <Text style={styles.accuracyValue}>{status.imu}</Text>
-          </View>
-        </View>
-        {/* Mode Status Row */}
-        {status.mode && (
-          <View key="mode" style={[styles.statusRow, { borderBottomWidth: 0 }]}>
-            <Text style={styles.label}>Mode</Text>
-            <View style={[styles.accuracyBox, { backgroundColor: colors.info }]}>
-              <Text style={styles.accuracyValue}>{status.mode}</Text>
+            {/* Right: colored value badge */}
+            <View style={[styles.valueBadge, { backgroundColor: `${row.color}20`, borderColor: `${row.color}50` }]}>
+              <View style={[styles.valueDot, { backgroundColor: row.color }]} />
+              <Text style={[styles.valueText, { color: row.color }]} numberOfLines={1}>
+                {String(row.value)}
+              </Text>
             </View>
           </View>
-        )}
+        ))}
       </ScrollView>
-
     </View>
   );
 };
@@ -325,286 +150,132 @@ export const VehicleStatusCard: React.FC<Props> = ({ status, telemetry, isConnec
 const styles = StyleSheet.create({
   card: {
     ...(VEHICLE_CARD_LAYOUT as any),
-    backgroundColor: colors.secondary,
+    backgroundColor: colors.panelBg,
     borderRadius: 12,
     padding: 12,
     paddingBottom: 20,
-    marginBottom: 12,
+    marginBottom: 6.12,
     borderWidth: 1,
     borderColor: colors.border,
   },
+
+  // ── HEADER ──
   header: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginBottom: 12,
+    marginBottom: 10,
     paddingBottom: 8,
     borderBottomWidth: 1,
     borderBottomColor: colors.border,
   },
-  iconContainer: {
-    backgroundColor: 'rgba(64, 132, 241, 0.8)',
-    padding: 4,
-    borderRadius: 4,
-    marginRight: 6,
+  headerLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
   },
-  title: {
-    fontSize: 13,
-    fontWeight: '700',
+  headerIconWrap: {
+    width: 28,
+    height: 28,
+    borderRadius: 8,
+    backgroundColor: 'rgba(59,130,246,0.15)',
+    borderWidth: 1,
+    borderColor: 'rgba(59,130,246,0.3)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  headerTitle: {
     color: colors.accent,
-    letterSpacing: 1,
-    textAlign: 'center',
-    flex: 1,
+    fontSize: 12,
+    fontWeight: '700',
+    letterSpacing: 2.5,
   },
-  statusDot: {
-    width: 10,
-    height: 10,
-    borderRadius: 5,
-    backgroundColor: colors.danger,
+  headerBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    borderWidth: 1,
+    borderRadius: 6,
+    paddingHorizontal: 7,
+    paddingVertical: 3,
   },
-  statusList: {
-    backgroundColor: colors.primary,
+  headerBadgeDot: {
+    width: 5,
+    height: 5,
+    borderRadius: 3,
+  },
+  headerBadgeText: {
+    fontSize: 8,
+    fontWeight: '700',
+    letterSpacing: 1.5,
+  },
+
+  // ── LIST ──
+  list: {
+    flex: 1.2,
     borderRadius: 10,
     borderWidth: 1,
     borderColor: colors.border,
-  },
-  statusRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingVertical: 12,
-    paddingHorizontal: 16,
-    backgroundColor: colors.primary,
-    borderRadius: 8,
-    marginBottom: 0,
-    borderBottomWidth: 1.5,
-    borderBottomColor: colors.border,
-  },
-  label: {
-    fontSize: 13,
-    color: colors.textSecondary,
-  },
-  value: {
-    fontSize: 13,
-    fontWeight: 'bold',
-    color: colors.text,
-  },
-  valueRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  gearIcon: {
-    fontSize: 10,
-    color: colors.textSecondary,
-  },
-  accuracyBox: {
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 4,
-    minWidth: 60,
-    alignItems: 'center',
-  },
-  accuracyValue: {
-    fontSize: 11,
-    fontWeight: 'bold',
-    color: '#FFFFFF',
-  },
-  // Modal styles
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.85)',
-    justifyContent: 'flex-end',
-  },
-  profileModalContainer: {
-    backgroundColor: colors.primary,
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
-    height: '90%',
-    borderWidth: 1,
-    borderColor: colors.border,
+    backgroundColor: colors.cardBg,
     overflow: 'hidden',
   },
-  profileModalHeader: {
+
+  // ── ROW — 5 visible, 2 scroll ──
+  row: {
     flexDirection: 'row',
+    alignItems: 'center',
     justifyContent: 'space-between',
-    alignItems: 'flex-start',
-    padding: 20,
-    paddingBottom: 20,
+    height: 53,
+    paddingHorizontal: 10,
     borderBottomWidth: 1,
     borderBottomColor: colors.border,
-    backgroundColor: colors.secondary,
   },
-  profileModalTitle: {
-    fontSize: 20,
-    fontWeight: '700',
-    color: colors.text,
-    marginBottom: 8,
+  rowLast: {
+    borderBottomWidth: 1,
   },
-  streamingBadge: {
+  rowLeft: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: colors.success + '20',
-    paddingHorizontal: 10,
-    paddingVertical: 4,
+    gap: 8,
+  },
+  rowIconWrap: {
+    width: 24,
+    height: 24,
     borderRadius: 12,
-    marginTop: 4,
-  },
-  streamingDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-    backgroundColor: colors.success,
-    marginRight: 6,
-  },
-  streamingText: {
-    fontSize: 12,
-    color: colors.success,
-    fontWeight: '600',
-    marginRight: 8,
-  },
-  streamingBytes: {
-    fontSize: 11,
-    color: colors.textSecondary,
-    fontFamily: 'monospace',
-  },
-  headerActions: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-  },
-  stopStreamButton: {
-    backgroundColor: colors.danger,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 8,
-  },
-  stopStreamText: {
-    color: '#fff',
-    fontSize: 12,
-    fontWeight: '600',
-  },
-  closeButton: {
-    fontSize: 28,
-    color: colors.textSecondary,
-    fontWeight: '300',
-    paddingHorizontal: 8,
-  },
-  modalContainer: {
-    backgroundColor: colors.panelBg,
-    borderRadius: 12,
-    padding: 20,
-    width: '100%',
-    maxWidth: 500,
-    maxHeight: '90%',
     borderWidth: 1,
-    borderColor: colors.border,
-  },
-  modalHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 16,
-  },
-  modalTitle: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: colors.text,
-  },
-  streamStatus: {
-    backgroundColor: 'rgba(30, 41, 59, 0.5)',
-    borderWidth: 1,
-    borderColor: 'rgba(51, 65, 85, 1)',
-    borderRadius: 8,
-    padding: 12,
-    marginBottom: 16,
-  },
-  streamStatusRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  streamLabel: {
-    fontSize: 13,
-    color: colors.textSecondary,
-  },
-  streamValue: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: colors.success,
-    fontFamily: 'monospace',
-  },
-  formContainer: {
-    marginBottom: 16,
-  },
-  inputGroup: {
-    marginBottom: 14,
-  },
-  inputLabel: {
-    fontSize: 13,
-    fontWeight: '500',
-    color: colors.textSecondary,
-    marginBottom: 6,
-  },
-  input: {
-    width: '100%',
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    backgroundColor: 'rgba(30, 41, 59, 1)',
-    borderWidth: 1,
-    borderColor: 'rgba(71, 85, 105, 1)',
-    borderRadius: 8,
-    color: colors.text,
-    fontSize: 14,
-  },
-  inputDisabled: {
-    opacity: 0.5,
-  },
-  buttonContainer: {
-    flexDirection: 'row',
-    gap: 12,
-    marginBottom: 16,
-  },
-  actionButton: {
-    flex: 1,
-    paddingVertical: 12,
-    borderRadius: 8,
-    alignItems: 'center',
     justifyContent: 'center',
+    alignItems: 'center',
   },
-  startButton: {
-    backgroundColor: '#16a34a',
+  rowLabel: {
+    color: 'rgba(103,232,249,0.8)',
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 1.5,
+    textTransform: 'uppercase',
   },
-  stopButton: {
-    backgroundColor: '#dc2626',
-  },
-  buttonDisabled: {
-    opacity: 0.5,
-  },
-  buttonText: {
-    color: colors.text,
-    fontSize: 14,
-    fontWeight: '600',
-  },
-  feedbackSuccess: {
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    backgroundColor: 'rgba(22, 163, 74, 0.2)',
+
+  // ── VALUE BADGE ──
+  valueBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
     borderWidth: 1,
-    borderColor: '#16a34a',
-    borderRadius: 8,
-    marginBottom: 8,
+    borderRadius: 6,
+    paddingHorizontal: 7,
+    paddingVertical: 3,
+    flexShrink: 0,
+    maxWidth: '55%',
   },
-  feedbackError: {
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    backgroundColor: 'rgba(220, 38, 38, 0.2)',
-    borderWidth: 1,
-    borderColor: '#dc2626',
-    borderRadius: 8,
-    marginBottom: 8,
+  valueDot: {
+    width: 5,
+    height: 5,
+    borderRadius: 3,
+    flexShrink: 0,
   },
-  feedbackText: {
-    fontSize: 13,
-    color: colors.text,
+  valueText: {
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 0.5,
+    flexShrink: 1,
   },
 });

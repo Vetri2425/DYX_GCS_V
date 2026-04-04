@@ -48,7 +48,7 @@ export interface WaypointStatusMap {
   [waypointSn: number]: {
     reached?: boolean;
     marked?: boolean;
-    status?: 'completed' | 'loading' | 'skipped' | 'reached' | 'marked' | 'pending';
+    status?: 'completed' | 'loading' | 'skipped' | 'reached' | 'marked' | 'pending' | 'spray_on' | 'spray_off' | 'passed' | 'mission_end';
     timestamp?: string;
     pile?: string | number;
     rowNo?: string | number;
@@ -763,7 +763,7 @@ class PersistentStorageService {
   async saveMissionReportUIState(state: {
     isMapFullscreen?: boolean;
     currentIndex?: number | null;
-    mode?: 'AUTO' | 'MANUAL';
+    mode?: 'AUTO' | 'MANUAL' | 'CONTINUOUS' | 'DASH';
   }): Promise<boolean> {
     try {
       await AsyncStorage.setItem(STORAGE_KEYS.MISSION_REPORT_UI_STATE, JSON.stringify(state));
@@ -781,7 +781,7 @@ class PersistentStorageService {
   async loadMissionReportUIState(): Promise<{
     isMapFullscreen?: boolean;
     currentIndex?: number | null;
-    mode?: 'AUTO' | 'MANUAL';
+    mode?: 'AUTO' | 'MANUAL' | 'CONTINUOUS' | 'DASH';
   } | null> {
     try {
       const data = await AsyncStorage.getItem(STORAGE_KEYS.MISSION_REPORT_UI_STATE);

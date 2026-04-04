@@ -82,6 +82,7 @@ export interface RoverTelemetry {
   wp_brg?: number;        // Bearing to waypoint in degrees
   position_error_cm?: number; // Total position error = sqrt(wp_dist² + xtrack²) in cm
   gps_failsafe?: GpsFailsafeStatus;
+  distance_to_next_m?: number; // Backend mission distance to next waypoint in meters
 }
 
 // Telemetry envelope from backend
@@ -105,6 +106,7 @@ export interface TelemetryEnvelope {
   xtrack_cm?: number;
   wp_brg?: number;
   position_error_cm?: number; // Total position error = sqrt(wp_dist² + xtrack²) in cm
+  distance_to_next_m?: number; // Backend mission distance to next waypoint in meters
 }
 
 // Service response

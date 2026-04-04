@@ -18,6 +18,7 @@ interface Props {
   waypoints?: Waypoint[];
   missionMode?: string; // Backend mission mode
   isMissionActive?: boolean;
+  waitingForManual?: boolean; // MANUAL mode: waiting for user to press NEXT
 }
 
 export const SystemStatusPanel: React.FC<Props> = ({
@@ -32,6 +33,7 @@ export const SystemStatusPanel: React.FC<Props> = ({
   waypoints = [],
   missionMode = 'DGPS Mark',
   isMissionActive = false,
+  waitingForManual = false,
 }) => {
   const { telemetry, connectionState, services } = useRover();
 
@@ -124,13 +126,19 @@ export const SystemStatusPanel: React.FC<Props> = ({
     <View style={styles.container}>
       {/* System Status Card */}
       <View style={styles.statusCard}>
+        {/* Header */}
         <View style={styles.statusHeader}>
-          <Text style={styles.statusTitle}>SYSTEM STATUS</Text>
+          <View style={styles.headerLeft}>
+            <View style={styles.headerIconWrap}>
+              <Ionicons name="pulse" size={14} color={colors.accent} />
+            </View>
+            <Text style={styles.statusTitle}>SYSTEM STATUS</Text>
+          </View>
         </View>
         <View style={styles.statusPad}>
           <View style={styles.iconRow}>
             {/* Network/Jetson */}
-            <View style={[styles.iconWrapper, { opacity: systemStatus.networkOpacity }]}>
+            <View style={[styles.iconWrapper, { opacity: systemStatus.networkOpacity, borderColor: `${systemStatus.networkColor}40` }]}>
               <Ionicons
                 name={systemStatus.networkIcon as any}
                 size={18}
@@ -139,7 +147,7 @@ export const SystemStatusPanel: React.FC<Props> = ({
             </View>
 
             {/* LoRa */}
-            <View style={[styles.iconWrapper, { opacity: systemStatus.loraOpacity }]}>
+            <View style={[styles.iconWrapper, { opacity: systemStatus.loraOpacity, borderColor: `${systemStatus.loraColor}40` }]}>
               <Ionicons
                 name={systemStatus.loraIcon as any}
                 size={18}
@@ -148,7 +156,7 @@ export const SystemStatusPanel: React.FC<Props> = ({
             </View>
 
             {/* RC/Backend */}
-            <View style={[styles.iconWrapper, { opacity: systemStatus.rcOpacity }]}>
+            <View style={[styles.iconWrapper, { opacity: systemStatus.rcOpacity, borderColor: `${systemStatus.rcColor}40` }]}>
               <Ionicons
                 name={systemStatus.rcIcon as any}
                 size={18}
@@ -157,7 +165,7 @@ export const SystemStatusPanel: React.FC<Props> = ({
             </View>
 
             {/* Battery */}
-            <View style={styles.iconWrapper}>
+            <View style={[styles.iconWrapper, { borderColor: `${systemStatus.batteryColor}40` }]}>
               <Ionicons
                 name={systemStatus.batteryIcon as any}
                 size={18}
@@ -181,6 +189,7 @@ export const SystemStatusPanel: React.FC<Props> = ({
         onSkip={onSkip}
         missionMode={missionMode}
         isMissionActive={isMissionActive}
+        waitingForManual={waitingForManual}
       />
     </View>
   );
@@ -191,36 +200,50 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   statusCard: {
-    backgroundColor: colors.secondary,
-    padding: 14,
+    backgroundColor: colors.panelBg,
+    padding: 12,
     borderRadius: 12,
     borderWidth: 1,
     borderColor: colors.border,
-    marginBottom: 6,
+    marginBottom: 6.12,
+    gap: 6.12,
   },
   statusHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 12,
+    justifyContent: 'space-between',
+    paddingBottom: 6.12,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
   },
-
+  headerLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  headerIconWrap: {
+    width: 26,
+    height: 26,
+    borderRadius: 8,
+    backgroundColor: 'rgba(59, 130, 246, 0.15)',
+    borderWidth: 1,
+    borderColor: 'rgba(59, 130, 246, 0.3)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
   statusTitle: {
-    fontSize: 13,
+    fontSize: 12,
     fontWeight: '700',
     color: colors.accent,
-    letterSpacing: 1,
-    textAlign: 'center',
-    flex: 1,
+    letterSpacing: 2.5,
   },
   statusPad: {
-    backgroundColor: colors.primary,
+    backgroundColor: colors.cardBg,
     borderRadius: 10,
-    paddingVertical: 8,
-    paddingHorizontal: 14,
+    paddingVertical: 6.12,
+    paddingHorizontal: 12.24,
     borderWidth: 1,
     borderColor: colors.border,
-    marginBottom: 4,
   },
   iconRow: {
     flexDirection: 'row',
@@ -230,7 +253,11 @@ const styles = StyleSheet.create({
   iconWrapper: {
     alignItems: 'center',
     justifyContent: 'center',
-    padding: 6,
+    width: 30.6,
+    height: 30.6,
+    borderRadius: 15.3,
+    borderWidth: 1,
+    borderColor: colors.border,
   },
   iconLabel: {
     fontSize: 15,

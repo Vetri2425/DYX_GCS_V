@@ -1,5 +1,6 @@
 import React from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Modal, ActivityIndicator, TextInput } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, Modal, ActivityIndicator, TextInput, Image } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import { colors } from '../../theme/colors';
 import { useRover } from '../../context/RoverContext';
 import { Waypoint } from './types';
@@ -19,10 +20,11 @@ export type MissionControlCardProps = {
   onBulkSkip?: () => Promise<any>;
   onLoadMission?: () => Promise<void>;
   onRestart?: () => void;
-  mode: 'AUTO' | 'MANUAL';
-  onSetMode: (mode: 'AUTO' | 'MANUAL') => void;
+  mode: 'AUTO' | 'MANUAL' | 'CONTINUOUS' | 'DASH';
+  onSetMode: (mode: 'AUTO' | 'MANUAL' | 'CONTINUOUS' | 'DASH') => void;
   missionMode?: string; // Backend mission mode (DGPS Mark, Dash, Continuous, etc.)
   isMissionActive?: boolean;
+  waitingForManual?: boolean; // MANUAL mode: mission paused, user must press NEXT to continue
 };
 
 const MissionControlCard: React.FC<MissionControlCardProps> = ({
@@ -38,6 +40,7 @@ const MissionControlCard: React.FC<MissionControlCardProps> = ({
   mode,
   onSetMode,
   missionMode = 'DGPS Mark',
+  waitingForManual = false,
 }) => {
   const { services, telemetry } = useRover();
   const [isLoadingMission, setIsLoadingMission] = React.useState(false);
@@ -313,12 +316,15 @@ const MissionControlCard: React.FC<MissionControlCardProps> = ({
             style={[
               styles.controlButton,
               styles.nextButton,
+              waitingForManual && styles.nextButtonWaiting,
               (!isRunning || isNexting || mode !== 'MANUAL' || !isModeButtonsActive) && styles.buttonDisabled,
             ]}
             onPress={handleNext}
             disabled={!isRunning || isNexting || mode !== 'MANUAL' || !isModeButtonsActive}
           >
-            <Text style={styles.buttonText}>NEXT MARK</Text>
+            <Text style={styles.buttonText}>
+              {waitingForManual ? '👆 NEXT MARK' : 'NEXT MARK'}
+            </Text>
           </TouchableOpacity>
 
           {/* SKIP — only active when mission running and not in Continuous/Dash */}
@@ -457,8 +463,8 @@ const MissionControlCard: React.FC<MissionControlCardProps> = ({
         <Modal transparent visible={showBulkModal} animationType="fade">
           <View style={styles.modalOverlay}>
             <View style={styles.bulkModalCard}>
-              <Text style={styles.confirmTitle}>Bulk Skip Waypoints</Text>
-              <Text style={styles.confirmText}>Enter waypoint range to skip (mission must be PAUSED).</Text>
+              <Text style={styles.confirmHeaderTitle}>Bulk Skip Waypoints</Text>
+              <Text style={styles.confirmBodyText}>Enter waypoint range to skip (mission must be PAUSED).</Text>
 
               <View style={{ width: '100%', marginTop: 12 }}>
                 <Text style={styles.inputLabel}>From</Text>
@@ -483,12 +489,12 @@ const MissionControlCard: React.FC<MissionControlCardProps> = ({
               </View>
 
               <View style={[styles.confirmButtons, { marginTop: 14 }]}> 
-                <TouchableOpacity style={[styles.confirmButton, styles.cancelBtn]} onPress={() => setShowBulkModal(false)} disabled={isBulkSubmitting}>
-                  <Text style={styles.confirmButtonText}>Cancel</Text>
+                <TouchableOpacity style={styles.confirmCancelBtn} onPress={() => setShowBulkModal(false)} disabled={isBulkSubmitting}>
+                  <Text style={styles.confirmCancelText}>Cancel</Text>
                 </TouchableOpacity>
 
                 <TouchableOpacity
-                  style={[styles.confirmButton, styles.confirmBtn]}
+                  style={styles.confirmActionBtn}
                   onPress={() => {
                     setBulkError(null);
                     const from = parseInt(bulkFrom, 10);
@@ -537,32 +543,156 @@ const MissionControlCard: React.FC<MissionControlCardProps> = ({
                   }}
                   disabled={isBulkSubmitting}
                 >
-                  <Text style={[styles.confirmButtonText, { fontWeight: '700' }]}>{isBulkSubmitting ? 'Skipping...' : 'Confirm Skip'}</Text>
+                  <Text style={[styles.confirmActionText, { fontWeight: '700' }]}>{isBulkSubmitting ? 'Skipping...' : 'Confirm Skip'}</Text>
                 </TouchableOpacity>
               </View>
             </View>
           </View>
         </Modal>
 
-        {/* Confirmation Modal - modern styled dialog */}
+        {/* Confirmation Modal */}
         <Modal transparent visible={!!confirmAction} animationType="fade">
           <View style={styles.confirmOverlay}>
             <View style={styles.confirmCard}>
-              <Text style={styles.confirmTitle}>{confirmAction?.action}</Text>
-              <Text style={styles.confirmText}>
-                {`Are you sure you want to ${confirmAction?.action?.toLowerCase()}?`}
-              </Text>
 
+              {/* Header */}
+              <View style={styles.confirmHeader}>
+                <View style={styles.confirmHeaderLeft}>
+                  <View style={styles.confirmIconWrap}>
+                    <Text style={{ fontSize: 14 }}>⚡</Text>
+                  </View>
+                  <Text style={styles.confirmHeaderTitle}>
+                    {(confirmAction?.action ?? '').toUpperCase()}
+                  </Text>
+                </View>
+                <View style={[
+                  styles.confirmBadge,
+                  confirmAction?.action?.toLowerCase().includes('stop') && styles.confirmBadgeDanger,
+                ]}>
+                  <View style={[
+                    styles.confirmBadgeDot,
+                    { backgroundColor: confirmAction?.action?.toLowerCase().includes('stop') ? colors.danger : colors.warning },
+                  ]} />
+                  <Text style={[
+                    styles.confirmBadgeText,
+                    { color: confirmAction?.action?.toLowerCase().includes('stop') ? colors.danger : colors.warning },
+                  ]}>
+                    {confirmAction?.action?.toLowerCase().includes('stop') ? 'DANGER' : 'CONFIRM'}
+                  </Text>
+                </View>
+              </View>
+
+              {/* Divider */}
+              <View style={styles.confirmDivider} />
+
+              {/* Body */}
+              <View style={styles.confirmBody}>
+                <View style={[
+                  styles.confirmBigIcon,
+                  { borderColor: confirmAction?.action?.toLowerCase().includes('stop') ? `${colors.danger}40` : `${colors.warning}40`,
+                    backgroundColor: confirmAction?.action?.toLowerCase().includes('stop') ? `${colors.danger}12` : `${colors.warning}12` },
+                ]}>
+                  {confirmAction?.action?.toLowerCase().includes('stop')
+                    ? <Text style={{ fontSize: 28 }}>🛑</Text>
+                    : <Image source={require('../../../assets/rover-icon.png')} style={{ width: 36, height: 36 }} resizeMode="contain" />
+                  }
+                </View>
+
+                {/* Status Cards */}
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', gap: 8, marginBottom: 8, width: '100%' }}>
+                  {/* RTK Card */}
+                  {(() => {
+                    const rtkStatusColor = (() => {
+                      if (!telemetry) return colors.danger;
+                      const fixType = telemetry.rtk?.fix_type;
+                      if (fixType >= 5) return colors.success;
+                      if (fixType >= 4) return colors.warning;
+                      return colors.danger;
+                    })();
+                    const rtkStatusBadge = (() => {
+                      if (!telemetry) return 'LOST';
+                      const fixType = telemetry.rtk?.fix_type;
+                      if (fixType >= 6) return 'LOCKED';
+                      if (fixType >= 5) return 'LOCKED';
+                      if (fixType >= 4) return 'WEAK';
+                      return 'LOST';
+                    })();
+                    const rtkStatusText = (() => {
+                      if (!telemetry) return 'No Fix';
+                      const fixType = telemetry.rtk?.fix_type;
+                      if (fixType >= 6) return 'RTK Fixed';
+                      if (fixType >= 5) return 'RTK Float';
+                      if (fixType >= 4) return 'DGPS';
+                      if (fixType >= 3) return '3D Fix';
+                      if (fixType >= 2) return '2D Fix';
+                      return 'No GPS';
+                    })();
+                    return (
+                      <View style={{flex: 1, flexDirection: 'row', backgroundColor: colors.cardBg, borderRadius: 10, overflow: 'hidden', borderWidth: 1, borderColor: colors.border}}>
+                        <View style={{ width: 3, alignSelf: 'stretch', backgroundColor: rtkStatusColor }} />
+                        <View style={{ flex: 1, padding: 10, gap: 6, justifyContent: 'center' }}>
+                          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                            <View style={{width: 28, height: 28, borderRadius: 14, borderWidth: 1, borderColor: rtkStatusColor + '40', justifyContent: 'center', alignItems: 'center'}}>
+                              <Ionicons name="cellular" size={16} color={rtkStatusColor} />
+                            </View>
+                            <View style={{flexDirection: 'row', alignItems: 'center', gap: 4, borderWidth: 1, borderRadius: 5, paddingHorizontal: 6, paddingVertical: 2, backgroundColor: rtkStatusColor + '22', borderColor: rtkStatusColor}}>
+                              <View style={{ width: 4, height: 4, borderRadius: 2, backgroundColor: rtkStatusColor }} />
+                              <Text style={{fontSize: 7, fontWeight: '700', letterSpacing: 1, color: rtkStatusColor}}>{rtkStatusBadge}</Text>
+                            </View>
+                          </View>
+                          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                            <Text style={{color: 'rgba(103, 232, 249, 0.8)', fontSize: 9, fontWeight: '700', letterSpacing: 2, textTransform: 'uppercase'}}>GPS / RTK</Text>
+                            <Text style={{color: rtkStatusColor, fontSize: 12, fontWeight: '700', flexShrink: 1, textAlign: 'right'}} numberOfLines={1}>{rtkStatusText}</Text>
+                          </View>
+                        </View>
+                      </View>
+                    );
+                  })()}
+
+                  {/* Mode Card */}
+                  <View style={{flex: 1, flexDirection: 'row', backgroundColor: colors.cardBg, borderRadius: 10, overflow: 'hidden', borderWidth: 1, borderColor: colors.border}}>
+                    <View style={{ width: 3, alignSelf: 'stretch', backgroundColor: colors.success }} />
+                    <View style={{ flex: 1, padding: 10, gap: 6, justifyContent: 'center' }}>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                        <View style={{width: 28, height: 28, borderRadius: 14, borderWidth: 1, borderColor: 'rgba(16, 185, 129, 0.3)', justifyContent: 'center', alignItems: 'center'}}>
+                          <Ionicons name="settings-sharp" size={16} color={colors.success} />
+                        </View>
+                        <View style={{flexDirection: 'row', alignItems: 'center', gap: 4, borderWidth: 1, borderRadius: 5, paddingHorizontal: 6, paddingVertical: 2, backgroundColor: 'rgba(16, 185, 129, 0.15)', borderColor: colors.success}}>
+                          <View style={{ width: 4, height: 4, borderRadius: 2, backgroundColor: colors.success }} />
+                          <Text style={{fontSize: 7, fontWeight: '700', letterSpacing: 1, color: colors.success}}>ACTIVE</Text>
+                        </View>
+                      </View>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                        <Text style={{color: 'rgba(103, 232, 249, 0.8)', fontSize: 9, fontWeight: '700', letterSpacing: 2, textTransform: 'uppercase'}}>MODE</Text>
+                        <Text style={{color: '#ffffff', fontSize: 12, fontWeight: '700', flexShrink: 1, textAlign: 'right'}} numberOfLines={1}>{missionMode}</Text>
+                      </View>
+                    </View>
+                  </View>
+                </View>
+
+                <Text style={styles.confirmBodyText}>
+                  {`Are you sure you want to ${confirmAction?.action?.toLowerCase()}?`}
+                </Text>
+              </View>
+
+              {/* Divider */}
+              <View style={styles.confirmDivider} />
+
+              {/* Buttons */}
               <View style={styles.confirmButtons}>
                 <TouchableOpacity
-                  style={[styles.confirmButton, styles.cancelBtn]}
+                  style={styles.confirmCancelBtn}
                   onPress={() => setConfirmAction(null)}
+                  activeOpacity={0.75}
                 >
-                  <Text style={styles.confirmButtonText}>Cancel</Text>
+                  <Text style={styles.confirmCancelText}>Cancel</Text>
                 </TouchableOpacity>
 
                 <TouchableOpacity
-                  style={[styles.confirmButton, styles.confirmBtn]}
+                  style={[
+                    styles.confirmActionBtn,
+                    confirmAction?.action?.toLowerCase().includes('stop') && styles.confirmActionBtnDanger,
+                  ]}
                   onPress={() => {
                     try {
                       if (confirmAction && confirmAction.onConfirm) confirmAction.onConfirm();
@@ -570,10 +700,14 @@ const MissionControlCard: React.FC<MissionControlCardProps> = ({
                       setConfirmAction(null);
                     }
                   }}
+                  activeOpacity={0.8}
                 >
-                  <Text style={[styles.confirmButtonText, { fontWeight: '700' }]}>Confirm</Text>
+                  <Text style={styles.confirmActionText}>
+                    {confirmAction?.action?.toLowerCase().includes('stop') ? 'STOP MISSION' : 'CONFIRM'}
+                  </Text>
                 </TouchableOpacity>
               </View>
+
             </View>
           </View>
         </Modal>
@@ -592,13 +726,13 @@ const MissionControlCard: React.FC<MissionControlCardProps> = ({
 
 const styles = StyleSheet.create({
   container: {
-    backgroundColor: colors.secondary,
+    backgroundColor: colors.panelBg,
     borderRadius: 12,
     borderWidth: 1,
     borderColor: colors.border,
   },
   cardPadding: {
-    padding: 12,
+    padding: 10,
   },
   emergencyButton: {
     backgroundColor: '#DC2626',
@@ -625,7 +759,7 @@ const styles = StyleSheet.create({
     marginTop: 8,
   },
   buttonsContainer: {
-    gap: 12,
+    gap: 10,
   },
   skipRow: {
     flexDirection: 'row',
@@ -637,31 +771,44 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     alignItems: 'center',
     justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: colors.border,
   },
   startButton: {
     backgroundColor: '#10B981',
+    borderColor: '#10B981',
   },
   stopButton: {
     backgroundColor: colors.danger,
+    borderColor: colors.danger,
   },
   pauseButton: {
     backgroundColor: '#F97316',
+    borderColor: '#F97316',
   },
   resumeButton: {
     backgroundColor: colors.accent,
+    borderColor: colors.accent,
   },
   nextButton: {
     backgroundColor: '#7F00FF',
+    borderColor: '#7F00FF',
+  },
+  nextButtonWaiting: {
+    backgroundColor: '#F59E0B',
+    borderWidth: 2,
+    borderColor: '#FCD34D',
   },
   skipButton: {
     backgroundColor: '#0891B2',
+    borderColor: '#0891B2',
     position: 'relative',
   },
   bulkToggle: {
     width: 48,
     height: 48,
     borderRadius: 8,
-    backgroundColor: '#0f172a',
+    backgroundColor: colors.cardBg,
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 1,
@@ -688,15 +835,15 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#0f172a',
+    backgroundColor: colors.cardBg,
     borderWidth: 1,
     borderColor: colors.border,
   },
   buttonText: {
     color: '#FFFFFF',
-    fontSize: 20,
-    fontWeight: '900',
-    letterSpacing: 0.5,
+    fontSize: 21,
+    fontWeight: '700',
+    letterSpacing: 2,
   },
   buttonDisabled: {
     opacity: 0.3,
@@ -705,30 +852,34 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     borderRadius: 10,
     overflow: 'hidden',
-    marginTop: 8,
+    marginTop: 0,
     gap: 8,
   },
   modeButton: {
     flex: 1,
     paddingVertical: 17,
-    backgroundColor: '#475569',
+    backgroundColor: colors.cardBg,
     alignItems: 'center',
     borderRadius: 10,
+    borderWidth: 1,
+    borderColor: colors.border,
   },
   modeButtonActive: {
     backgroundColor: '#10B981',
+    borderColor: '#10B981',
   },
   modeButtonFaded: {
     opacity: 0.4,
-    backgroundColor: '#2d3748',
+    backgroundColor: colors.cardBg,
   },
   modeButtonManual: {
-    backgroundColor: '#475569',
+    backgroundColor: colors.cardBg,
   },
   modeText: {
     color: colors.textSecondary,
-    fontSize: 13,
-    fontWeight: '600',
+    fontSize: 16,
+    fontWeight: '700',
+    letterSpacing: 2,
   },
   modeTextActive: {
     color: '#FFFFFF',
@@ -741,8 +892,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   modalContent: {
-    backgroundColor: colors.secondary,
-    borderRadius: 12,
+    backgroundColor: colors.panelBg,
+    borderRadius: 14,
     padding: 24,
     maxWidth: 300,
     width: '80%',
@@ -751,8 +902,8 @@ const styles = StyleSheet.create({
     borderColor: colors.border,
   },
   bulkModalCard: {
-    backgroundColor: colors.secondary,
-    borderRadius: 12,
+    backgroundColor: colors.panelBg,
+    borderRadius: 14,
     padding: 18,
     maxWidth: 420,
     width: '86%',
@@ -762,19 +913,22 @@ const styles = StyleSheet.create({
   },
   inputLabel: {
     color: colors.textSecondary,
-    fontSize: 12,
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 1.5,
+    textTransform: 'uppercase',
     marginBottom: 6,
   },
   inputField: {
-    backgroundColor: '#fff',
+    backgroundColor: colors.secondary,
     padding: 10,
-    borderRadius: 8,
+    borderRadius: 10,
     borderWidth: 1,
     borderColor: colors.border,
-    color: '#000',
+    color: '#ffffff',
   },
   errorText: {
-    color: '#b91c1c',
+    color: colors.danger,
     marginTop: 8,
     fontSize: 13,
     textAlign: 'center',
@@ -794,7 +948,7 @@ const styles = StyleSheet.create({
   },
   confirmOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.6)',
+    backgroundColor: 'rgba(0,0,0,0.7)',
     justifyContent: 'center',
     alignItems: 'center',
     padding: 20,
@@ -802,52 +956,129 @@ const styles = StyleSheet.create({
   confirmCard: {
     width: '100%',
     maxWidth: 420,
-    backgroundColor: colors.secondary,
-    borderRadius: 12,
+    backgroundColor: colors.panelBg,
+    borderRadius: 14,
     padding: 20,
     borderWidth: 1,
     borderColor: colors.border,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.25,
-    shadowRadius: 12,
-    elevation: 12,
+    gap: 14,
   },
-  confirmTitle: {
-    fontSize: 18,
+  // Header
+  confirmHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  confirmHeaderLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  confirmIconWrap: {
+    width: 32,
+    height: 32,
+    borderRadius: 10,
+    backgroundColor: 'rgba(59,130,246,0.15)',
+    borderWidth: 1,
+    borderColor: 'rgba(59,130,246,0.3)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  confirmHeaderTitle: {
+    color: colors.accent,
+    fontSize: 13,
     fontWeight: '700',
-    color: colors.text,
-    marginBottom: 8,
-    textAlign: 'center',
+    letterSpacing: 2,
   },
-  confirmText: {
-    fontSize: 14,
+  confirmBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    backgroundColor: 'rgba(245,158,11,0.1)',
+    borderWidth: 1,
+    borderColor: 'rgba(245,158,11,0.3)',
+    borderRadius: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+  },
+  confirmBadgeDanger: {
+    backgroundColor: 'rgba(239,68,68,0.1)',
+    borderColor: 'rgba(239,68,68,0.3)',
+  },
+  confirmBadgeDot: {
+    width: 5,
+    height: 5,
+    borderRadius: 3,
+  },
+  confirmBadgeText: {
+    fontSize: 8,
+    fontWeight: '700',
+    letterSpacing: 1.5,
+  },
+  confirmDivider: {
+    height: 1,
+    backgroundColor: colors.border,
+  },
+  // Body
+  confirmBody: {
+    alignItems: 'center',
+    gap: 12,
+    paddingVertical: 4,
+  },
+  confirmBigIcon: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    borderWidth: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  confirmBodyText: {
     color: colors.textSecondary,
+    fontSize: 13,
     textAlign: 'center',
-    marginBottom: 18,
+    lineHeight: 20,
   },
+  // Buttons
   confirmButtons: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
-    gap: 12,
+    gap: 10,
   },
-  confirmButton: {
+  confirmCancelBtn: {
     flex: 1,
     paddingVertical: 12,
     borderRadius: 10,
     alignItems: 'center',
-  },
-  cancelBtn: {
-    backgroundColor: colors.primary,
+    justifyContent: 'center',
+    backgroundColor: colors.cardBg,
     borderWidth: 1,
     borderColor: colors.border,
   },
-  confirmBtn: {
-    backgroundColor: colors.greenBtn || '#10B981',
+  confirmCancelText: {
+    color: 'rgba(255,255,255,0.5)',
+    fontSize: 13,
+    fontWeight: '700',
+    letterSpacing: 0.5,
   },
-  confirmButtonText: {
-    color: '#fff',
-    fontSize: 20,
+  confirmActionBtn: {
+    flex: 2,
+    paddingVertical: 12,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.success,
+    borderWidth: 1,
+    borderColor: 'rgba(16,185,129,0.5)',
+  },
+  confirmActionBtnDanger: {
+    backgroundColor: colors.danger,
+    borderColor: 'rgba(239,68,68,0.5)',
+  },
+  confirmActionText: {
+    color: '#ffffff',
+    fontSize: 13,
+    fontWeight: '800',
+    letterSpacing: 2,
   },
 });
 
