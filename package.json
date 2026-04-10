@@ -17,6 +17,7 @@
     "@react-navigation/bottom-tabs": "^7.8.8",
     "@react-navigation/native": "^7.1.22",
     "axios": "^1.13.2",
+    "dxf-parser": "^1.1.2",
     "exceljs": "^4.4.0",
     "expo": "~54.0.30",
     "expo-dev-client": "~6.0.20",

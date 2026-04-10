@@ -11,6 +11,7 @@ interface DrawingToolsPanelProps {
   onShowTextTool: () => void;
   onShowCADDrawing: () => void;
   onShowManualConnection: () => void;
+  onShowReverseTool: () => void;
   isCollapsed?: boolean;
   onToggleCollapse?: () => void;
 }
@@ -23,6 +24,7 @@ export const DrawingToolsPanel: React.FC<DrawingToolsPanelProps> = ({
   onShowTextTool,
   onShowCADDrawing,
   onShowManualConnection,
+  onShowReverseTool,
   isCollapsed = false,
   onToggleCollapse,
 }) => {
@@ -44,6 +46,7 @@ export const DrawingToolsPanel: React.FC<DrawingToolsPanelProps> = ({
     { name: 'text', mdiIcon: 'text-box-edit-outline', title: 'Text', color: colors.accent },
     { name: 'measure', mdiIcon: 'ruler', title: 'Measure', color: colors.accent },
     { name: 'manual-connection', mdiIcon: 'vector-polyline-edit', title: 'Manual\nConnection', color: colors.orangeBtn },
+    { name: 'reverse', mdiIcon: 'swap-vertical', title: 'Reverse', color: colors.accent },
   ];
 
   type GeneratorTool = {
@@ -64,6 +67,7 @@ export const DrawingToolsPanel: React.FC<DrawingToolsPanelProps> = ({
     if (toolName === 'text') { onShowTextTool(); return; }
     if (toolName === 'cad-draw') { onShowCADDrawing(); return; }
     if (toolName === 'manual-connection') { onShowManualConnection(); return; }
+    if (toolName === 'reverse') { onShowReverseTool(); return; }
     onToolSelect(activeDrawingTool === toolName ? null : toolName);
   };
 

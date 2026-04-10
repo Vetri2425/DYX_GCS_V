@@ -1,4 +1,5 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useRef, useEffect } from 'react';
+import type { ParamGetResponse } from '../../../types/params';
 import {
   View,
   Text,
@@ -13,9 +14,11 @@ import { colors } from '../../../theme/colors';
 import { useRover } from '../../../context/RoverContext';
 import { TUNED_PARAMS } from '../../../types/quicktune';
 import { quickTuneService } from '../../../services/quickTuneService';
+import { qtLog } from '../../../utils/quicktuneLogger';
 
 interface Step4_TuneControlProps {
   onComplete: (snapshot: Record<string, number>) => void;
+  onBack: () => void;
   onAbort: () => void;
 }
 
@@ -26,55 +29,132 @@ interface Step4_TuneControlProps {
  * via quickTuneService.sendAuxFunction('start') to start the tune,
  * and displays an info card with the param list.
  */
-export default function Step4_TuneControl({ onComplete, onAbort }: Step4_TuneControlProps) {
+export default function Step4_TuneControl({ onComplete, onBack, onAbort }: Step4_TuneControlProps) {
   const { services, connectionState } = useRover();
   const [isStarting, setIsStarting] = useState(false);
   const [hasStarted, setHasStarted] = useState(false);
+  const [paramValues, setParamValues] = useState<Record<string, number | null>>({});
+  const [isLoadingParams, setIsLoadingParams] = useState(true);
+
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
+
+  // Fetch current param values on mount so the table shows real data immediately
+  useEffect(() => {
+    if (connectionState !== 'connected') {
+      setIsLoadingParams(false);
+      return;
+    }
+
+    const fetchParams = async () => {
+      setIsLoadingParams(true);
+      qtLog.info('Step4', `Fetching ${TUNED_PARAMS.length} tuned params on mount`);
+      const values: Record<string, number | null> = {};
+      const promises = TUNED_PARAMS.map(async (name) => {
+        try {
+          const result: ParamGetResponse = await services.getParam(name);
+          values[name] = result.param?.value ?? null;
+        } catch {
+          qtLog.warn('Step4', `Failed to fetch ${name}`);
+          values[name] = null;
+        }
+      });
+      await Promise.all(promises);
+      if (!mountedRef.current) return;
+      qtLog.info('Step4', 'Params loaded for display', values);
+      setParamValues(values);
+      setIsLoadingParams(false);
+    };
+
+    fetchParams();
+  }, [connectionState, services]);
 
   const handleStartTune = useCallback(async () => {
     if (connectionState !== 'connected') {
-      Alert.alert(
-        'Not Connected',
-        'Please connect to the rover before starting the tune process.',
-      );
+      Alert.alert('Not Connected', 'Please connect to the rover before starting the tune process.');
       return;
     }
 
     setIsStarting(true);
 
     try {
-      // Snapshot current TUNED_PARAMS values from rover
-      const snapshot: Record<string, number> = {};
-      const fetchPromises = TUNED_PARAMS.map(async (paramName) => {
-        try {
-          const result = await services.getParam(paramName);
-          const paramValue = (result as any).param?.value;
-          snapshot[paramName] = paramValue ?? 0;
-        } catch {
-          // If param fetch fails, use 0 as fallback
-          snapshot[paramName] = 0;
+      // Pre-check: get quicktune status to validate readiness
+      try {
+        qtLog.api('Step4', 'GET', '/api/quicktune/status');
+        const status = await quickTuneService.getStatus();
+        qtLog.apiResult('Step4', '/api/quicktune/status', status);
+        if (!mountedRef.current) return;
+        if (status.reboot_required) {
+          qtLog.warn('Step4', 'Blocked — reboot required', status);
+          Alert.alert('Reboot Required', 'The flight controller needs a reboot before tuning can start.');
+          setIsStarting(false);
+          return;
         }
-      });
+        if (status.SCR_ENABLE !== 1) {
+          qtLog.warn('Step4', 'Blocked — SCR_ENABLE != 1', { SCR_ENABLE: status.SCR_ENABLE });
+          Alert.alert('Scripting Disabled', 'SCR_ENABLE must be set to 1. Go back to Step 1 to fix this.');
+          setIsStarting(false);
+          return;
+        }
+        if (status.RTUN_ENABLE !== 1) {
+          qtLog.warn('Step4', 'Blocked — RTUN_ENABLE != 1', { RTUN_ENABLE: status.RTUN_ENABLE });
+          Alert.alert('QuickTune Disabled', 'RTUN_ENABLE must be set to 1. Go back to Step 1 to fix this.');
+          setIsStarting(false);
+          return;
+        }
+        qtLog.info('Step4', 'Pre-check passed', { SCR_ENABLE: status.SCR_ENABLE, RTUN_ENABLE: status.RTUN_ENABLE, mode: status.current_mode });
+      } catch (err) {
+        if (!mountedRef.current) return;
+        qtLog.warn('Step4', 'Status pre-check failed — proceeding with caution', err);
+        Alert.alert(
+          'Pre-check Warning',
+          'Could not verify vehicle readiness. Proceeding anyway — tuning will fail if the vehicle is not in the correct state.',
+          [{ text: 'Continue' }],
+        );
+      }
 
-      await Promise.all(fetchPromises);
+      // Build snapshot from fresh per-param reads right before start
+      qtLog.info('Step4', `Snapshotting ${TUNED_PARAMS.length} tuned params before start (fresh per-param)`);
+      const snapshot: Record<string, number> = {};
+      await Promise.all(
+        TUNED_PARAMS.map(async (name) => {
+          try {
+            const result: ParamGetResponse = await services.getParam(name);
+            snapshot[name] = result.param?.value ?? (paramValues[name] ?? 0);
+          } catch {
+            qtLog.warn('Step4', `Failed to fetch ${name} for start snapshot - using displayed fallback`);
+            snapshot[name] = paramValues[name] ?? 0;
+          }
+        })
+      );
+      if (!mountedRef.current) return;
+      qtLog.info('Step4', 'Param snapshot complete', snapshot);
+      setParamValues((prev) => ({ ...prev, ...snapshot }));
 
-      // Send DO_AUX_FUNCTION(300, pos=1) via quickTuneService
-      // This triggers the Lua script to start the tuning process
+      if (!mountedRef.current) return;
+
+      // Send DO_AUX_FUNCTION(300, pos=1) to start tuning
+      qtLog.api('Step4', 'POST', '/api/quicktune/aux_function', { action: 'start' });
       await quickTuneService.sendAuxFunction('start');
+      qtLog.info('Step4', 'sendAuxFunction(start) succeeded — tuning initiated');
+
+      if (!mountedRef.current) return;
 
       setHasStarted(true);
       onComplete(snapshot);
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Unknown error occurred';
-      Alert.alert(
-        'Failed to Start Tune',
-        `Could not initiate tuning: ${message}`,
-        [{ text: 'OK' }],
-      );
+      if (!mountedRef.current) return;
+      const backendMsg = (error as { response?: { data?: { message?: string } } })?.response?.data?.message;
+      const message = backendMsg || (error instanceof Error ? error.message : 'Unknown error occurred');
+      qtLog.error('Step4', 'Failed to start tune', { message, error });
+      Alert.alert('Failed to Start Tune', message, [{ text: 'OK' }]);
     } finally {
-      setIsStarting(false);
+      if (mountedRef.current) setIsStarting(false);
     }
-  }, [connectionState, services, onComplete]);
+  }, [connectionState, services, onComplete, paramValues]);
 
   const handleAbort = useCallback(() => {
     Alert.alert(
@@ -93,6 +173,21 @@ export default function Step4_TuneControl({ onComplete, onAbort }: Step4_TuneCon
       ],
     );
   }, [onAbort]);
+
+  const handleBack = useCallback(() => {
+    if (hasStarted) {
+      Alert.alert(
+        'Go Back?',
+        'Tuning has already started. Going back will abort the current tune.',
+        [
+          { text: 'Stay', style: 'cancel' },
+          { text: 'Go Back', style: 'destructive', onPress: onBack },
+        ],
+      );
+    } else {
+      onBack();
+    }
+  }, [hasStarted, onBack]);
 
   return (
     <View style={styles.container}>
@@ -135,37 +230,52 @@ export default function Step4_TuneControl({ onComplete, onAbort }: Step4_TuneCon
           </View>
 
           <View style={styles.paramList}>
-            {TUNED_PARAMS.map((param, index) => (
-              <View
-                key={param}
-                style={[
-                  styles.paramItem,
-                  index === TUNED_PARAMS.length - 1 && styles.paramItemLast,
-                ]}
-              >
-                <View style={styles.paramNumberBadge}>
-                  <Text style={styles.paramNumberText}>{index + 1}</Text>
+            {TUNED_PARAMS.map((param, index) => {
+              const val = paramValues[param];
+              return (
+                <View
+                  key={param}
+                  style={[
+                    styles.paramItem,
+                    index === TUNED_PARAMS.length - 1 && styles.paramItemLast,
+                  ]}
+                >
+                  <View style={styles.paramNumberBadge}>
+                    <Text style={styles.paramNumberText}>{index + 1}</Text>
+                  </View>
+                  <View style={styles.paramInfo}>
+                    <Text style={styles.paramName}>{param}</Text>
+                  </View>
+                  <View style={styles.paramValueWrap}>
+                    {isLoadingParams ? (
+                      <ActivityIndicator size="small" color={colors.accent} />
+                    ) : val !== null && val !== undefined ? (
+                      <Text style={styles.paramValue}>{String(val)}</Text>
+                    ) : (
+                      <Text style={styles.paramValueError}>—</Text>
+                    )}
+                  </View>
                 </View>
-                <View style={styles.paramInfo}>
-                  <Text style={styles.paramName}>{param}</Text>
-                  <Text style={styles.paramStatus}>
-                    {hasStarted ? 'Will be tuned' : 'Pending'}
-                  </Text>
-                </View>
-                {hasStarted && (
-                  <ActivityIndicator size="small" color={colors.accent} />
-                )}
-              </View>
-            ))}
+              );
+            })}
           </View>
         </View>
 
-        {/* Spacer for scroll */}
-        <View style={{ height: 20 }} />
+        <View style={styles.scrollSpacer} />
       </ScrollView>
 
       {/* ── ACTION BAR ── */}
       <View style={styles.actionBar}>
+        <TouchableOpacity
+          style={styles.backButton}
+          onPress={handleBack}
+          accessibilityRole="button"
+          accessibilityLabel="Go back to previous step"
+        >
+          <MaterialCommunityIcons name="arrow-left" size={18} color={colors.textSecondary} />
+          <Text style={styles.backButtonText}>Back</Text>
+        </TouchableOpacity>
+
         {!hasStarted ? (
           <TouchableOpacity
             style={[
@@ -174,7 +284,9 @@ export default function Step4_TuneControl({ onComplete, onAbort }: Step4_TuneCon
             ]}
             onPress={handleStartTune}
             disabled={isStarting || connectionState !== 'connected'}
-          >
+            accessibilityRole="button"
+            accessibilityLabel="Start tuning process"
+            accessibilityState={{ disabled: isStarting || connectionState !== 'connected' }}          >
             {isStarting ? (
               <>
                 <ActivityIndicator size="small" color="#fff" />
@@ -191,6 +303,8 @@ export default function Step4_TuneControl({ onComplete, onAbort }: Step4_TuneCon
           <TouchableOpacity
             style={styles.abortButton}
             onPress={handleAbort}
+            accessibilityRole="button"
+            accessibilityLabel="Abort tuning process"
           >
             <MaterialCommunityIcons name="stop-circle-outline" size={22} color={colors.danger} />
             <Text style={styles.abortButtonText}>Abort Tuning</Text>
@@ -342,14 +456,24 @@ const styles = StyleSheet.create({
   },
   paramName: {
     color: colors.textPrimary,
-    fontSize: 13,
+    fontSize: 12,
     fontWeight: '600',
     fontFamily: 'monospace',
   },
-  paramStatus: {
-    color: colors.textMuted,
+  paramValueWrap: {
+    alignItems: 'flex-end',
+    justifyContent: 'center',
+    flexShrink: 0,
+  },
+  paramValue: {
+    color: colors.accentLight,
     fontSize: 11,
-    fontWeight: '500',
+    fontWeight: '600',
+    fontFamily: 'monospace',
+  },
+  paramValueError: {
+    color: colors.textMuted,
+    fontSize: 12,
   },
 
   // ── ACTION BAR ──
@@ -359,6 +483,23 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: colors.border,
     backgroundColor: colors.panelBg,
+    gap: 10,
+  },
+  backButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    backgroundColor: colors.cardBg,
+    borderRadius: 10,
+    paddingVertical: 10,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  backButtonText: {
+    color: colors.textSecondary,
+    fontSize: 14,
+    fontWeight: '600',
   },
   startButton: {
     flexDirection: 'row',
@@ -398,4 +539,5 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '700',
   },
+  scrollSpacer: { height: 20 },
 });

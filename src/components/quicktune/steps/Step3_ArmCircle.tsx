@@ -1,48 +1,80 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, ActivityIndicator } from 'react-native';
 import { colors } from '../../../theme/colors';
 import { useRover } from '../../../context/RoverContext';
+import { MIN_CIRCLE_SPEED_MS } from '../../../constants/quicktune';
+import { qtLog } from '../../../utils/quicktuneLogger';
 
 interface Step3_ArmCircleProps {
   onNext: () => void;
+  onBack: () => void;
   onAbort: () => void;
 }
 
-export const Step3_ArmCircle: React.FC<Step3_ArmCircleProps> = ({ onNext, onAbort }) => {
+export const Step3_ArmCircle: React.FC<Step3_ArmCircleProps> = ({ onNext, onBack, onAbort }) => {
   const { telemetry, services } = useRover();
   const [arming, setArming] = useState(false);
   const [settingMode, setSettingMode] = useState(false);
 
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
+
   const isArmed = telemetry.state.armed;
-  const isCircleMode = telemetry.state.mode === 'CIRCLE';
+  const rawMode = (telemetry.state.mode || 'UNKNOWN').trim().toUpperCase();
+  const normalizedMode = (() => {
+    if (rawMode === 'CIRCLE') return 'CIRCLE';
+    const cModeMatch = rawMode.match(/^CMODE\s*\(?\s*(\d+)\s*\)?$/);
+    if (cModeMatch && parseInt(cModeMatch[1], 10) === 9) return 'CIRCLE';
+    return rawMode;
+  })();
+  const isCircleMode = normalizedMode === 'CIRCLE';
   const groundSpeed = telemetry.global.vel || 0;
-  const isCircling = isArmed && isCircleMode && groundSpeed > 0.1;
+  const isCircling = isArmed && isCircleMode && groundSpeed > MIN_CIRCLE_SPEED_MS;
 
   const canProceed = isCircling;
 
-  const handleArm = async () => {
+  // Log gate state on every telemetry tick so we can see exactly what's blocking
+  qtLog.gate('Step3', 'canProceed', canProceed, {
+    isArmed,
+    mode: telemetry.state.mode,
+    normalizedMode,
+    isCircleMode,
+    groundSpeed,
+    minRequired: MIN_CIRCLE_SPEED_MS,
+  });
+
+  const handleArm = useCallback(async () => {
     if (arming || isArmed) return;
     setArming(true);
+    qtLog.api('Step3', 'POST', '/api/arm');
     try {
       await services.armVehicle();
+      qtLog.info('Step3', 'Arm command sent successfully');
     } catch (error) {
+      qtLog.error('Step3', 'Failed to arm rover', error);
       console.error('[Step3_ArmCircle] Failed to arm rover:', error);
     } finally {
-      setArming(false);
+      if (mountedRef.current) setArming(false);
     }
-  };
+  }, [arming, isArmed, services]);
 
-  const handleSetCircleMode = async () => {
+  const handleSetCircleMode = useCallback(async () => {
     if (settingMode || isCircleMode) return;
     setSettingMode(true);
+    qtLog.api('Step3', 'POST', '/api/mission/mode CIRCLE');
     try {
       await services.setMode('CIRCLE');
+      qtLog.info('Step3', 'CIRCLE mode command sent successfully');
     } catch (error) {
+      qtLog.error('Step3', 'Failed to set CIRCLE mode', error);
       console.error('[Step3_ArmCircle] Failed to set CIRCLE mode:', error);
     } finally {
-      setSettingMode(false);
+      if (mountedRef.current) setSettingMode(false);
     }
-  };
+  }, [settingMode, isCircleMode, services]);
 
   return (
     <View style={styles.container}>
@@ -66,6 +98,9 @@ export const Step3_ArmCircle: React.FC<Step3_ArmCircleProps> = ({ onNext, onAbor
             style={[styles.actionButton, arming && styles.actionButtonDisabled]}
             onPress={handleArm}
             disabled={arming}
+            accessibilityRole="button"
+            accessibilityLabel="Arm rover"
+            accessibilityState={{ disabled: arming }}
           >
             {arming ? (
               <ActivityIndicator color={colors.textPrimary} />
@@ -97,6 +132,9 @@ export const Step3_ArmCircle: React.FC<Step3_ArmCircleProps> = ({ onNext, onAbor
             ]}
             onPress={handleSetCircleMode}
             disabled={!isArmed || settingMode}
+            accessibilityRole="button"
+            accessibilityLabel="Set CIRCLE mode"
+            accessibilityState={{ disabled: !isArmed || settingMode }}
           >
             {settingMode ? (
               <ActivityIndicator color={colors.textPrimary} />
@@ -140,14 +178,28 @@ export const Step3_ArmCircle: React.FC<Step3_ArmCircleProps> = ({ onNext, onAbor
 
         {!isCircling && isCircleMode && (
           <Text style={styles.hintText}>
-            Rover should be moving. Speed must exceed 0.1 m/s to proceed.
+            Rover should be moving. Speed must exceed {MIN_CIRCLE_SPEED_MS} m/s to proceed.
           </Text>
         )}
       </View>
 
       {/* Action Buttons */}
       <View style={styles.buttonRow}>
-        <TouchableOpacity style={styles.abortButton} onPress={onAbort}>
+        <TouchableOpacity
+          style={styles.backButton}
+          onPress={onBack}
+          accessibilityRole="button"
+          accessibilityLabel="Go back to previous step"
+        >
+          <Text style={styles.backButtonText}>Back</Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={styles.abortButton}
+          onPress={onAbort}
+          accessibilityRole="button"
+          accessibilityLabel="Abort tuning wizard"
+        >
           <Text style={styles.abortButtonText}>Abort</Text>
         </TouchableOpacity>
 
@@ -155,6 +207,9 @@ export const Step3_ArmCircle: React.FC<Step3_ArmCircleProps> = ({ onNext, onAbor
           style={[styles.nextButton, !canProceed && styles.nextButtonDisabled]}
           onPress={onNext}
           disabled={!canProceed}
+          accessibilityRole="button"
+          accessibilityLabel="Proceed to next step"
+          accessibilityState={{ disabled: !canProceed }}
         >
           <Text style={[styles.nextButtonText, !canProceed && styles.nextButtonTextDisabled]}>
             Next
@@ -279,6 +334,20 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     gap: 12,
     marginTop: 20,
+  },
+  backButton: {
+    flex: 1,
+    backgroundColor: colors.cardBg,
+    borderRadius: 8,
+    paddingVertical: 14,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  backButtonText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: colors.textSecondary,
   },
   abortButton: {
     flex: 1,

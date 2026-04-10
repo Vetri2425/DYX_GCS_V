@@ -1,5 +1,5 @@
 import React, { useCallback, useMemo, useState } from 'react';
-import { View, Text, StyleSheet } from 'react-native';
+import { View, Text, StyleSheet, Alert } from 'react-native';
 import Step1ParamCheck from './steps/Step1_ParamCheck';
 import Step2_ScriptCheck from './steps/Step2_ScriptCheck';
 import { Step3_ArmCircle } from './steps/Step3_ArmCircle';
@@ -7,7 +7,9 @@ import Step4_TuneControl from './steps/Step4_TuneControl';
 import Step5_Monitor from './steps/Step5_Monitor';
 import Step6_Results from './steps/Step6_Results';
 import { quickTuneService } from '../../services/quickTuneService';
+import { QUICKTUNE_AUX_CHANNEL } from '../../constants/quicktune';
 import { useRover } from '../../context/RoverContext';
+import { qtLog } from '../../utils/quicktuneLogger';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -45,26 +47,90 @@ export default function QuickTuneWizard({ onClose }: QuickTuneWizardProps) {
   // --- callbacks -----------------------------------------------------------
 
   const goNext = useCallback(() => {
-    setCurrentStep(prev => (prev < 6 ? ((prev + 1) as WizardStep) : prev));
+    setCurrentStep(prev => {
+      const next = prev < 6 ? ((prev + 1) as WizardStep) : prev;
+      qtLog.step(prev, next);
+      return next;
+    });
   }, []);
 
-  /** Abort: DO_AUX_FUNCTION(300, 0) → HOLD mode → close wizard */
+  const goBack = useCallback(() => {
+    setCurrentStep(prev => {
+      const next = prev > 1 ? ((prev - 1) as WizardStep) : prev;
+      if (next !== prev) qtLog.step(prev, next);
+      return next;
+    });
+  }, []);
+
+  /** Abort: DO_AUX_FUNCTION(300, 0) → HOLD mode → close wizard.
+   *
+   * Both commands are safety-critical. If the stop command fails the vehicle
+   * may still be executing the tuning script. We surface that to the user
+   * instead of silently swallowing the error and closing.
+   */
   const onAbort = useCallback(async () => {
+    qtLog.warn('Wizard', 'Abort triggered', { currentStep });
+    let stopFailed = false;
+    let modeFailed = false;
+
     try {
-      await quickTuneService.sendAuxFunction('stop', 300, 0);
-    } catch {
-      // best-effort — still proceed to close
+      qtLog.api('Wizard', 'POST', 'aux_function stop');
+      await quickTuneService.sendAuxFunction('stop', QUICKTUNE_AUX_CHANNEL, 0);
+      qtLog.info('Wizard', 'Abort stop command sent');
+    } catch (err) {
+      stopFailed = true;
+      qtLog.error('Wizard', 'Abort stop command failed', err);
+      console.error('[QuickTuneWizard] Abort stop command failed:', err);
     }
+
     try {
+      qtLog.api('Wizard', 'POST', 'setMode HOLD');
       await services.setMode('HOLD');
-    } catch {
-      // best-effort
+      qtLog.info('Wizard', 'Mode set to HOLD');
+    } catch (err) {
+      modeFailed = true;
+      qtLog.error('Wizard', 'Abort setMode(HOLD) failed', err);
+      console.error('[QuickTuneWizard] Abort setMode(HOLD) failed:', err);
     }
+
+    // If the stop command failed, warn the user — the vehicle may still be
+    // running the tuning script. Give them the choice to close anyway or stay.
+    if (stopFailed) {
+      Alert.alert(
+        'Abort Command Failed',
+        'The stop command could not be sent to the vehicle. The tuning script may still be running.\n\n' +
+        'Ensure the vehicle is safe before closing.',
+        [
+          {
+            text: 'Stay in Wizard',
+            style: 'cancel',
+          },
+          {
+            text: 'Close Anyway',
+            style: 'destructive',
+            onPress: onClose,
+          },
+        ],
+      );
+      return;
+    }
+
+    // Stop succeeded but HOLD mode failed — less critical, just warn and close.
+    if (modeFailed) {
+      Alert.alert(
+        'Mode Change Failed',
+        'Tuning was stopped but the vehicle could not be set to HOLD mode. Check the vehicle state.',
+        [{ text: 'OK', onPress: onClose }],
+      );
+      return;
+    }
+
     onClose();
   }, [services, onClose]);
 
   /** Step 4 captures the tuned-parameter snapshot and passes it downstream */
   const onTuneComplete = useCallback((snapshot: Record<string, number>) => {
+    qtLog.info('Wizard', 'Step4 complete — param snapshot captured', snapshot);
     setParamSnapshot(snapshot);
     goNext();
   }, [goNext]);
@@ -80,11 +146,11 @@ export default function QuickTuneWizard({ onClose }: QuickTuneWizardProps) {
       case 1:
         return <Step1ParamCheck onNext={goNext} onBack={onClose} />;
       case 2:
-        return <Step2_ScriptCheck onNext={goNext} onBack={onClose} />;
+        return <Step2_ScriptCheck onNext={goNext} onBack={goBack} />;
       case 3:
-        return <Step3_ArmCircle onNext={goNext} onAbort={onAbort} />;
+        return <Step3_ArmCircle onNext={goNext} onBack={goBack} onAbort={onAbort} />;
       case 4:
-        return <Step4_TuneControl onComplete={onTuneComplete} onAbort={onAbort} />;
+        return <Step4_TuneControl onComplete={onTuneComplete} onBack={goBack} onAbort={onAbort} />;
       case 5:
         return <Step5_Monitor onComplete={onMonitorComplete} onAbort={onAbort} />;
       case 6:
@@ -97,7 +163,7 @@ export default function QuickTuneWizard({ onClose }: QuickTuneWizardProps) {
       default:
         return null;
     }
-  }, [currentStep, goNext, onAbort, onTuneComplete, onMonitorComplete, onClose, paramSnapshot]);
+  }, [currentStep, goNext, goBack, onAbort, onTuneComplete, onMonitorComplete, onClose, paramSnapshot]);
 
   // --- layout --------------------------------------------------------------
 

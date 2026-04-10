@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useRef, useEffect } from 'react';
 import {
   View,
   Text,
@@ -13,7 +13,9 @@ import { colors } from '../../../theme/colors';
 import { useRover } from '../../../context/RoverContext';
 import { TUNED_PARAMS } from '../../../types/quicktune';
 import { quickTuneService } from '../../../services/quickTuneService';
+import { SAVE_COUNTDOWN_TICK_MS } from '../../../constants/quicktune';
 import { computeTuneResults, ParamChange } from '../../../utils/quicktuneResults';
+import { qtLog } from '../../../utils/quicktuneLogger';
 
 // Re-export for unit testing
 export { computeTuneResults } from '../../../utils/quicktuneResults';
@@ -27,10 +29,6 @@ interface Step6_ResultsProps {
   beforeParams: Record<string, number>;
   onClose: () => void;
 }
-
-// ============================================================================
-// Component
-// ============================================================================
 
 /**
  * Step6_Results — QuickTune wizard step that shows before/after parameter
@@ -46,54 +44,115 @@ export default function Step6_Results({ beforeParams, onClose }: Step6_ResultsPr
   const [hasSaved, setHasSaved] = useState(false);
   const [afterParams, setAfterParams] = useState<Record<string, number>>({});
   const [isFetching, setIsFetching] = useState(false);
+  const [saveCountdown, setSaveCountdown] = useState<number | null>(null);
+
+  // Refs to track mounted state and pending timers for cleanup on unmount
+  const mountedRef = useRef(true);
+  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      if (intervalRef.current !== null) {
+        clearInterval(intervalRef.current);
+        intervalRef.current = null;
+      }
+      if (timeoutRef.current !== null) {
+        clearTimeout(timeoutRef.current);
+        timeoutRef.current = null;
+      }
+    };
+  }, []);
 
   const fetchAfterParams = useCallback(async () => {
+    if (!mountedRef.current) return;
     setIsFetching(true);
+    qtLog.api('Step6', 'GET', '/api/params/{name} x11 (post-save fetch)');
     try {
-      const paramsResult = await services.getParams();
-      if (paramsResult.success) {
-        const snapshot: Record<string, number> = {};
-        paramsResult.params.forEach((param) => {
-          if (TUNED_PARAMS.includes(param.name)) {
-            snapshot[param.name] = param.value;
+      const snapshot: Record<string, number> = {};
+      await Promise.all(
+        TUNED_PARAMS.map(async (name) => {
+          try {
+            const result = await services.getParam(name);
+            snapshot[name] = result.param?.value ?? 0;
+          } catch {
+            qtLog.warn('Step6', `Failed to fetch ${name} post-save`);
+            snapshot[name] = 0;
           }
-        });
-        setAfterParams(snapshot);
-      }
+        })
+      );
+      if (!mountedRef.current) return;
+      qtLog.apiResult('Step6', '/api/params/{name} x11', snapshot);
+      setAfterParams(snapshot);
     } catch (error) {
+      qtLog.error('Step6', 'Failed to fetch updated params', error);
+      if (!mountedRef.current) return;
       console.error('Failed to fetch updated params:', error);
     } finally {
-      setIsFetching(false);
+      if (mountedRef.current) setIsFetching(false);
     }
   }, [services]);
 
   const handleSaveGains = useCallback(async () => {
     if (connectionState !== 'connected') {
-      Alert.alert(
-        'Not Connected',
-        'Please connect to the rover before saving gains.',
-      );
+      Alert.alert('Not Connected', 'Please connect to the rover before saving gains.');
       return;
     }
 
     setIsSaving(true);
 
     try {
-      // Send AUX function to save gains (action: 'save')
-      await quickTuneService.sendAuxFunction('save');
+      qtLog.api('Step6', 'POST', '/api/quicktune/aux_function', { action: 'save' });
+      const result = await quickTuneService.sendAuxFunction('save');
+      qtLog.apiResult('Step6', '/api/quicktune/aux_function save', result);
+      if (!mountedRef.current) return;
+
+      // Start countdown from auto_save_seconds (default 5)
+      const countdownSec = result.auto_save_seconds ?? 5;
+      setSaveCountdown(countdownSec);
+
+      // Tick down every second — store ref so unmount can clear it
+      let remaining = countdownSec;
+      intervalRef.current = setInterval(() => {
+        if (!mountedRef.current) {
+          clearInterval(intervalRef.current!);
+          intervalRef.current = null;
+          return;
+        }
+        remaining -= 1;
+        setSaveCountdown(remaining);
+        if (remaining <= 0) {
+          clearInterval(intervalRef.current!);
+          intervalRef.current = null;
+          setSaveCountdown(null);
+        }
+      }, SAVE_COUNTDOWN_TICK_MS);
+
+      // Wait for the countdown to finish before fetching params — store ref so unmount can cancel it
+      await new Promise<void>((resolve) => {
+        timeoutRef.current = setTimeout(() => {
+          timeoutRef.current = null;
+          resolve();
+        }, countdownSec * 1000);
+      });
+
+      if (!mountedRef.current) return;
 
       // Fetch updated params after save
       await fetchAfterParams();
-      setHasSaved(true);
+      if (mountedRef.current) {
+        qtLog.info('Step6', 'Gains saved and params refreshed');
+        setHasSaved(true);
+      }
     } catch (error) {
+      if (!mountedRef.current) return;
       const message = error instanceof Error ? error.message : 'Unknown error occurred';
-      Alert.alert(
-        'Failed to Save Gains',
-        `Could not save tuning gains: ${message}`,
-        [{ text: 'OK' }],
-      );
+      qtLog.error('Step6', 'Failed to save gains', { message, error });
+      Alert.alert('Failed to Save Gains', `Could not save tuning gains: ${message}`, [{ text: 'OK' }]);
     } finally {
-      setIsSaving(false);
+      if (mountedRef.current) setIsSaving(false);
     }
   }, [connectionState, fetchAfterParams]);
 
@@ -105,8 +164,8 @@ export default function Step6_Results({ beforeParams, onClose }: Step6_ResultsPr
     return colors.success;
   };
 
-  const getChangeIcon = (changePercent: number) => {
-    if (changePercent === 0) return 'minus';
+  const getChangeIcon = (changePercent: number): 'remove' | 'arrow-up' | 'arrow-down' => {
+    if (changePercent === 0) return 'remove';
     if (changePercent > 0) return 'arrow-up';
     return 'arrow-down';
   };
@@ -141,11 +200,11 @@ export default function Step6_Results({ beforeParams, onClose }: Step6_ResultsPr
           </View>
 
           {/* Table Header Row */}
-          <View style={styles.tableRow}>
-            <Text style={[styles.tableCellText, styles.tableCellParam]}>Parameter</Text>
-            <Text style={[styles.tableCellText, styles.tableCellValue]}>Before</Text>
-            <Text style={[styles.tableCellText, styles.tableCellValue]}>After</Text>
-            <Text style={[styles.tableCellText, styles.tableCellChange]}>Change</Text>
+          <View style={[styles.tableRow, styles.tableHeadRow]}>
+            <Text style={[styles.tableHeadText, styles.tableCellParam]}>Parameter</Text>
+            <Text style={[styles.tableHeadText, styles.tableCellValue, styles.tableHeadValue]}>Before</Text>
+            <Text style={[styles.tableHeadText, styles.tableCellValue, styles.tableHeadValue]}>After</Text>
+            <Text style={[styles.tableHeadText, styles.tableCellChangeText]}>Change</Text>
           </View>
 
           {/* Loading State */}
@@ -170,16 +229,16 @@ export default function Step6_Results({ beforeParams, onClose }: Step6_ResultsPr
                   {change.name}
                 </Text>
                 <Text style={[styles.tableCellText, styles.tableCellValue]}>
-                  {change.before.toFixed(2)}
+                  {String(change.before)}
                 </Text>
                 <Text style={[styles.tableCellText, styles.tableCellValue]}>
-                  {hasSaved ? change.after.toFixed(2) : '—'}
+                  {hasSaved ? String(change.after) : '—'}
                 </Text>
                 <View style={styles.tableCellChange}>
                   {hasSaved ? (
                     <View style={styles.changeBadge}>
                       <Ionicons
-                        name={getChangeIcon(change.changePercent) as any}
+                        name={getChangeIcon(change.changePercent)}
                         size={14}
                         color={getChangeColor(change.changePercent)}
                       />
@@ -211,8 +270,18 @@ export default function Step6_Results({ beforeParams, onClose }: Step6_ResultsPr
         </View>
 
         {/* Spacer for scroll */}
-        <View style={{ height: 20 }} />
+        <View style={styles.scrollSpacer} />
       </ScrollView>
+
+      {/* ── SAVE COUNTDOWN BANNER ── */}
+      {saveCountdown !== null && saveCountdown > 0 && (
+        <View style={styles.countdownBanner}>
+          <ActivityIndicator size="small" color={colors.warning} />
+          <Text style={styles.countdownText}>
+            Saving PID parameters — do NOT power off ({saveCountdown}s)
+          </Text>
+        </View>
+      )}
 
       {/* ── ACTION BAR ── */}
       <View style={styles.actionBar}>
@@ -224,6 +293,9 @@ export default function Step6_Results({ beforeParams, onClose }: Step6_ResultsPr
             ]}
             onPress={handleSaveGains}
             disabled={isSaving || connectionState !== 'connected'}
+            accessibilityRole="button"
+            accessibilityLabel="Save tuning gains to vehicle"
+            accessibilityState={{ disabled: isSaving || connectionState !== 'connected' }}
           >
             {isSaving ? (
               <>
@@ -241,6 +313,8 @@ export default function Step6_Results({ beforeParams, onClose }: Step6_ResultsPr
           <TouchableOpacity
             style={styles.doneButton}
             onPress={onClose}
+            accessibilityRole="button"
+            accessibilityLabel="Close wizard"
           >
             <MaterialCommunityIcons name="check-circle" size={22} color="#fff" />
             <Text style={styles.doneButtonText}>Done</Text>
@@ -349,25 +423,50 @@ const styles = StyleSheet.create({
   tableRowLast: {
     borderBottomWidth: 0,
   },
+  tableHeadRow: {
+    paddingVertical: 8,
+    backgroundColor: colors.panelBg + '70',
+  },
   tableCellText: {
     fontSize: 12,
     fontWeight: '500',
   },
+  tableHeadText: {
+    color: colors.textMuted,
+    fontSize: 10,
+    fontWeight: '700',
+    letterSpacing: 0.3,
+  },
   tableCellParam: {
-    flex: 2,
+    flex: 1.6,
     color: colors.textPrimary,
     fontFamily: 'monospace',
     fontWeight: '600',
+    fontSize: 10,
   },
   tableCellValue: {
-    flex: 1,
+    flex: 1.8,
     color: colors.textSecondary,
     textAlign: 'right',
+    paddingRight: 10,
     fontFamily: 'monospace',
+    fontSize: 10,
+  },
+  tableHeadValue: {
+    textAlign: 'center',
+    paddingRight: 0,
   },
   tableCellChange: {
-    flex: 1.2,
+    flex: 1,
     alignItems: 'center',
+    justifyContent: 'center',
+  },
+  tableCellChangeText: {
+    flex: 1,
+    color: colors.textMuted,
+    textAlign: 'center',
+    fontSize: 10,
+    fontWeight: '700',
   },
 
   // ── CHANGE BADGE ──
@@ -421,6 +520,25 @@ const styles = StyleSheet.create({
     borderTopColor: colors.border,
     backgroundColor: colors.panelBg,
   },
+  countdownBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginHorizontal: 16,
+    marginBottom: 8,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 8,
+    backgroundColor: colors.warning + '18',
+    borderWidth: 1,
+    borderColor: colors.warning + '40',
+  },
+  countdownText: {
+    flex: 1,
+    color: colors.warning,
+    fontSize: 13,
+    fontWeight: '600',
+  },
   saveButton: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -462,4 +580,6 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '700',
   },
+  scrollSpacer: { height: 20 },
 });
+

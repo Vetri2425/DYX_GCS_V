@@ -1,97 +1,143 @@
 /**
  * QuickTune Service Unit Tests
  *
- * Tests all mocked QuickTune service methods.
+ * Tests QuickTune service methods against real HTTP endpoints (mocked via axios).
  */
 
-import { quickTuneService, USE_MOCK } from '../quickTuneService';
-import { ROVER_QUICKTUNE_SCRIPT } from '../../assets/scripts/roverQuicktuneScript';
+import axios from 'axios';
+import { quickTuneService } from '../quickTuneService';
+
+// Mock axios
+jest.mock('axios', () => {
+  const mockAxiosInstance = {
+    get: jest.fn(),
+    post: jest.fn(),
+  };
+  return {
+    create: jest.fn(() => mockAxiosInstance),
+    __mockInstance: mockAxiosInstance,
+  };
+});
+
+const mockAxios = (axios as any).__mockInstance;
 
 describe('QuickTuneService', () => {
   beforeEach(() => {
-    jest.useFakeTimers();
-  });
-
-  afterEach(() => {
-    jest.useRealTimers();
-  });
-
-  describe('USE_MOCK flag', () => {
-    it('should have USE_MOCK set to true for easy backend switch', () => {
-      expect(USE_MOCK).toBe(true);
-    });
+    jest.clearAllMocks();
   });
 
   describe('checkScript()', () => {
-    it('should return script check response with exists=false and script metadata', async () => {
-      const promise = quickTuneService.checkScript();
-      await jest.advanceTimersByTimeAsync(500);
-      const result = await promise;
+    it('should call GET endpoint and return script check response', async () => {
+      const mockResponse = {
+        data: {
+          exists: true,
+          name: 'rover-quicktune.lua',
+          size: 1234,
+          lastModified: '2026-04-06T00:00:00Z',
+        },
+      };
+      mockAxios.get.mockResolvedValueOnce(mockResponse);
 
-      expect(result).toHaveProperty('exists', false);
-      expect(result).toHaveProperty('name', 'rover-quicktune.lua');
-      expect(result).toHaveProperty('size');
-      expect(result.size).toBe(ROVER_QUICKTUNE_SCRIPT.length);
-      expect(result).toHaveProperty('lastModified');
+      const result = await quickTuneService.checkScript();
+
+      expect(mockAxios.get).toHaveBeenCalledWith('/api/quicktune/script');
+      expect(result.exists).toBe(true);
+      expect(result.name).toBe('rover-quicktune.lua');
     });
   });
 
   describe('uploadScript()', () => {
-    it('should return success response with uploaded script name', async () => {
-      const promise = quickTuneService.uploadScript();
-      await jest.advanceTimersByTimeAsync(1500);
-      const result = await promise;
+    it('should call POST endpoint with script content', async () => {
+      const mockResponse = {
+        data: {
+          success: true,
+          message: 'QuickTune script uploaded successfully',
+          scriptName: 'rover-quicktune.lua',
+        },
+      };
+      mockAxios.post.mockResolvedValueOnce(mockResponse);
 
+      const result = await quickTuneService.uploadScript();
+
+      expect(mockAxios.post).toHaveBeenCalledWith(
+        '/api/quicktune/script/upload',
+        expect.objectContaining({
+          name: 'rover-quicktune.lua',
+          script: expect.any(String),
+        }),
+      );
       expect(result.success).toBe(true);
-      expect(result.message).toBe('QuickTune script uploaded successfully');
-      expect(result.scriptName).toBe('rover-quicktune.lua');
     });
   });
 
   describe('sendAuxFunction()', () => {
-    it('should send AUX start command with default channel 9', async () => {
-      const promise = quickTuneService.sendAuxFunction('start');
-      await jest.advanceTimersByTimeAsync(300);
-      const result = await promise;
+    it('should send start action with default channel 300', async () => {
+      const mockResponse = {
+        data: {
+          success: true,
+          message: "AUX function 'start' sent on channel 300",
+          auxChannel: 300,
+          position: 1,
+        },
+      };
+      mockAxios.post.mockResolvedValueOnce(mockResponse);
 
+      const result = await quickTuneService.sendAuxFunction('start');
+
+      expect(mockAxios.post).toHaveBeenCalledWith(
+        '/api/quicktune/aux_function',
+        { action: 'start', aux_function_id: 300, position: undefined },
+      );
       expect(result.success).toBe(true);
-      expect(result.message).toContain('start');
-      expect(result.auxChannel).toBe(9);
+      expect(result.auxChannel).toBe(300);
     });
 
-    it('should send AUX stop command with custom channel', async () => {
-      const customChannel = 12;
-      const promise = quickTuneService.sendAuxFunction('stop', customChannel);
-      await jest.advanceTimersByTimeAsync(300);
-      const result = await promise;
+    it('should send stop action with explicit position 0', async () => {
+      const mockResponse = {
+        data: {
+          success: true,
+          message: "AUX function 'stop' sent",
+          auxChannel: 300,
+          position: 0,
+        },
+      };
+      mockAxios.post.mockResolvedValueOnce(mockResponse);
 
+      const result = await quickTuneService.sendAuxFunction('stop', 300, 0);
+
+      expect(mockAxios.post).toHaveBeenCalledWith(
+        '/api/quicktune/aux_function',
+        { action: 'stop', aux_function_id: 300, position: 0 },
+      );
       expect(result.success).toBe(true);
-      expect(result.message).toContain('stop');
-      expect(result.auxChannel).toBe(customChannel);
     });
   });
 
   describe('setFlightMode()', () => {
-    it('should set flight mode to CIRCLE for QuickTune', async () => {
-      const promise = quickTuneService.setFlightMode('CIRCLE');
-      await jest.advanceTimersByTimeAsync(400);
-      const result = await promise;
+    it('should set flight mode to CIRCLE', async () => {
+      const mockResponse = {
+        data: { success: true, message: "Flight mode set to 'CIRCLE'", mode: 'CIRCLE' },
+      };
+      mockAxios.post.mockResolvedValueOnce(mockResponse);
 
-      expect(result.success).toBe(true);
+      const result = await quickTuneService.setFlightMode('CIRCLE');
+
+      expect(mockAxios.post).toHaveBeenCalledWith('/api/set_mode', { mode: 'CIRCLE' });
       expect(result.mode).toBe('CIRCLE');
-      expect(result.message).toContain('CIRCLE');
     });
   });
 
   describe('armRover()', () => {
-    it('should arm the rover by default', async () => {
-      const promise = quickTuneService.armRover(true);
-      await jest.advanceTimersByTimeAsync(350);
-      const result = await promise;
+    it('should arm the rover', async () => {
+      const mockResponse = {
+        data: { success: true, message: 'Rover armed successfully', armed: true },
+      };
+      mockAxios.post.mockResolvedValueOnce(mockResponse);
 
-      expect(result.success).toBe(true);
+      const result = await quickTuneService.armRover(true);
+
+      expect(mockAxios.post).toHaveBeenCalledWith('/api/arm', { arm: true });
       expect(result.armed).toBe(true);
-      expect(result.message).toContain('armed');
     });
   });
 });

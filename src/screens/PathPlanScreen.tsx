@@ -14,6 +14,7 @@ import { SurveyGridDialog } from '../components/pathplan/SurveyGridDialog';
 import { TextAnnotationDialog } from '../components/pathplan/TextAnnotationDialog';
 import { CADDrawingCanvas } from '../components/pathplan/CADDrawingCanvas';
 import { ManualPathConnectionCanvas } from '../components/pathplan/ManualPathConnectionCanvas';
+import { ReverseWaypointsDialog } from '../components/pathplan/ReverseWaypointsDialog';
 import { ManualMapConnection } from '../components/pathplan/ManualMapConnection';
 import { ManualConnectionChoice } from '../components/pathplan/ManualConnectionChoice';
 import { ManualControlPanel } from '../components/pathplan/ManualControlPanel';
@@ -37,6 +38,9 @@ import {
   sanitizeWaypointsForUpload,
   ValidationError,
 } from '../utils/waypointValidator';
+import { CADAlignmentCanvas } from '../components/pathplan/CADAlignmentCanvas';
+import { useCADAlignment } from '../application/hooks/useCADAlignment';
+import { GeoPoint, Point2D } from '../core/geometry/types';
 
 // Toggle debug logging for this screen
 const DEBUG_LOG = true;
@@ -214,6 +218,22 @@ export default function PathPlanScreen() {
   const [showSurveyGridDialog, setShowSurveyGridDialog] = useState(false);
   const [showTextDialog, setShowTextDialog] = useState(false);
   const [showCADCanvas, setShowCADCanvas] = useState(false);
+
+  // ── CAD Georeferencing state ──────────────────────────────
+  const [isCADMode, setIsCADMode] = useState(false);
+  const [showGPSInput, setShowGPSInput] = useState(false);
+
+  const cadAlignment = useCADAlignment({
+    includeLines: false,
+    includePolylines: true,
+    includeArcCenters: false,
+    includePoints: true,
+    defaultAlt: 0,
+  });
+
+  const [gpsInputA, setGpsInputA] = useState<{ lat: string; lon: string }>({ lat: '', lon: '' });
+  const [gpsInputB, setGpsInputB] = useState<{ lat: string; lon: string }>({ lat: '', lon: '' });
+  const [showReverseDialog, setShowReverseDialog] = useState(false);
   const [isDrawingMode, setIsDrawingMode] = useState(false);
   const [homePosition, setHomePosition] = useState<{ lat: number; lng: number } | null>(null);
 
@@ -753,6 +773,11 @@ export default function PathPlanScreen() {
     setUploadPreviewWaypoints(prev => (prev ? reverseWaypointOrder(prev) : prev));
   }, [reverseWaypointOrder]);
 
+  const handleReverseAllWaypoints = useCallback(() => {
+    const reversed = reverseWaypointOrder(waypoints);
+    updateWaypoints(reversed);
+  }, [reverseWaypointOrder, waypoints, updateWaypoints]);
+
   // File type validation
   const ACCEPTED_EXTENSIONS = ['waypoint', 'waypoints', 'csv', 'dxf', 'json', 'kml'];
 
@@ -965,58 +990,23 @@ export default function PathPlanScreen() {
     return waypoints;
   };
 
-  const parseDXF = (content: string): PathPlanWaypoint[] => {
-    const lines = content.split(/\r?\n/).map(l => l.trim());
-    const waypoints: PathPlanWaypoint[] = [];
-    let currentPoint: any = {};
-    let wpId = 1;
+  // ── DXF import is now handled via CAD Mode workflow ──────
+  // The old parseDXF function that directly converted DXF
+  // coordinates to GPS waypoints has been REMOVED.
+  //
+  // New flow:
+  //   1. DXF → parseDXF() → CADModel (CAD space only)
+  //   2. User selects 2 CAD points on canvas
+  //   3. User enters 2 GPS points
+  //   4. georeferenceCAD() → GeoEntity[] (lat/lon)
+  //   5. geoEntitiesToWaypoints() → PathPlanWaypoint[]
+  //
+  // See: useCADAlignment hook, CADAlignmentCanvas component
 
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i];
-
-      if (line === '10') {
-        // X coordinate (longitude)
-        currentPoint.lon = parseFloat(lines[i + 1]);
-      } else if (line === '20') {
-        // Y coordinate (latitude)
-        currentPoint.lat = parseFloat(lines[i + 1]);
-      } else if (line === '30') {
-        // Z coordinate (altitude)
-        currentPoint.alt = parseFloat(lines[i + 1]);
-
-        // Complete point found
-        if (currentPoint.lat !== undefined && currentPoint.lon !== undefined) {
-          const wp = {
-            lat: currentPoint.lat,
-            lon: currentPoint.lon,
-            alt: isNaN(currentPoint.alt) ? 0 : currentPoint.alt,
-          };
-
-          validateWaypoint(wp, wpId - 1);
-
-          waypoints.push({
-            id: wpId++,
-            lat: wp.lat,
-            lon: wp.lon,
-            alt: wp.alt,
-            distance: 0,
-            block: '',
-            row: '',
-            pile: String(wpId - 1),
-          });
-        }
-
-        currentPoint = {};
-      }
-    }
-
-    if (waypoints.length === 0) {
-      throw new Error('No valid POINT entities found in DXF file.');
-    }
-
-    if (DEBUG_LOG) console.log('[PathPlan] parseDXF -> parsed', waypoints.length, waypoints.slice(0, 6));
-
-    return waypoints;
+  const handleDXFUpload = (content: string, fileName: string) => {
+    if (DEBUG_LOG) console.log('[PathPlan] DXF file selected:', fileName, '— entering CAD mode');
+    cadAlignment.loadDXF(content);
+    setIsCADMode(true);
   };
 
   const calculateDistances = (waypoints: PathPlanWaypoint[]): PathPlanWaypoint[] => {
@@ -1581,8 +1571,8 @@ export default function PathPlanScreen() {
           parsed = parseKML(content);
           break;
         case 'dxf':
-          parsed = parseDXF(content);
-          break;
+          handleDXFUpload(content, name);
+          return; // Don't continue to preview flow — CAD mode handles it
         default:
           throw new Error(`Unsupported file format: ${ext}`);
       }
@@ -1686,6 +1676,212 @@ export default function PathPlanScreen() {
   //   try { console.log('[PathPlan] handleRequestUpload ready (component render)'); } catch (e) {}
   // }
 
+  // ============================================================
+  // CAD Mode UI Rendering
+  // ============================================================
+
+  const handleGPSSubmit = () => {
+    const latA = parseFloat(gpsInputA.lat);
+    const lonA = parseFloat(gpsInputA.lon);
+    const latB = parseFloat(gpsInputB.lat);
+    const lonB = parseFloat(gpsInputB.lon);
+
+    if (isNaN(latA) || isNaN(lonA) || isNaN(latB) || isNaN(lonB)) {
+      Alert.alert('Invalid GPS', 'Please enter valid latitude and longitude values for both points.');
+      return;
+    }
+
+    cadAlignment.setGPSPoints(
+      { lat: latA, lon: lonA },
+      { lat: latB, lon: lonB }
+    );
+    setShowGPSInput(false);
+    cadAlignment.computeAlignment();
+  };
+
+  const handleApplyCADAlignment = () => {
+    if (!cadAlignment.computedWaypoints) return;
+
+    const waypoints = cadAlignment.computedWaypoints;
+
+    if (waypoints.length === 0) {
+      Alert.alert('No Waypoints', 'No convertible entities found. The DXF may contain only unsupported entity types.');
+      return;
+    }
+
+    if (pathAssignmentMode === 'manual') {
+      updateWaypoints(waypoints);
+      setManualPathConnections([]);
+      setShowConnectionChoice(true);
+      Alert.alert(
+        '✏️ Manual Path Mode',
+        `${waypoints.length} marking points imported from CAD. Choose your connection method.`,
+        [{ text: 'Choose Method' }]
+      );
+    } else {
+      updateWaypoints(waypoints);
+      Alert.alert('✓ CAD Import Complete', `Successfully georeferenced ${waypoints.length} marking points.`);
+    }
+
+    // Exit CAD mode
+    setIsCADMode(false);
+    cadAlignment.reset();
+    setGpsInputA({ lat: '', lon: '' });
+    setGpsInputB({ lat: '', lon: '' });
+  };
+
+  const handleCancelCADMode = () => {
+    Alert.alert(
+      'Cancel CAD Alignment',
+      'Are you sure you want to cancel? All alignment progress will be lost.',
+      [
+        { text: 'Continue', style: 'cancel' },
+        {
+          text: 'Cancel Alignment',
+          style: 'destructive',
+          onPress: () => {
+            setIsCADMode(false);
+            cadAlignment.reset();
+            setShowGPSInput(false);
+            setGpsInputA({ lat: '', lon: '' });
+            setGpsInputB({ lat: '', lon: '' });
+          },
+        },
+      ]
+    );
+  };
+
+  const renderCADModeUI = () => {
+    const { state, cadModel, computedWaypoints, errorMessage } = cadAlignment;
+
+    return (
+      <Modal visible={isCADMode} transparent animationType="slide" onRequestClose={handleCancelCADMode}>
+        <View style={cadStyles.modalOverlay}>
+          <View style={cadStyles.modalContent}>
+            {/* Header */}
+            <View style={cadStyles.header}>
+              <MaterialCommunityIcons name="vector-polyline" size={24} color={colors.cyan} />
+              <Text style={cadStyles.headerTitle}>CAD Georeferencing</Text>
+              <TouchableOpacity onPress={handleCancelCADMode} style={cadStyles.closeButton}>
+                <MaterialCommunityIcons name="close" size={20} color={colors.textSecondary} />
+              </TouchableOpacity>
+            </View>
+
+            {/* Error State */}
+            {state === 'error' && errorMessage && (
+              <View style={cadStyles.errorBox}>
+                <MaterialCommunityIcons name="alert-circle" size={20} color={colors.red} />
+                <Text style={cadStyles.errorText}>{errorMessage}</Text>
+                <TouchableOpacity style={cadStyles.errorRetryButton} onPress={handleCancelCADMode}>
+                  <Text style={cadStyles.errorRetryText}>Back to Map</Text>
+                </TouchableOpacity>
+              </View>
+            )}
+
+            {/* CAD Canvas — shown when model is loaded */}
+            {state !== 'idle' && state !== 'error' && cadModel && (
+              <CADAlignmentCanvas
+                model={cadModel}
+                onPointsSelected={(cadA, cadB) => {
+                  cadAlignment.setCADPoints(cadA, cadB);
+                  setShowGPSInput(true);
+                }}
+                onCancel={handleCancelCADMode}
+              />
+            )}
+
+            {/* GPS Input Dialog */}
+            {showGPSInput && (
+              <View style={cadStyles.gpsInputContainer}>
+                <Text style={cadStyles.sectionTitle}>Enter GPS Reference Points</Text>
+
+                {/* Point A */}
+                <View style={cadStyles.gpsRow}>
+                  <Text style={cadStyles.gpsLabel}>Point A — Lat:</Text>
+                  <TouchableOpacity
+                    style={cadStyles.gpsInput}
+                    onPress={() => {
+                      // Use current rover position as default
+                      const curLat = telemetry?.lat?.toFixed(6) ?? '';
+                      const curLon = telemetry?.lon?.toFixed(6) ?? '';
+                      setGpsInputA(prev => ({ ...prev, lat: curLat }));
+                    }}
+                  >
+                    <Text style={cadStyles.gpsInputText}>{gpsInputA.lat || 'tap to use current'}</Text>
+                  </TouchableOpacity>
+                  <Text style={cadStyles.gpsLabel}>Lon:</Text>
+                  <TouchableOpacity
+                    style={cadStyles.gpsInput}
+                    onPress={() => {
+                      const curLon = telemetry?.lon?.toFixed(6) ?? '';
+                      setGpsInputA(prev => ({ ...prev, lon: curLon }));
+                    }}
+                  >
+                    <Text style={cadStyles.gpsInputText}>{gpsInputB.lon || 'tap to use current'}</Text>
+                  </TouchableOpacity>
+                </View>
+
+                {/* Point B */}
+                <View style={cadStyles.gpsRow}>
+                  <Text style={cadStyles.gpsLabel}>Point B — Lat:</Text>
+                  <TouchableOpacity style={cadStyles.gpsInput} onPress={() => {}}>
+                    <Text style={cadStyles.gpsInputText}>{gpsInputB.lat || 'enter value'}</Text>
+                  </TouchableOpacity>
+                  <Text style={cadStyles.gpsLabel}>Lon:</Text>
+                  <TouchableOpacity style={cadStyles.gpsInput} onPress={() => {}}>
+                    <Text style={cadStyles.gpsInputText}>{gpsInputB.lon || 'enter value'}</Text>
+                  </TouchableOpacity>
+                </View>
+
+                <View style={cadStyles.gpsButtons}>
+                  <TouchableOpacity style={cadStyles.gpsComputeButton} onPress={handleGPSSubmit}>
+                    <Text style={cadStyles.gpsComputeText}>Compute Alignment</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            )}
+
+            {/* Computed Result — show waypoint count and apply button */}
+            {state === 'computed' && computedWaypoints && (
+              <View style={cadStyles.resultBox}>
+                <MaterialCommunityIcons name="check-circle" size={28} color={colors.green} />
+                <Text style={cadStyles.resultTitle}>Alignment Complete</Text>
+                <Text style={cadStyles.resultCount}>{computedWaypoints.length} waypoints generated</Text>
+
+                <View style={cadStyles.resultActions}>
+                  <TouchableOpacity style={cadStyles.applyButton} onPress={handleApplyCADAlignment}>
+                    <MaterialCommunityIcons name="check" size={18} color={colors.text} />
+                    <Text style={cadStyles.applyButtonText}>Apply to Map</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity style={cadStyles.retryButton} onPress={() => {
+                    cadAlignment.reset();
+                    setShowGPSInput(false);
+                    setIsCADMode(false);
+                    // Re-load the DXF
+                    if (cadAlignment.cadModel) {
+                      // Reset to just CAD loaded state
+                      cadAlignment.loadDXF(JSON.stringify(cadAlignment.cadModel));
+                    }
+                  }}>
+                    <Text style={cadStyles.retryText}>Start Over</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            )}
+
+            {/* Idle / Loading state */}
+            {state === 'idle' && (
+              <View style={cadStyles.loadingBox}>
+                <MaterialCommunityIcons name="loading" size={24} color={colors.yellow} />
+                <Text style={cadStyles.loadingText}>Loading CAD drawing...</Text>
+              </View>
+            )}
+          </View>
+        </View>
+      </Modal>
+    );
+  };
+
   return (
     <SafeAreaView style={styles.container}>
       <StatusBar backgroundColor={colors.headerBlue} barStyle="light-content" />
@@ -1733,6 +1929,7 @@ export default function PathPlanScreen() {
                     setActiveDrawingTool(null); // Clear drawing tool to prevent map from creating new waypoints
                     setShowManualConnectionCanvas(true);
                   }}
+                  onShowReverseTool={() => setShowReverseDialog(true)}
                   isCollapsed={isDrawingToolsCollapsed}
                   onToggleCollapse={() => setIsDrawingToolsCollapsed(!isDrawingToolsCollapsed)}
                 />
@@ -2279,6 +2476,14 @@ export default function PathPlanScreen() {
         currentPosition={roverPosition || { lat: 13.0827, lng: 80.2707 }}
       />
 
+      {/* Reverse Waypoints Dialog */}
+      <ReverseWaypointsDialog
+        visible={showReverseDialog}
+        waypointCount={waypoints.length}
+        onReverse={handleReverseAllWaypoints}
+        onClose={() => setShowReverseDialog(false)}
+      />
+
       {/* Manual Control Modal */}
       <Modal
         visible={showManualControl}
@@ -2363,6 +2568,9 @@ export default function PathPlanScreen() {
           </View>
         </View>
       )}
+
+      {/* ── CAD Georeferencing Mode Overlay ─────────────────── */}
+      {isCADMode && renderCADModeUI()}
 
     </SafeAreaView>
   );
@@ -2509,5 +2717,175 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '500',
     color: '#333',
+  },
+});
+
+// ── CAD Mode Styles ─────────────────────────────────────────
+const cadStyles = StyleSheet.create({
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: colors.background + 'EE',
+    justifyContent: 'center',
+    padding: 16,
+  },
+  modalContent: {
+    backgroundColor: colors.surface,
+    borderRadius: 16,
+    padding: 16,
+    maxHeight: '90%',
+  },
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginBottom: 12,
+  },
+  headerTitle: {
+    flex: 1,
+    fontSize: 18,
+    fontWeight: '700',
+    color: colors.text,
+    fontFamily: 'monospace',
+  },
+  closeButton: {
+    padding: 4,
+  },
+  errorBox: {
+    backgroundColor: colors.red + '15',
+    borderRadius: 8,
+    padding: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 12,
+  },
+  errorText: {
+    flex: 1,
+    color: colors.red,
+    fontFamily: 'monospace',
+    fontSize: 12,
+  },
+  errorRetryButton: {
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    backgroundColor: colors.redBtn,
+    borderRadius: 6,
+  },
+  errorRetryText: {
+    color: colors.text,
+    fontWeight: '600',
+    fontSize: 11,
+  },
+  sectionTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: colors.text,
+    fontFamily: 'monospace',
+    marginBottom: 8,
+  },
+  gpsInputContainer: {
+    marginTop: 8,
+    padding: 12,
+    backgroundColor: colors.background + '80',
+    borderRadius: 8,
+  },
+  gpsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginBottom: 8,
+    flexWrap: 'wrap',
+  },
+  gpsLabel: {
+    color: colors.textSecondary,
+    fontFamily: 'monospace',
+    fontSize: 11,
+    fontWeight: '600',
+  },
+  gpsInput: {
+    backgroundColor: colors.surface,
+    borderRadius: 6,
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderWidth: 1,
+    borderColor: colors.border,
+    minWidth: 100,
+  },
+  gpsInputText: {
+    color: colors.text,
+    fontFamily: 'monospace',
+    fontSize: 11,
+  },
+  gpsButtons: {
+    marginTop: 8,
+  },
+  gpsComputeButton: {
+    backgroundColor: colors.blueBtn,
+    borderRadius: 8,
+    paddingVertical: 12,
+    alignItems: 'center',
+  },
+  gpsComputeText: {
+    color: colors.text,
+    fontWeight: '700',
+    fontSize: 13,
+    fontFamily: 'monospace',
+  },
+  resultBox: {
+    alignItems: 'center',
+    padding: 20,
+    gap: 8,
+  },
+  resultTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: colors.green,
+    fontFamily: 'monospace',
+  },
+  resultCount: {
+    fontSize: 14,
+    color: colors.text,
+    fontFamily: 'monospace',
+  },
+  resultActions: {
+    flexDirection: 'row',
+    gap: 12,
+    marginTop: 12,
+  },
+  applyButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: colors.greenBtn,
+    borderRadius: 8,
+    paddingVertical: 10,
+    paddingHorizontal: 20,
+  },
+  applyButtonText: {
+    color: colors.text,
+    fontWeight: '700',
+    fontSize: 13,
+  },
+  retryButton: {
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: 8,
+  },
+  retryText: {
+    color: colors.textSecondary,
+    fontWeight: '600',
+    fontSize: 12,
+  },
+  loadingBox: {
+    alignItems: 'center',
+    padding: 30,
+    gap: 8,
+  },
+  loadingText: {
+    color: colors.yellow,
+    fontFamily: 'monospace',
+    fontSize: 13,
   },
 });

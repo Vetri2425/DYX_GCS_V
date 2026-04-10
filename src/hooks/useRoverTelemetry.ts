@@ -32,6 +32,30 @@ import {
 } from '../types/telemetry';
 import { LoraRTKStatus } from '../types/rtk';
 
+// ArduRover custom mode number → name translation.
+// MAVROS emits "CMODEn" when vehicle-type detection hasn't completed yet.
+const ARDUROVER_MODES: Record<number, string> = {
+  0: 'MANUAL', 1: 'ACRO', 3: 'STEERING', 4: 'HOLD',
+  5: 'LOITER', 6: 'FOLLOW', 7: 'SIMPLE', 8: 'DOCK',
+  9: 'CIRCLE', 10: 'AUTO', 11: 'RTL', 12: 'SMART_RTL',
+  15: 'GUIDED', 16: 'INITIALISING',
+};
+
+// Normalize mode names from MAVROS/bridge payloads.
+// Supports "CMODE9", "CMODE(9)", and plain names like "CIRCLE".
+const normalizeRoverMode = (mode: unknown): string => {
+  if (typeof mode !== 'string') return 'UNKNOWN';
+
+  const rawMode = mode.trim().toUpperCase();
+  const cModeMatch = rawMode.match(/^CMODE\s*\(?\s*(\d+)\s*\)?$/);
+  if (!cModeMatch) return rawMode;
+
+  const modeNumber = parseInt(cModeMatch[1], 10);
+  const resolved = ARDUROVER_MODES[modeNumber] ?? rawMode;
+  console.log(`[QT][Telemetry] CMODE translated: ${rawMode} → ${resolved}`);
+  return resolved;
+};
+
 // Default constants
 const THROTTLE_MS = 50; // ~20 Hz - Faster updates for better responsiveness
 const MAX_BACKOFF_MS = 8000;
@@ -40,11 +64,12 @@ const INITIAL_BACKOFF_MS = 1000;
 // Helper to get current backend URL (dynamic)
 const getHttpBase = () => getBackendURL().replace(/\/$/, '');
 
-// Toggle verbose telemetry logging (ENABLED for debugging)
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-const TELEMETRY_LOGS_ENABLED = true;
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-const telemLog = (...args: any[]) => console.log('[TELEMETRY]', ...args);
+// Verbose telemetry logging — disabled in production, enable locally for debugging.
+// These are intentionally kept (not removed) so they can be re-enabled quickly.
+const TELEMETRY_LOGS_ENABLED = false; // set true to enable
+const telemLog = TELEMETRY_LOGS_ENABLED
+  ? (...args: unknown[]) => console.log('[TELEMETRY]', ...args)
+  : (..._args: unknown[]) => { /* no-op */ };
 
 // Default values for telemetry
 const DEFAULT_STATE: TelemetryState = {
@@ -203,10 +228,12 @@ const toTelemetryEnvelopeFromRoverData = (data: any): TelemetryEnvelope | null =
   // State
   if (data.mode || data.status || data.last_heartbeat != null) {
     const status = typeof data.status === 'string' ? data.status : 'UNKNOWN';
+    // Translate MAVROS fallback "CMODEn" → named ArduRover mode string
     envelope.state = {
       armed: String(status).toLowerCase() === 'armed',
-      mode: typeof data.mode === 'string' ? data.mode : 'UNKNOWN',
-      system_status: status.toUpperCase(),
+      mode: normalizeRoverMode(data.mode),
+      // Don't set system_status from rover_data status field - it should come from pixhawk_state
+      // system_status represents MAVLink system status (STANDBY, ACTIVE, etc.), not armed state
       heartbeat_ts:
         typeof data.last_heartbeat === 'number'
           ? Math.floor(data.last_heartbeat * 1000)
@@ -240,15 +267,32 @@ const toTelemetryEnvelopeFromRoverData = (data: any): TelemetryEnvelope | null =
       else if (typeof data.num_satellites === 'number') satelliteCount = data.num_satellites;
       else if (typeof data.sats === 'number') satelliteCount = data.sats;
 
+      // Extract altitude from multiple possible field names
+      let altCandidate: number | undefined;
+      if (typeof data.position.alt === 'number') altCandidate = data.position.alt;
+      else if (typeof data.position.altitude === 'number') altCandidate = data.position.altitude;
+      else if (typeof data.position.alt_rel === 'number') altCandidate = data.position.alt_rel;
+      else if (typeof data.position.relative_alt === 'number') altCandidate = data.position.relative_alt;
+
       envelope.global = {
         lat: latNum,
         lon: lngNum,
-        alt_rel: 0,
+        alt_rel: typeof altCandidate === 'number' && isFinite(altCandidate) ? altCandidate : 0,
         vel: typeof velCandidate === 'number' && isFinite(velCandidate) ? velCandidate : 0,
         ...(satelliteCount !== undefined && { satellites_visible: satelliteCount }),
       };
       touched = true;
     }
+  }
+
+  // groundspeed as a top-level flat field (no position object) — backend CurrentState sends
+  // groundspeed directly. Update vel on existing envelope.global so Step3 canProceed gate works.
+  if (typeof data.groundspeed === 'number' && isFinite(data.groundspeed)) {
+    if (!envelope.global) {
+      envelope.global = { ...DEFAULT_GLOBAL };
+    }
+    envelope.global.vel = data.groundspeed;
+    touched = true;
   }
 
   // Battery
@@ -440,15 +484,15 @@ const toTelemetryEnvelopeFromBridge = (data: any): TelemetryEnvelope | null => {
   if (data.current_position || data.pixhawk_state) {
     // console.log('[BRIDGE_DATA] 🎯 Found mission_status with GPS data!');
 
-    // Position data
+    // Position data — do NOT include vel here; this source has no velocity info.
+    // Omitting vel lets applyEnvelope preserve the real velocity from rover_data.
     if (data.current_position && typeof data.current_position === 'object') {
       envelope.global = {
         lat: typeof data.current_position.lat === 'number' ? data.current_position.lat : 0,
         lon: typeof data.current_position.lng === 'number' ? data.current_position.lng : 0,
         alt_rel: typeof data.current_position.alt === 'number' ? data.current_position.alt : 0,
-        vel: 0,
         // ✅ FIX: Do NOT default satellites_visible to 0; omit it so applyEnvelope preserves the existing count
-      };
+      } as any;
       // console.log('[BRIDGE_DATA] ✅ Position parsed from mission_status:', envelope.global);
       touched = true;
     }
@@ -463,7 +507,7 @@ const toTelemetryEnvelopeFromBridge = (data: any): TelemetryEnvelope | null => {
     if (data.pixhawk_state && typeof data.pixhawk_state === 'object') {
       envelope.state = {
         armed: Boolean(data.pixhawk_state.armed),
-        mode: typeof data.pixhawk_state.mode === 'string' ? data.pixhawk_state.mode : 'UNKNOWN',
+        mode: normalizeRoverMode(data.pixhawk_state.mode),
         system_status: typeof data.pixhawk_state.system_status === 'string' ? data.pixhawk_state.system_status.toUpperCase() : 'UNKNOWN',
         heartbeat_ts: Date.now(),
       };
@@ -521,14 +565,15 @@ const toTelemetryEnvelopeFromBridge = (data: any): TelemetryEnvelope | null => {
     }
   }
 
+  // Bridge position data — do NOT include vel; this source has no velocity info.
+  // Omitting vel lets applyEnvelope preserve the real velocity from rover_data.
   if (data.position && typeof data.position === 'object') {
     envelope.global = {
       lat: typeof data.position.latitude === 'number' ? data.position.latitude : 0,
       lon: typeof data.position.longitude === 'number' ? data.position.longitude : 0,
       alt_rel: typeof data.position.altitude === 'number' ? data.position.altitude : 0,
-      vel: 0,
       // ✅ FIX: Do NOT default satellites_visible to 0; omit it so applyEnvelope preserves the existing count
-    };
+    } as any;
     touched = true;
   }
 
@@ -544,7 +589,7 @@ const toTelemetryEnvelopeFromBridge = (data: any): TelemetryEnvelope | null => {
       lon: typeof data.global.longitude === 'number' ? data.global.longitude : envelope.global?.lon ?? 0,
       alt_rel:
         typeof data.global.altitude === 'number' ? data.global.altitude : envelope.global?.alt_rel ?? 0,
-      vel: typeof data.global.vel === 'number' ? data.global.vel : 0,
+      vel: typeof data.global.vel === 'number' ? data.global.vel : envelope.global?.vel ?? 0,
       ...(satelliteCount !== undefined && { satellites_visible: satelliteCount }),
     };
     touched = true;
@@ -658,6 +703,9 @@ const toTelemetryEnvelopeFromBridge = (data: any): TelemetryEnvelope | null => {
 interface MutableTelemetry {
   telemetry: RoverTelemetry;
   lastEnvelopeTs: number | null;
+  // Timestamp until which incoming armed=false from telemetry is ignored.
+  // Set after a successful ARM command to absorb the MAVROS race window.
+  armedLockUntil: number | null;
 }
 
 export interface RoverServices {
@@ -756,6 +804,8 @@ export interface RoverServices {
   getParam: (name: string) => Promise<import('../types/params').ParamGetResponse>;
   setParam: (name: string, value: number) => Promise<import('../types/params').ParamSetResponse>;
   getParamGroups: () => Promise<import('../types/params').ParamGroupsResponse>;
+  downloadParams: () => Promise<import('../types/params').ParamDownloadResponse>;
+  uploadParams: (content: string, dryRun: boolean) => Promise<import('../types/params').ParamUploadResponse>;
 }
 
 export interface UseRoverTelemetryResult {
@@ -792,6 +842,7 @@ export function useRoverTelemetry(): UseRoverTelemetryResult {
   const mutableRef = useRef<MutableTelemetry>({
     telemetry: createDefaultTelemetry(),
     lastEnvelopeTs: null,
+    armedLockUntil: null,
   });
   const lastDispatchRef = useRef<number>(0);
   const lastMissionStatusRef = useRef<string>('');
@@ -819,7 +870,28 @@ export function useRoverTelemetry(): UseRoverTelemetryResult {
     const next = { ...mutable.telemetry };
 
     if (envelope.state) {
-      next.state = { ...next.state, ...envelope.state };
+      const incomingState = envelope.state;
+      // Guard: if we're inside the ARM lock window, ignore armed=false from
+      // incoming telemetry. The backend confirmed MAVROS heartbeats can write
+      // status='disarmed' for up to 2s while the FC physically arms.
+      // We preserve the current armed=true in mutableRef so the pending
+      // dispatch timeout also reads the correct value.
+      const lock = mutableRef.current.armedLockUntil;
+      const isLocked = lock !== null && Date.now() < lock;
+      if (isLocked && incomingState.armed === false) {
+        // Merge everything except armed — keep the current armed value
+        next.state = {
+          ...next.state,
+          ...incomingState,
+          armed: mutableRef.current.telemetry.state.armed,
+        };
+      } else {
+        // Lock expired or not locked — clear it and apply normally
+        if (lock !== null && Date.now() >= lock) {
+          mutableRef.current.armedLockUntil = null;
+        }
+        next.state = { ...next.state, ...incomingState };
+      }
     }
     if (envelope.global) {
       // Only update satellites if data is present in this message
@@ -1626,6 +1698,15 @@ export function useRoverTelemetry(): UseRoverTelemetryResult {
       armVehicle: async () => {
         const response = await postService(API_ENDPOINTS.ARM, { value: true });
         if (response.success) {
+          // Set the lock BEFORE pushStatePatch so applyEnvelope already
+          // respects it if a stale rover_data event fires concurrently.
+          mutableRef.current.armedLockUntil = Date.now() + 3000;
+          // Force armed=true directly into mutableRef so pushStatePatch
+          // reads the correct base state even if a stale event just wrote false.
+          mutableRef.current.telemetry = {
+            ...mutableRef.current.telemetry,
+            state: { ...mutableRef.current.telemetry.state, armed: true, system_status: 'ARMED' },
+          };
           pushStatePatch({ armed: true, system_status: 'ARMED' });
         }
         return response;
@@ -1633,6 +1714,8 @@ export function useRoverTelemetry(): UseRoverTelemetryResult {
       disarmVehicle: async () => {
         const response = await postService(API_ENDPOINTS.ARM, { value: false });
         if (response.success) {
+          // Clear any arm lock immediately on explicit disarm.
+          mutableRef.current.armedLockUntil = null;
           pushStatePatch({ armed: false, system_status: 'DISARMED' });
         }
         return response;
@@ -2010,6 +2093,12 @@ export function useRoverTelemetry(): UseRoverTelemetryResult {
       },
       getParamGroups: async () => {
         return getService<import('../types/params').ParamGroupsResponse>(API_ENDPOINTS.PARAMS_GROUPS);
+      },
+      downloadParams: async () => {
+        return getService<import('../types/params').ParamDownloadResponse>(API_ENDPOINTS.PARAMS_DOWNLOAD);
+      },
+      uploadParams: async (content: string, dryRun: boolean) => {
+        return postService(API_ENDPOINTS.PARAMS_UPLOAD, { content, dry_run: dryRun }) as Promise<import('../types/params').ParamUploadResponse>;
       },
 
       // Emergency Stop

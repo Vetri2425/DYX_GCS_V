@@ -35,17 +35,36 @@ yarn-error.*
 .env.local
 .env.*.local
 
+# AI/IDE tool configs
+.claude/
+.kiro/
+.superpowers/
+.qwen/
+.vscode/
+.hintrc
+
 # Windows nul files (accidentally created)
 nul
 
 # Ignore backup APKs
 Backup Apks/
 
-# Project docs and summary
+# Project docs, summaries, temp, tasks
 docs/
 summary/
-*.md
+temp/
+task/
+Tasks/
 
+# Loose markdown files (agent-generated docs, summaries, reports)
+# Keep README.md explicitly via negation
+*.md
+!README.md
+
+# Build logs and test scripts
+build_output.log
+*.csv
+test_beacon_listener.py
 
 # typescript
 *.tsbuildinfo

@@ -10,44 +10,48 @@
 // ============================================================================
 
 /**
- * Pretune parameters (18 total) - baseline settings before tuning
+ * Pretune parameters — baseline settings to verify before tuning.
+ * These are real ArduRover 4.5.6 parameters that affect QuickTune behavior.
  */
 export const PRETUNE_PARAMS: string[] = [
-  'ATC_ACC_MAX',
-  'ATC_DECEL_MAX',
-  'ATC_SPEED_UP',
-  'ATC_SPEED_DN',
-  'ATC_TURN_MAX',
-  'ATC_STR_RAT_P',
-  'ATC_STR_RAT_I',
-  'ATC_STR_RAT_D',
-  'ATC_STR_RAT_IMAX',
-  'WHEEL_RADIUS',
-  'WHEEL_BASE',
-  'WHEEL_TRACK',
-  'MOT_THST_HOVER',
-  'MOT_THST_MAX',
-  'NAVL1_PERIOD',
-  'NAVL1_DAMPING',
-  'SCHED_SPEED_MAX',
-  'SCHED_TURN_MAX',
+  'SCR_ENABLE',           // Lua scripting must be enabled (requires reboot)
+  'RTUN_ENABLE',          // QuickTune script enable
+  'RTUN_AXES',            // Bitmask: 1=Steering, 2=Speed, 3=Both
+  'RTUN_RC_FUNC',         // RC aux function number (default 300)
+  'RTUN_AUTO_SAVE',       // Auto-save delay in seconds after tune completes
+  'RTUN_AUTO_FILTER',     // Auto-set PID filters from INS_GYRO_FILTER
+  'RTUN_STR_FFRATIO',     // Steering FF ratio
+  'RTUN_STR_P_RATIO',     // Steering FF→P ratio
+  'RTUN_STR_I_RATIO',     // Steering FF→I ratio
+  'RTUN_SPD_FFRATIO',     // Speed FF ratio
+  'RTUN_SPD_P_RATIO',     // Speed FF→P ratio
+  'RTUN_SPD_I_RATIO',     // Speed FF→I ratio
+  'CIRC_SPEED',           // Circle mode speed (m/s)
+  'CIRC_RADIUS',          // Circle mode radius (m)
+  'CIRC_DIR',             // Circle mode direction
+  'ATC_STR_ACC_MAX',      // Steering acceleration max (deg/s/s)
+  'ATC_STR_RAT_MAX',      // Steering rate max (deg/s)
+  'ATC_BRAKE',            // Brake enable
 ];
 
 /**
- * Tuned parameters (11 total) - optimized settings after tuning
+ * Tuned parameters — the params the Lua script actually modifies during tuning.
+ * These are snapshotted before tuning and compared after for the results table.
+ *
+ * From rover-quicktune.lua: axis_names × param_suffixes + params_extra
  */
 export const TUNED_PARAMS: string[] = [
-  'ATC_STR_RAT_P',
-  'ATC_STR_RAT_I',
-  'ATC_STR_RAT_D',
-  'ATC_SPEED_UP',
-  'ATC_SPEED_DN',
-  'ATC_ACC_MAX',
-  'ATC_DECEL_MAX',
-  'NAVL1_PERIOD',
-  'NAVL1_DAMPING',
-  'SCHED_SPEED_MAX',
-  'SCHED_TURN_MAX',
+  'ATC_STR_RAT_FF',      // Steering feed-forward (primary output)
+  'ATC_STR_RAT_P',       // Steering P (set to ratio of FF)
+  'ATC_STR_RAT_I',       // Steering I (set to ratio of FF)
+  'ATC_STR_RAT_D',       // Steering D
+  'ATC_STR_RAT_FLTT',    // Steering target filter (auto-set from INS_GYRO_FILTER)
+  'ATC_STR_RAT_FLTD',    // Steering derivative filter (auto-set from INS_GYRO_FILTER)
+  'ATC_SPEED_P',          // Speed P (set to ratio of FF equivalent)
+  'ATC_SPEED_I',          // Speed I (set to ratio of FF equivalent)
+  'ATC_SPEED_D',          // Speed D
+  'CRUISE_SPEED',         // Cruise speed (calculated from FF tuning)
+  'CRUISE_THROTTLE',      // Cruise throttle (calculated from FF tuning)
 ];
 
 // ============================================================================

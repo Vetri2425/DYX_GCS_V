@@ -60,6 +60,43 @@ export interface ParamGroupsResponse {
 }
 
 /**
+ * Response from GET /api/params/download
+ */
+export interface ParamDownloadResponse {
+  success: boolean;
+  filename: string;
+  content: string;
+  total: number;
+  error?: string;
+}
+
+/**
+ * Response from POST /api/params/upload
+ */
+export interface ParamUploadResponse {
+  success: boolean;
+  dry_run: boolean;
+  summary: {
+    total_in_file: number;
+    matched: number;
+    changed: number;
+    skipped: number;
+    not_found: number;
+    failed: number;
+  };
+  changes: Array<{
+    name: string;
+    old_value: number;
+    new_value: number;
+    status: 'applied' | 'failed' | 'skipped';
+  }>;
+  not_found: string[];
+  failed: string[];
+  reboot_required: boolean;
+  error?: string;
+}
+
+/**
  * Param preset for saving/loading configurations
  * Stored in AsyncStorage under '@param_presets' key
  */

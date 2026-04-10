@@ -13,20 +13,21 @@
 
 import { getSavedBackendURL } from './utils/backendStorage';
 
-// Default fallback values (supports multiple env variable names)
-// FIXED: Use proper fallback - only ONE hardcoded URL here
-// The App.tsx probeWithAttempts() will handle trying multiple IPs
+// Default fallback values (supports multiple env variable names).
+// The hardcoded IP is a last-resort development fallback only — in production
+// the URL is always set via env vars or runtime setBackendURL().
+// Do NOT rely on this value in production builds.
 const DEFAULT_BACKEND_URL =
   process.env.REACT_APP_ROS_HTTP_BASE ||
   process.env.EXPO_PUBLIC_ROS_HTTP_BASE ||
   process.env.VITE_ROS_HTTP_BASE ||
-  'http://192.168.1.242:5001';
+  'http://192.168.1.242:5001'; // dev fallback — override via EXPO_PUBLIC_ROS_HTTP_BASE
 
 const DEFAULT_WS_URL =
   process.env.REACT_APP_ROS_WS_URL ||
   process.env.EXPO_PUBLIC_ROS_WS_URL ||
   process.env.VITE_ROS_WS_URL ||
-  'ws://192.168.1.242:5001/socket.io';
+  'ws://192.168.1.242:5001/socket.io'; // dev fallback — override via EXPO_PUBLIC_ROS_WS_URL
 
 // Dynamic backend URL (can be changed at runtime)
 let dynamicBackendURL: string | null = null;
@@ -124,7 +125,7 @@ export const SOCKET_CONFIG = {
 export const API_ENDPOINTS = {
   // Vehicle control
   ARM: '/api/arm',
-  SET_MODE: '/api/mission/mode',
+  SET_MODE: '/api/set_mode',
 
   // Mission management
   MISSION_UPLOAD: '/api/mission/upload',
@@ -186,11 +187,15 @@ export const API_ENDPOINTS = {
   // MAVLink Param Control (Task 01)
   PARAMS_LIST: '/api/params',
   PARAMS_GROUPS: '/api/params/groups',
+  PARAMS_DOWNLOAD: '/api/params/download',
+  PARAMS_UPLOAD: '/api/params/upload',
 
   // QuickTune
   QUICKTUNE_SCRIPT_CHECK: '/api/quicktune/script',
   QUICKTUNE_SCRIPT_UPLOAD: '/api/quicktune/script/upload',
   QUICKTUNE_AUX_FUNCTION: '/api/quicktune/aux_function',
+  QUICKTUNE_STATUS: '/api/quicktune/status',
+  QUICKTUNE_REBOOT: '/api/quicktune/reboot',
 
   // Configuration
   MISSION_CONFIG: '/api/mission/config',

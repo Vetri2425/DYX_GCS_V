@@ -20,12 +20,19 @@ import {
   ActivityIndicator,
   TouchableOpacity,
   ScrollView,
+  Alert,
 } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
+import * as DocumentPicker from 'expo-document-picker';
+import type { DocumentPickerAsset } from 'expo-document-picker';
+import * as FileSystem from 'expo-file-system/legacy';
 import { colors } from '../../../theme/colors';
 import { quickTuneService } from '../../../services/quickTuneService';
+import { FC_REBOOT_WAIT_MS } from '../../../constants/quicktune';
 
-// ── State types ──────────────────────────────────────────────────────────────
+// ── File upload constraints ───────────────────────────────────────────────────
+/** Maximum allowed .lua script size in bytes (512 KB). */
+const MAX_LUA_FILE_SIZE_BYTES = 512 * 1024;
 
 type ScriptCheckState =
   | 'checking'
@@ -33,6 +40,8 @@ type ScriptCheckState =
   | 'not_found'
   | 'uploading'
   | 'uploaded'
+  | 'reboot_needed'
+  | 'rebooting'
   | 'error';
 
 interface Props {
@@ -46,15 +55,7 @@ export default function Step2_ScriptCheck({ onNext, onBack }: Props) {
   const [state, setState] = useState<ScriptCheckState>('checking');
   const [errorMessage, setErrorMessage] = useState<string>('');
   const mountedRef = useRef(true);
-
-  useEffect(() => {
-    mountedRef.current = true;
-    runScriptCheck();
-    return () => {
-      mountedRef.current = false;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  const rebootTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const runScriptCheck = useCallback(async () => {
     try {
@@ -76,20 +77,111 @@ export default function Step2_ScriptCheck({ onNext, onBack }: Props) {
     }
   }, []);
 
+  useEffect(() => {
+    mountedRef.current = true;
+    runScriptCheck();
+    return () => {
+      mountedRef.current = false;
+      if (rebootTimerRef.current !== null) {
+        clearTimeout(rebootTimerRef.current);
+        rebootTimerRef.current = null;
+      }
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const handleUpload = useCallback(async () => {
     try {
       setState('uploading');
       setErrorMessage('');
-      await quickTuneService.uploadScript();
+      const result = await quickTuneService.uploadScript();
 
       if (!mountedRef.current) return;
-      setState('uploaded');
+      if (result.reboot_required) {
+        setState('reboot_needed');
+      } else {
+        setState('uploaded');
+      }
     } catch (err) {
       if (!mountedRef.current) return;
       setState('error');
       setErrorMessage(err instanceof Error ? err.message : 'Upload failed');
     }
   }, []);
+
+  /** Re-upload: open file picker, read .lua file, send content to backend */
+  const handleReuploadFromFile = useCallback(async () => {
+    try {
+      const res = await DocumentPicker.getDocumentAsync({
+        copyToCacheDirectory: true,
+        type: '*/*',
+      });
+
+      // Modern API: res.canceled is a boolean, res.assets is null when canceled
+      if (res.canceled || !res.assets || res.assets.length === 0) return;
+
+      const asset: DocumentPickerAsset = res.assets[0];
+      const { uri, name } = asset;
+
+      const ext = name.split('.').pop()?.toLowerCase();
+      if (ext !== 'lua') {
+        Alert.alert('Invalid File', 'Please select a .lua script file.');
+        return;
+      }
+
+      setState('uploading');
+      setErrorMessage('');
+
+      const content = await FileSystem.readAsStringAsync(uri, { encoding: FileSystem.EncodingType.UTF8 });
+
+      // L3: Enforce file size limit before uploading
+      const byteSize = new TextEncoder().encode(content).length;
+      if (byteSize > MAX_LUA_FILE_SIZE_BYTES) {
+        Alert.alert(
+          'File Too Large',
+          `Script exceeds the ${MAX_LUA_FILE_SIZE_BYTES / 1024} KB limit (file is ${Math.round(byteSize / 1024)} KB).`,
+        );
+        setState('not_found');
+        return;
+      }
+
+      const result = await quickTuneService.uploadScriptContent(content, name);
+
+      if (!mountedRef.current) return;
+      if (result.reboot_required) {
+        setState('reboot_needed');
+      } else {
+        setState('uploaded');
+      }
+    } catch (err) {
+      if (!mountedRef.current) return;
+      setState('error');
+      setErrorMessage(err instanceof Error ? err.message : 'File upload failed');
+    }
+  }, []);
+
+  /** Reboot FC after upload when SCR_ENABLE was changed */
+  const handleReboot = useCallback(async () => {
+    try {
+      setState('rebooting');
+      setErrorMessage('');
+      await quickTuneService.rebootFC();
+
+      if (!mountedRef.current) return;
+
+      // Wait FC_REBOOT_WAIT_MS for FC to reboot, then re-check script
+      rebootTimerRef.current = setTimeout(() => {
+        rebootTimerRef.current = null;
+        if (mountedRef.current) {
+          runScriptCheck();
+        }
+      }, FC_REBOOT_WAIT_MS);
+    } catch (err) {
+      if (!mountedRef.current) return;
+      setState('error');
+      setErrorMessage(err instanceof Error ? err.message : 'Reboot failed');
+    }
+  }, [runScriptCheck]);
 
   const handleRetry = useCallback(() => {
     runScriptCheck();
@@ -135,8 +227,9 @@ export default function Step2_ScriptCheck({ onNext, onBack }: Props) {
         <Text style={styles.hintText}>
           You can proceed to the next step or re-upload to ensure the latest version.
         </Text>
-        <TouchableOpacity style={styles.uploadBtn} onPress={handleUpload}>
-          <MaterialCommunityIcons name="cloud-upload-outline" size={18} color={colors.text} />
+        <TouchableOpacity style={styles.uploadBtn} onPress={handleReuploadFromFile}
+          accessibilityRole="button" accessibilityLabel="Re-upload QuickTune script from file">
+          <MaterialCommunityIcons name="file-upload-outline" size={18} color={colors.text} />
           <Text style={styles.uploadBtnText}>Re-upload Script</Text>
         </TouchableOpacity>
       </View>
@@ -160,16 +253,24 @@ export default function Step2_ScriptCheck({ onNext, onBack }: Props) {
           </View>
         </View>
         <Text style={styles.descriptionText}>
-          No QuickTune script was found on the vehicle. Upload the bundled script to continue.
+          No QuickTune script was found on the vehicle. Upload the bundled script or pick a file.
         </Text>
         <View style={styles.infoRow}>
           <MaterialCommunityIcons name="file-outline" size={16} color={colors.warning} />
-          <Text style={styles.infoText}>rover-quicktune.lua (bundled)</Text>
+          <Text style={styles.infoText}>rover-quicktune.lua</Text>
         </View>
-        <TouchableOpacity style={styles.uploadBtn} onPress={handleUpload}>
-          <MaterialCommunityIcons name="cloud-upload-outline" size={18} color={colors.text} />
-          <Text style={styles.uploadBtnText}>Upload Script</Text>
-        </TouchableOpacity>
+        <View style={styles.buttonRow}>
+          <TouchableOpacity style={[styles.uploadBtn, { flex: 1 }]} onPress={handleUpload}
+            accessibilityRole="button" accessibilityLabel="Upload bundled QuickTune script">
+            <MaterialCommunityIcons name="cloud-upload-outline" size={18} color={colors.text} />
+            <Text style={styles.uploadBtnText}>Upload Bundled</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={[styles.uploadBtn, { flex: 1, backgroundColor: colors.accent + 'CC' }]} onPress={handleReuploadFromFile}
+            accessibilityRole="button" accessibilityLabel="Pick a .lua script file to upload">
+            <MaterialCommunityIcons name="file-upload-outline" size={18} color={colors.text} />
+            <Text style={styles.uploadBtnText}>Pick File</Text>
+          </TouchableOpacity>
+        </View>
       </View>
     </View>
   );
@@ -207,8 +308,9 @@ export default function Step2_ScriptCheck({ onNext, onBack }: Props) {
           <MaterialCommunityIcons name="check-bold" size={16} color={colors.success} />
           <Text style={styles.infoText}>rover-quicktune.lua — uploaded</Text>
         </View>
-        <TouchableOpacity style={styles.outlineBtn} onPress={handleUpload}>
-          <MaterialCommunityIcons name="cloud-upload-outline" size={16} color={colors.accent} />
+        <TouchableOpacity style={styles.outlineBtn} onPress={handleReuploadFromFile}
+          accessibilityRole="button" accessibilityLabel="Re-upload QuickTune script from file">
+          <MaterialCommunityIcons name="file-upload-outline" size={16} color={colors.accent} />
           <Text style={styles.outlineBtnText}>Re-upload Script</Text>
         </TouchableOpacity>
       </View>
@@ -238,7 +340,8 @@ export default function Step2_ScriptCheck({ onNext, onBack }: Props) {
           <MaterialCommunityIcons name="alert-octagon-outline" size={16} color={colors.danger} />
           <Text style={styles.errorText}>{errorMessage}</Text>
         </View>
-        <TouchableOpacity style={styles.retryBtn} onPress={handleRetry}>
+        <TouchableOpacity style={styles.retryBtn} onPress={handleRetry}
+          accessibilityRole="button" accessibilityLabel="Retry script check">
           <MaterialCommunityIcons name="reload" size={18} color={colors.text} />
           <Text style={styles.retryBtnText}>Retry Check</Text>
         </TouchableOpacity>
@@ -258,12 +361,54 @@ export default function Step2_ScriptCheck({ onNext, onBack }: Props) {
         return renderUploading();
       case 'uploaded':
         return renderUploaded();
+      case 'reboot_needed':
+        return renderRebootNeeded();
+      case 'rebooting':
+        return renderRebooting();
       case 'error':
         return renderError();
       default:
         return renderChecking();
     }
   };
+
+  const renderRebootNeeded = () => (
+    <View style={styles.card}>
+      <View style={[styles.cardAccent, { backgroundColor: colors.warning }]} />
+      <View style={styles.cardBody}>
+        <View style={styles.cardHeaderRow}>
+          <View style={styles.cardHeaderLeft}>
+            <View style={[styles.cardIconWrap, { borderColor: colors.warning + '40' }]}>
+              <MaterialCommunityIcons name="restart" size={18} color={colors.warning} />
+            </View>
+            <Text style={styles.cardLabel}>REBOOT REQUIRED</Text>
+          </View>
+          <View style={[styles.statusBadge, { backgroundColor: colors.warning + '20', borderColor: colors.warning }]}>
+            <View style={[styles.statusBadgeDot, { backgroundColor: colors.warning }]} />
+            <Text style={[styles.statusBadgeText, { color: colors.warning }]}>PENDING</Text>
+          </View>
+        </View>
+        <Text style={styles.descriptionText}>
+          Script uploaded successfully. The flight controller needs a reboot to activate Lua scripting (SCR_ENABLE was changed).
+        </Text>
+        <TouchableOpacity style={[styles.uploadBtn, { backgroundColor: colors.warning }]} onPress={handleReboot}
+          accessibilityRole="button" accessibilityLabel="Reboot flight controller">
+          <MaterialCommunityIcons name="restart" size={18} color={colors.text} />
+          <Text style={styles.uploadBtnText}>Reboot Flight Controller</Text>
+        </TouchableOpacity>
+      </View>
+    </View>
+  );
+
+  const renderRebooting = () => (
+    <View style={styles.centerContent}>
+      <ActivityIndicator size="large" color={colors.warning} />
+      <Text style={styles.statusText}>Rebooting Flight Controller...</Text>
+      <Text style={styles.subText}>
+        Please wait ~15 seconds for the FC to restart and reconnect
+      </Text>
+    </View>
+  );
 
   // ── Main render ──────────────────────────────────────────────────────────
 
@@ -286,7 +431,8 @@ export default function Step2_ScriptCheck({ onNext, onBack }: Props) {
 
       {/* Footer navigation */}
       <View style={styles.footer}>
-        <TouchableOpacity style={styles.backBtn} onPress={onBack}>
+        <TouchableOpacity style={styles.backBtn} onPress={onBack}
+          accessibilityRole="button" accessibilityLabel="Go back to previous step">
           <MaterialCommunityIcons name="arrow-left" size={18} color={colors.text} />
           <Text style={styles.backBtnText}>Back</Text>
         </TouchableOpacity>
@@ -294,6 +440,9 @@ export default function Step2_ScriptCheck({ onNext, onBack }: Props) {
           style={[styles.nextBtn, !isNextEnabled && styles.nextBtnDisabled]}
           disabled={!isNextEnabled}
           onPress={onNext}
+          accessibilityRole="button"
+          accessibilityLabel="Proceed to next step"
+          accessibilityState={{ disabled: !isNextEnabled }}
         >
           <Text style={styles.nextBtnText}>Next</Text>
           <MaterialCommunityIcons name="arrow-right" size={18} color={colors.text} />
@@ -497,6 +646,11 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '700',
     color: colors.text,
+  },
+  buttonRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginTop: 4,
   },
   outlineBtn: {
     flexDirection: 'row',

@@ -7,6 +7,7 @@ import { Waypoint } from './types';
 import { Toast } from '../shared/Toast';
 import { validateBulkSkip } from '../../utils/bulkSkipValidator';
 import { useActionGuard, useComponentLifecycle } from '../../hooks/useComponentReadiness';
+import { setMissionMode as setBackendMissionMode } from '../../services/missionModeService';
 
 export type MissionControlCardProps = {
   waypoints?: Waypoint[];
@@ -246,14 +247,14 @@ const MissionControlCard: React.FC<MissionControlCardProps> = ({
     setIsTogglingMode(true);
     try {
       console.log('[MissionControlCard] Changing mode to:', newMode);
-      const response = await services.setMode(newMode);
+      const response = await setBackendMissionMode({ mode: newMode.toLowerCase() as 'auto' | 'manual' });
       
       if (response.success) {
         onSetMode(newMode);
         console.log('[MissionControlCard] Mode changed successfully');
       } else {
-        console.error('[MissionControlCard] Mode change failed:', response.message);
-        showLocalToast('error', response.message || 'Failed to change mode');
+        console.error('[MissionControlCard] Mode change failed:', response.message || response.error);
+        showLocalToast('error', response.message || response.error || 'Failed to change mode');
       }
     } catch (error) {
       console.error('[MissionControlCard] Failed to set mission mode:', error);

@@ -42,7 +42,10 @@ export function computeTuneResults(
     if (beforeValue !== 0) {
       changePercent = ((afterValue - beforeValue) / Math.abs(beforeValue)) * 100;
     } else if (afterValue !== 0) {
-      changePercent = 100;
+      // beforeValue is 0 — percentage change is mathematically undefined.
+      // Cap at ±999% to signal a large change without implying a precise ratio.
+      // Sign reflects direction: positive if value increased from zero, negative if it decreased.
+      changePercent = afterValue > 0 ? 999 : -999;
     }
 
     return {

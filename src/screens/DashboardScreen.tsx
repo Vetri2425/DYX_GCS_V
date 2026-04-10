@@ -1,10 +1,11 @@
 import React, { useMemo, useEffect, useRef, useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, useWindowDimensions } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, useWindowDimensions, ActivityIndicator } from 'react-native';
 import { MaterialCommunityIcons, Ionicons } from '@expo/vector-icons';
 import { colors } from '../theme/colors';
 import { useRover } from '../context/RoverContext';
 import { RobotSettingsModal } from '../components/dashboard/RobotSettingsModal';
 import QuickTuneScreen from './QuickTuneScreen';
+import { saveParamsToFile, loadParamsFromFile } from '../services/paramFileService';
 
 function getFixTypeLabel(fixType: number): string {
   const labels: { [key: number]: string } = {
@@ -24,11 +25,13 @@ const getStatusColor = (level: 'healthy' | 'warning' | 'critical' | 'neutral') =
 };
 
 export default function DashboardScreen() {
-  const { telemetry, connectionState, roverPosition } = useRover();
+  const { telemetry, connectionState, roverPosition, services } = useRover();
   const { width } = useWindowDimensions();
   const mountedRef = useRef(true);
   const [showRobotSettings, setShowRobotSettings] = useState(false);
   const [showQuickTune, setShowQuickTune] = useState(false);
+  const [paramSaving, setParamSaving] = useState(false);
+  const [paramLoading, setParamLoading] = useState(false);
 
   const isTablet = width > 600;
   const columnWidth = isTablet ? (width - 24 - 12) / 2 : ('100%' as any);
@@ -38,6 +41,26 @@ export default function DashboardScreen() {
     return () => { mountedRef.current = false; };
   }, []);
 
+  const handleSaveParams = async () => {
+    if (paramSaving) return;
+    setParamSaving(true);
+    try {
+      await saveParamsToFile(services);
+    } finally {
+      if (mountedRef.current) setParamSaving(false);
+    }
+  };
+
+  const handleLoadParams = async () => {
+    if (paramLoading) return;
+    setParamLoading(true);
+    try {
+      await loadParamsFromFile(services);
+    } finally {
+      if (mountedRef.current) setParamLoading(false);
+    }
+  };
+
   const vehicleStatus = useMemo(() => {
     const isConnected = connectionState === 'connected';
     const isArmed = telemetry.state.armed;
@@ -45,13 +68,14 @@ export default function DashboardScreen() {
     if (!isConnected) statusLevel = 'critical';
     else if (isArmed && telemetry.state.system_status === 'ACTIVE') statusLevel = 'healthy';
     else if (isArmed) statusLevel = 'warning';
+    
     return {
       isConnected,
       armStatus: isArmed ? 'ARMED' : 'DISARMED',
       statusLevel,
       fixTypeLabel: getFixTypeLabel(telemetry.rtk.fix_type),
       mode: telemetry.state.mode || 'UNKNOWN',
-      systemStatus: telemetry.state.system_status || 'UNKNOWN',
+      systemStatus: isArmed ? 'ARMED' : 'DISARMED', // Same logic as pills
     };
   }, [telemetry.state.armed, telemetry.state.mode, telemetry.state.system_status, telemetry.rtk.fix_type, connectionState]);
 
@@ -335,6 +359,61 @@ export default function DashboardScreen() {
               </View>
             </View>
 
+          </View>
+        </View>
+
+        {/* ── PARAMETER FILE CARD ── */}
+        <View style={styles.card}>
+          <View style={[styles.cardAccent, { backgroundColor: '#8B5CF6' }]} />
+          <View style={styles.cardBody}>
+            <View style={styles.cardHeaderRow}>
+              <View style={styles.cardHeaderLeft}>
+                <View style={[styles.cardIconWrap, { borderColor: 'rgba(139, 92, 246, 0.4)' }]}>
+                  <MaterialCommunityIcons name="file-cog-outline" size={18} color="#8B5CF6" />
+                </View>
+                <Text style={styles.cardLabel}>PARAMETER FILE</Text>
+              </View>
+              <View style={[styles.statusBadge, { backgroundColor: 'rgba(139, 92, 246, 0.2)', borderColor: '#8B5CF6' }]}>
+                <View style={[styles.statusBadgeDot, { backgroundColor: '#8B5CF6' }]} />
+                <Text style={[styles.statusBadgeText, { color: '#A78BFA' }]}>.PARAM</Text>
+              </View>
+            </View>
+            <Text style={styles.paramFileDesc}>
+              Save or load all vehicle parameters as Mission Planner .param file
+            </Text>
+            <View style={styles.paramFileBtnRow}>
+              <TouchableOpacity
+                style={[styles.paramFileBtn, styles.paramFileSaveBtn, (connectionState !== 'connected' || paramSaving) && styles.paramFileBtnDisabled]}
+                onPress={handleSaveParams}
+                disabled={connectionState !== 'connected' || paramSaving}
+              >
+                {paramSaving ? (
+                  <ActivityIndicator size={16} color="#4ade80" />
+                ) : (
+                  <Ionicons name="download-outline" size={16} color="#4ade80" />
+                )}
+                <Text style={[styles.paramFileBtnText, { color: '#4ade80' }]}>
+                  {paramSaving ? 'SAVING...' : 'SAVE TO FILE'}
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.paramFileBtn, styles.paramFileLoadBtn, (connectionState !== 'connected' || paramLoading) && styles.paramFileBtnDisabled]}
+                onPress={handleLoadParams}
+                disabled={connectionState !== 'connected' || paramLoading}
+              >
+                {paramLoading ? (
+                  <ActivityIndicator size={16} color="#60A5FA" />
+                ) : (
+                  <Ionicons name="push-outline" size={16} color="#60A5FA" />
+                )}
+                <Text style={[styles.paramFileBtnText, { color: '#60A5FA' }]}>
+                  {paramLoading ? 'LOADING...' : 'LOAD FROM FILE'}
+                </Text>
+              </TouchableOpacity>
+            </View>
+            {connectionState !== 'connected' && (
+              <Text style={styles.disconnectedText}>Connect to vehicle first</Text>
+            )}
           </View>
         </View>
 
@@ -733,6 +812,48 @@ const styles = StyleSheet.create({
     fontStyle: 'italic',
     textAlign: 'center',
     paddingVertical: 12,
+  },
+
+  // ── PARAMETER FILE CARD ──
+  paramFileDesc: {
+    color: colors.textSecondary,
+    fontSize: 13,
+    fontWeight: '500',
+    marginTop: 4,
+  },
+  paramFileBtnRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginTop: 8,
+  },
+  paramFileBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    borderRadius: 10,
+    borderWidth: 2,
+    borderColor: colors.border,
+  },
+  paramFileSaveBtn: {
+    backgroundColor: 'rgba(74, 222, 128, 0.08)',
+    borderColor: 'rgba(74, 222, 128, 0.3)',
+  },
+  paramFileLoadBtn: {
+    backgroundColor: 'rgba(96, 165, 250, 0.08)',
+    borderColor: 'rgba(96, 165, 250, 0.3)',
+  },
+  paramFileBtnDisabled: {
+    backgroundColor: colors.cardBg,
+    opacity: 0.4,
+  },
+  paramFileBtnText: {
+    fontWeight: '700',
+    fontSize: 11,
+    letterSpacing: 0.5,
   },
 
   // ── ROBOT SETTINGS CARD ──

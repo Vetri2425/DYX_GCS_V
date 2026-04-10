@@ -1,12 +1,12 @@
 /**
  * Step1_ParamCheck — QuickTune Wizard Step 1
  *
- * Displays all 18 PRETUNE_PARAMS with current vs expected (recommended) values.
- * - Inline editable numeric input for params that don't match
- * - Calls services.setParam() to update mismatched values
+ * Displays all PRETUNE_PARAMS with current vs expected (recommended) values.
  * - Shows OK/WARN badge per param
- * - Next button enabled only when all params match
+ * - Tap the pencil on any current value to edit it inline
+ * - Tap the expected value chip to apply the recommended value in one tap
  * - Reboot warning if SCR_ENABLE was changed
+ * - Next button always enabled (no fix required to proceed)
  */
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
@@ -15,42 +15,41 @@ import {
   Text,
   StyleSheet,
   ScrollView,
-  TextInput,
   TouchableOpacity,
   ActivityIndicator,
+  TextInput,
   Platform,
+  Keyboard,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { colors } from '../../../theme/colors';
 import { useRover } from '../../../context/RoverContext';
 import { PRETUNE_PARAMS } from '../../../types/quicktune';
+import { QUICKTUNE_AUX_CHANNEL, PARAM_APPLY_STATUS_CLEAR_MS } from '../../../constants/quicktune';
+import { qtLog } from '../../../utils/quicktuneLogger';
 
-// Recommended values for each pretune param (these come from the tuning script)
 const RECOMMENDED_VALUES: Record<string, number> = {
-  ATC_ACC_MAX: 3.0,
-  ATC_DECEL_MAX: 3.0,
-  ATC_SPEED_UP: 1.5,
-  ATC_SPEED_DN: 1.5,
-  ATC_TURN_MAX: 1.0,
-  ATC_STR_RAT_P: 0.5,
-  ATC_STR_RAT_I: 0.05,
-  ATC_STR_RAT_D: 0.01,
-  ATC_STR_RAT_IMAX: 0.5,
-  WHEEL_RADIUS: 0.1,
-  WHEEL_BASE: 0.3,
-  WHEEL_TRACK: 0.35,
-  MOT_THST_HOVER: 0.35,
-  MOT_THST_MAX: 0.9,
-  NAVL1_PERIOD: 2.0,
-  NAVL1_DAMPING: 0.7,
-  SCHED_SPEED_MAX: 2.0,
-  SCHED_TURN_MAX: 1.0,
+  SCR_ENABLE: 1,
+  RTUN_ENABLE: 1,
+  RTUN_AXES: 3,
+  RTUN_RC_FUNC: QUICKTUNE_AUX_CHANNEL,
+  RTUN_AUTO_SAVE: 5,
+  RTUN_AUTO_FILTER: 1,
+  RTUN_STR_FFRATIO: 0.9,
+  RTUN_STR_P_RATIO: 0.5,
+  RTUN_STR_I_RATIO: 0.5,
+  RTUN_SPD_FFRATIO: 1.0,
+  RTUN_SPD_P_RATIO: 1.0,
+  RTUN_SPD_I_RATIO: 1.0,
+  CIRC_SPEED: 1.0,
+  CIRC_RADIUS: 4.0,
+  CIRC_DIR: 0,
+  ATC_STR_ACC_MAX: 120.0,
+  ATC_STR_RAT_MAX: 120.0,
+  ATC_BRAKE: 1,
 };
 
-// Params that require a reboot after change
 const REBOOT_REQUIRED_PARAMS = new Set(['SCR_ENABLE']);
-
-// Tolerance for considering values "matching" (floating-point comparison)
 const MATCH_TOLERANCE = 0.001;
 
 interface Step1ParamCheckProps {
@@ -58,17 +57,19 @@ interface Step1ParamCheckProps {
   onBack?: () => void;
 }
 
+// ── ParamRow ──────────────────────────────────────────────────────────────────
+
 interface ParamRowProps {
   name: string;
   currentValue: number | null;
   recommendedValue: number;
   isLoading: boolean;
+  applyResult: 'success' | 'error' | null;
   isEditing: boolean;
-  isApplying: boolean;
-  applyResult: 'idle' | 'success' | 'error' | null;
+  onApplyRecommended: () => void;
   onStartEdit: () => void;
-  onChangeText: (text: string) => void;
-  onFinishEdit: () => void;
+  onConfirmEdit: (raw: string) => void;
+  onCancelEdit: () => void;
 }
 
 const ParamRow: React.FC<ParamRowProps> = ({
@@ -76,17 +77,35 @@ const ParamRow: React.FC<ParamRowProps> = ({
   currentValue,
   recommendedValue,
   isLoading,
-  isEditing,
-  isApplying,
   applyResult,
+  isEditing,
+  onApplyRecommended,
   onStartEdit,
-  onChangeText,
-  onFinishEdit,
+  onConfirmEdit,
+  onCancelEdit,
 }) => {
+  const [editText, setEditText] = useState('');
+  const inputRef = useRef<TextInput>(null);
+
+  // When edit mode opens, seed the input with the current value
+  useEffect(() => {
+    if (isEditing) {
+      const seed =
+        currentValue !== null
+          ? Number.isInteger(currentValue)
+            ? String(currentValue)
+            : currentValue.toFixed(4)
+          : '';
+      setEditText(seed);
+      // Small delay so the row has rendered before focusing
+      setTimeout(() => inputRef.current?.focus(), 50);
+    }
+  }, [isEditing, currentValue]);
+
   const matches =
     currentValue !== null &&
     Math.abs(currentValue - recommendedValue) <= MATCH_TOLERANCE;
-  const hasChanged =
+  const hasDiff =
     currentValue !== null &&
     Math.abs(currentValue - recommendedValue) > MATCH_TOLERANCE;
   const needsReboot = REBOOT_REQUIRED_PARAMS.has(name);
@@ -102,11 +121,11 @@ const ParamRow: React.FC<ParamRowProps> = ({
     : recommendedValue.toFixed(4);
 
   return (
-    <View style={styles.row}>
-      {/* Left: param name + badge */}
+    <View style={[styles.row, isEditing && styles.rowEditing]}>
+      {/* Left: param name + status badge */}
       <View style={styles.rowLeft}>
         <View style={styles.nameRow}>
-          <Text style={styles.paramName}>{name}</Text>
+          <Text style={styles.paramName} numberOfLines={1}>{name}</Text>
           {needsReboot && (
             <View style={styles.rebootBadge}>
               <Ionicons name="refresh-circle" size={12} color={colors.warning} />
@@ -115,71 +134,100 @@ const ParamRow: React.FC<ParamRowProps> = ({
           )}
         </View>
         <View style={styles.badgeRow}>
-          {matches ? (
+          {isLoading ? (
+            <View style={[styles.badge, styles.badgePending]}>
+              <ActivityIndicator size="small" color={colors.textMuted} />
+            </View>
+          ) : matches ? (
             <View style={[styles.badge, styles.badgeOk]}>
               <Ionicons name="checkmark-circle" size={10} color={colors.success} />
               <Text style={[styles.badgeText, styles.badgeTextOk]}>OK</Text>
             </View>
-          ) : hasChanged ? (
+          ) : hasDiff ? (
             <View style={[styles.badge, styles.badgeWarn]}>
               <Ionicons name="warning" size={10} color={colors.warning} />
-              <Text style={[styles.badgeText, styles.badgeTextWarn]}>WARN</Text>
+              <Text style={[styles.badgeText, styles.badgeTextWarn]}>DIFF</Text>
             </View>
           ) : (
             <View style={[styles.badge, styles.badgePending]}>
-              <ActivityIndicator size="small" color={colors.textMuted} />
+              <Text style={styles.badgeText}>—</Text>
             </View>
           )}
         </View>
       </View>
 
-      {/* Center: current value */}
+      {/* Center: current value — editable */}
       <View style={styles.rowCenter}>
         {isLoading ? (
           <ActivityIndicator size="small" color={colors.textMuted} />
-        ) : (
-          <Text style={styles.currentValueText}>{displayCurrent}</Text>
-        )}
-      </View>
-
-      {/* Right: expected / editable value */}
-      <View style={styles.rowRight}>
-        {isEditing ? (
-          <TextInput
-            style={[
-              styles.editInput,
-              applyResult === 'success' && styles.editInputSuccess,
-              applyResult === 'error' && styles.editInputError,
-            ]}
-            value={String(recommendedValue)}
-            editable={false}
-            selectTextOnFocus
-            autoFocus
-            keyboardType="decimal-pad"
-            returnKeyType="done"
-            onSubmitEditing={onFinishEdit}
-            onBlur={onFinishEdit}
-          />
-        ) : applyResult === 'success' ? (
-          <View style={styles.applyStatusWrap}>
-            <Ionicons name="checkmark-circle" size={18} color={colors.success} />
-          </View>
-        ) : applyResult === 'error' ? (
-          <View style={styles.applyStatusWrap}>
-            <Ionicons name="close-circle" size={18} color={colors.danger} />
+        ) : isEditing ? (
+          <View style={styles.editRow}>
+            <TextInput
+              ref={inputRef}
+              style={styles.editInput}
+              value={editText}
+              onChangeText={setEditText}
+              keyboardType="decimal-pad"
+              returnKeyType="done"
+              selectTextOnFocus
+              onSubmitEditing={() => onConfirmEdit(editText)}
+              accessibilityLabel={`Edit value for ${name}`}
+            />
+            <TouchableOpacity
+              style={styles.editConfirmBtn}
+              onPress={() => onConfirmEdit(editText)}
+              accessibilityRole="button"
+              accessibilityLabel="Confirm edit"
+            >
+              <Ionicons name="checkmark" size={14} color="#fff" />
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.editCancelBtn}
+              onPress={onCancelEdit}
+              accessibilityRole="button"
+              accessibilityLabel="Cancel edit"
+            >
+              <Ionicons name="close" size={14} color={colors.textSecondary} />
+            </TouchableOpacity>
           </View>
         ) : (
           <TouchableOpacity
+            style={styles.currentValueBtn}
+            onPress={onStartEdit}
+            activeOpacity={0.7}
+            accessibilityRole="button"
+            accessibilityLabel={`Edit ${name}, current value ${displayCurrent}`}
+          >
+            {applyResult === 'success' ? (
+              <Ionicons name="checkmark-circle" size={16} color={colors.success} />
+            ) : applyResult === 'error' ? (
+              <Ionicons name="close-circle" size={16} color={colors.danger} />
+            ) : (
+              <>
+                <Text style={styles.currentValueText}>{displayCurrent}</Text>
+                <Ionicons name="pencil" size={11} color={colors.textMuted} style={styles.pencilIcon} />
+              </>
+            )}
+          </TouchableOpacity>
+        )}
+      </View>
+
+      {/* Right: recommended value — one-tap apply */}
+      <View style={styles.rowRight}>
+        {!isEditing && (
+          <TouchableOpacity
             style={[
               styles.expectedValueBtn,
-              hasChanged && styles.expectedValueBtnMismatch,
+              hasDiff && styles.expectedValueBtnMismatch,
             ]}
-            onPress={hasChanged ? onStartEdit : undefined}
-            activeOpacity={0.7}
+            onPress={hasDiff ? onApplyRecommended : undefined}
+            activeOpacity={hasDiff ? 0.7 : 1}
+            accessibilityRole="button"
+            accessibilityLabel={hasDiff ? `Apply recommended value ${displayRecommended} for ${name}` : undefined}
           >
             <Text style={styles.expectedValueText}>{displayRecommended}</Text>
-            {hasChanged && (
-              <Ionicons name="create-outline" size={12} color={colors.textMuted} style={styles.editIcon} />
+            {hasDiff && (
+              <Ionicons name="flash" size={11} color={colors.warning} style={styles.flashIcon} />
             )}
           </TouchableOpacity>
         )}
@@ -188,44 +236,44 @@ const ParamRow: React.FC<ParamRowProps> = ({
   );
 };
 
+// ── Main Component ────────────────────────────────────────────────────────────
+
 export const Step1ParamCheck: React.FC<Step1ParamCheckProps> = ({ onNext, onBack }) => {
   const { services, connectionState } = useRover();
   const isConnected = connectionState === 'connected';
 
   const [currentValues, setCurrentValues] = useState<Record<string, number | null>>({});
   const [loadingParams, setLoadingParams] = useState<Record<string, boolean>>({});
+  const [applyStatus, setApplyStatus] = useState<Record<string, 'success' | 'error' | null>>({});
   const [editingParam, setEditingParam] = useState<string | null>(null);
-  const [applyStatus, setApplyStatus] = useState<Record<string, 'idle' | 'applying' | 'success' | 'error' | null>>({});
-  const [isApplyingAll, setIsApplyingAll] = useState(false);
   const [scrEnableChanged, setScrEnableChanged] = useState(false);
   const mountedRef = useRef(true);
+  const applyStatusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;
+      if (applyStatusTimerRef.current !== null) {
+        clearTimeout(applyStatusTimerRef.current);
+        applyStatusTimerRef.current = null;
+      }
     };
   }, []);
 
-  // Load current param values from rover
+  // Load all param values on connect
   useEffect(() => {
     if (!isConnected) return;
 
     const loadParams = async () => {
       const loadingInit: Record<string, boolean> = {};
-      PRETUNE_PARAMS.forEach((p) => {
-        loadingInit[p] = true;
-      });
+      PRETUNE_PARAMS.forEach((p) => { loadingInit[p] = true; });
       setLoadingParams(loadingInit);
 
-      // Load all params in parallel for speed
       const results = await Promise.allSettled(
         PRETUNE_PARAMS.map(async (name) => {
-          try {
-            return await services.getParam(name);
-          } catch (err) {
-            return { success: false, param: null, error: err };
-          }
+          try { return await services.getParam(name); }
+          catch (err) { return { success: false, param: null, error: err }; }
         })
       );
 
@@ -233,13 +281,11 @@ export const Step1ParamCheck: React.FC<Step1ParamCheckProps> = ({ onNext, onBack
 
       const values: Record<string, number | null> = {};
       const loadingAfter: Record<string, boolean> = {};
-
       results.forEach((result, index) => {
         const name = PRETUNE_PARAMS[index];
         loadingAfter[name] = false;
         if (result.status === 'fulfilled' && result.value.success) {
-          const paramValue = (result.value as any).param?.value;
-          values[name] = paramValue ?? null;
+          values[name] = result.value.param?.value ?? null;
         } else {
           values[name] = null;
         }
@@ -252,106 +298,77 @@ export const Step1ParamCheck: React.FC<Step1ParamCheckProps> = ({ onNext, onBack
     loadParams();
   }, [isConnected, services]);
 
-  // Check if SCR_ENABLE was changed
   useEffect(() => {
     const scrCurrent = currentValues['SCR_ENABLE'];
-    if (scrCurrent !== null) {
-      // SCR_ENABLE expected value is typically 1 (scripting enabled)
-      const scrExpected = 1;
-      setScrEnableChanged(Math.abs(scrCurrent - scrExpected) > MATCH_TOLERANCE);
+    if (scrCurrent !== null && scrCurrent !== undefined) {
+      setScrEnableChanged(Math.abs(scrCurrent - 1) > MATCH_TOLERANCE);
     }
   }, [currentValues]);
 
-  // Determine which params don't match
-  const mismatchedParams = PRETUNE_PARAMS.filter((name) => {
-    const current = currentValues[name];
-    if (current === null || current === undefined) return false;
-    return Math.abs(current - RECOMMENDED_VALUES[name]) > MATCH_TOLERANCE;
-  });
-
-  const allParamsMatch = mismatchedParams.length === 0;
-  const isLoading = Object.values(loadingParams).some((v) => v);
-
-  // Apply a single param via services.setParam
-  const applyParam = useCallback(
-    async (name: string, value: number): Promise<boolean> => {
-      setApplyStatus((prev) => ({ ...prev, [name]: 'applying' }));
-      try {
-        const result = await services.setParam(name, value);
-        if (!mountedRef.current) return false;
-
-        if (result.success) {
-          setApplyStatus((prev) => ({ ...prev, [name]: 'success' }));
-          setCurrentValues((prev) => ({ ...prev, [name]: value }));
-          return true;
-        } else {
-          setApplyStatus((prev) => ({ ...prev, [name]: 'error' }));
-          console.warn(`[Step1ParamCheck] setParam failed: ${name}`, result.message);
-          return false;
-        }
-      } catch (err) {
-        if (!mountedRef.current) return false;
-        setApplyStatus((prev) => ({ ...prev, [name]: 'error' }));
-        console.error(`[Step1ParamCheck] setParam error: ${name}`, err);
-        return false;
+  const scheduleStatusClear = useCallback((name: string) => {
+    applyStatusTimerRef.current = setTimeout(() => {
+      applyStatusTimerRef.current = null;
+      if (mountedRef.current) {
+        setApplyStatus((prev) => ({ ...prev, [name]: null }));
       }
-    },
-    [services]
-  );
-
-  // Apply all mismatched params
-  const handleApplyAll = useCallback(async () => {
-    if (!isConnected || mismatchedParams.length === 0 || isApplyingAll) return;
-
-    setIsApplyingAll(true);
-    let allSuccess = true;
-
-    for (const name of mismatchedParams) {
-      const success = await applyParam(name, RECOMMENDED_VALUES[name]);
-      if (!success) {
-        allSuccess = false;
-      }
-    }
-
-    if (mountedRef.current) {
-      setIsApplyingAll(false);
-
-      // Reset apply status after delay
-      setTimeout(() => {
-        if (mountedRef.current) {
-          setApplyStatus({});
-        }
-      }, 3000);
-
-      // Show reboot alert if SCR_ENABLE was among changed params
-      if (scrEnableChanged) {
-        // This is handled by the useEffect above; alert shown below
-      }
-    }
-  }, [isConnected, mismatchedParams, isApplyingAll, applyParam, scrEnableChanged]);
-
-  // Start inline editing for a param
-  const handleStartEdit = useCallback((name: string) => {
-    setEditingParam(name);
+    }, PARAM_APPLY_STATUS_CLEAR_MS);
   }, []);
 
-  // Finish editing — apply the recommended value
-  const handleFinishEdit = useCallback(async () => {
-    if (!editingParam) return;
-    const name = editingParam;
-    setEditingParam(null);
-    await applyParam(name, RECOMMENDED_VALUES[name]);
-  }, [editingParam, applyParam]);
-
-  // Handle Next — ensure all match first
-  const handleNext = useCallback(() => {
-    if (allParamsMatch && onNext) {
-      onNext();
+  // Write a value to the rover and update local state
+  const writeParam = useCallback(async (name: string, value: number) => {
+    if (!isConnected) return;
+    setApplyStatus((prev) => ({ ...prev, [name]: null }));
+    qtLog.api('Step1', 'POST', `/api/params/${name}`, { value });
+    try {
+      const result = await services.setParam(name, value);
+      if (!mountedRef.current) return;
+      if (result.success) {
+        qtLog.info('Step1', `${name} set to ${value}`);
+        setApplyStatus((prev) => ({ ...prev, [name]: 'success' }));
+        setCurrentValues((prev) => ({ ...prev, [name]: value }));
+      } else {
+        qtLog.warn('Step1', `setParam ${name} returned success=false`);
+        setApplyStatus((prev) => ({ ...prev, [name]: 'error' }));
+      }
+    } catch (err) {
+      qtLog.error('Step1', `setParam ${name} failed`, err);
+      if (!mountedRef.current) return;
+      setApplyStatus((prev) => ({ ...prev, [name]: 'error' }));
     }
-  }, [allParamsMatch, onNext]);
+    scheduleStatusClear(name);
+  }, [isConnected, services, scheduleStatusClear]);
 
-  // Show reboot warning if SCR_ENABLE was changed
-  const showRebootWarning = scrEnableChanged || (applyStatus['SCR_ENABLE'] === 'success' && REBOOT_REQUIRED_PARAMS.has('SCR_ENABLE'));
+  // Apply recommended value in one tap
+  const handleApplyRecommended = useCallback((name: string) => {
+    writeParam(name, RECOMMENDED_VALUES[name]);
+  }, [writeParam]);
+
+  // Open inline editor for a param
+  const handleStartEdit = useCallback((name: string) => {
+    if (!isConnected) return;
+    Keyboard.dismiss(); // close any open keyboard first
+    setEditingParam(name);
+  }, [isConnected]);
+
+  // Confirm custom value from inline editor
+  const handleConfirmEdit = useCallback((name: string, raw: string) => {
+    setEditingParam(null);
+    Keyboard.dismiss();
+    const parsed = parseFloat(raw.replace(',', '.'));
+    if (isNaN(parsed)) {
+      qtLog.warn('Step1', `Invalid edit input for ${name}: "${raw}"`);
+      return;
+    }
+    writeParam(name, parsed);
+  }, [writeParam]);
+
+  const handleCancelEdit = useCallback(() => {
+    setEditingParam(null);
+    Keyboard.dismiss();
+  }, []);
+
+  const isLoading = Object.values(loadingParams).some((v) => v);
+  const showRebootWarning = scrEnableChanged || applyStatus['SCR_ENABLE'] === 'success';
 
   return (
     <View style={styles.container}>
@@ -366,27 +383,13 @@ export const Step1ParamCheck: React.FC<Step1ParamCheckProps> = ({ onNext, onBack
             <Text style={styles.headerSubtitle}>
               {isLoading
                 ? 'Loading parameters…'
-                : allParamsMatch
-                ? 'All parameters match expected values'
-                : `${mismatchedParams.length} parameter${mismatchedParams.length !== 1 ? 's' : ''} need${mismatchedParams.length === 1 ? 's' : ''} adjustment`}
+                : 'Tap ✏ to edit · tap expected value to apply recommended'}
             </Text>
           </View>
         </View>
-        {!isLoading && (
-          <View style={[styles.statusBadge, allParamsMatch ? styles.statusBadgeOk : styles.statusBadgeWarn]}>
-            <Ionicons
-              name={allParamsMatch ? 'checkmark-circle' : 'warning'}
-              size={14}
-              color={allParamsMatch ? colors.success : colors.warning}
-            />
-            <Text style={[styles.statusBadgeText, { color: allParamsMatch ? colors.success : colors.warning }]}>
-              {allParamsMatch ? 'READY' : 'ACTION NEEDED'}
-            </Text>
-          </View>
-        )}
       </View>
 
-      {/* Connection warning banner */}
+      {/* Connection warning */}
       {!isConnected && (
         <View style={styles.warningBanner}>
           <Ionicons name="cloud-offline-outline" size={16} color={colors.warning} />
@@ -396,12 +399,12 @@ export const Step1ParamCheck: React.FC<Step1ParamCheckProps> = ({ onNext, onBack
         </View>
       )}
 
-      {/* Reboot warning banner */}
+      {/* Reboot warning */}
       {showRebootWarning && (
         <View style={styles.rebootBanner}>
           <Ionicons name="refresh-circle" size={18} color={colors.warning} />
           <Text style={styles.rebootBannerText}>
-            SCR_ENABLE was changed. A vehicle reboot is required for this change to take effect.
+            SCR_ENABLE was changed. A vehicle reboot is required.
           </Text>
         </View>
       )}
@@ -414,7 +417,11 @@ export const Step1ParamCheck: React.FC<Step1ParamCheckProps> = ({ onNext, onBack
       </View>
 
       {/* Parameter list */}
-      <ScrollView style={styles.listScroll} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
+      <ScrollView
+        style={styles.listScroll}
+        showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
+      >
         {PRETUNE_PARAMS.map((name) => (
           <ParamRow
             key={name}
@@ -422,15 +429,15 @@ export const Step1ParamCheck: React.FC<Step1ParamCheckProps> = ({ onNext, onBack
             currentValue={currentValues[name] ?? null}
             recommendedValue={RECOMMENDED_VALUES[name]}
             isLoading={loadingParams[name] || false}
+            applyResult={applyStatus[name] ?? null}
             isEditing={editingParam === name}
-            isApplying={false}
-            applyResult={'idle'}
+            onApplyRecommended={() => handleApplyRecommended(name)}
             onStartEdit={() => handleStartEdit(name)}
-            onChangeText={() => {}}
-            onFinishEdit={handleFinishEdit}
+            onConfirmEdit={(raw) => handleConfirmEdit(name, raw)}
+            onCancelEdit={handleCancelEdit}
           />
         ))}
-        <View style={{ height: 100 }} />
+        <View style={styles.scrollSpacer} />
       </ScrollView>
 
       {/* Bottom bar */}
@@ -440,45 +447,19 @@ export const Step1ParamCheck: React.FC<Step1ParamCheckProps> = ({ onNext, onBack
             style={styles.backBtn}
             onPress={onBack}
             activeOpacity={0.7}
+            accessibilityRole="button"
+            accessibilityLabel="Go back"
           >
             <Ionicons name="arrow-back" size={18} color={colors.text} />
             <Text style={styles.backBtnText}>Back</Text>
           </TouchableOpacity>
         )}
-
-        {/* Apply All button — shown when params mismatch */}
-        {!allParamsMatch && isConnected && (
-          <TouchableOpacity
-            style={[
-              styles.applyAllBtn,
-              (isApplyingAll || !isConnected) && styles.applyAllBtnDisabled,
-            ]}
-            onPress={handleApplyAll}
-            disabled={isApplyingAll || !isConnected}
-            activeOpacity={0.7}
-          >
-            {isApplyingAll ? (
-              <ActivityIndicator color={colors.text} />
-            ) : (
-              <>
-                <Ionicons name="checkmark-circle-outline" size={18} color={colors.text} />
-                <Text style={styles.applyAllBtnText}>
-                  Fix {mismatchedParams.length} Parameter{mismatchedParams.length !== 1 ? 's' : ''}
-                </Text>
-              </>
-            )}
-          </TouchableOpacity>
-        )}
-
-        {/* Next button — only enabled when all params match */}
         <TouchableOpacity
-          style={[
-            styles.nextBtn,
-            (!allParamsMatch || !isConnected) && styles.nextBtnDisabled,
-          ]}
-          onPress={handleNext}
-          disabled={!allParamsMatch || !isConnected}
+          style={styles.nextBtn}
+          onPress={() => onNext?.()}
           activeOpacity={0.7}
+          accessibilityRole="button"
+          accessibilityLabel="Proceed to next step"
         >
           <Text style={styles.nextBtnText}>Next</Text>
           <Ionicons name="arrow-forward" size={18} color={colors.text} />
@@ -488,361 +469,146 @@ export const Step1ParamCheck: React.FC<Step1ParamCheckProps> = ({ onNext, onBack
   );
 };
 
-// ─── Styles ───
+// ─── Styles ───────────────────────────────────────────────────────────────────
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: colors.primary,
-  },
+  container: { flex: 1, backgroundColor: colors.primary },
 
-  // Header
   header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingTop: 16,
-    paddingBottom: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.border,
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingHorizontal: 16, paddingTop: 16, paddingBottom: 12,
+    borderBottomWidth: 1, borderBottomColor: colors.border,
   },
-  headerLeft: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    flex: 1,
-  },
+  headerLeft: { flexDirection: 'row', alignItems: 'center', gap: 12, flex: 1 },
   headerIconWrap: {
-    width: 36,
-    height: 36,
-    borderRadius: 10,
-    backgroundColor: colors.accent + '18',
-    borderWidth: 1,
-    borderColor: colors.accent + '40',
-    justifyContent: 'center',
-    alignItems: 'center',
+    width: 36, height: 36, borderRadius: 10,
+    backgroundColor: colors.accent + '18', borderWidth: 1, borderColor: colors.accent + '40',
+    justifyContent: 'center', alignItems: 'center',
   },
-  headerTitle: {
-    fontSize: 17,
-    fontWeight: '700',
-    color: colors.text,
-    letterSpacing: 0.5,
-  },
-  headerSubtitle: {
-    fontSize: 11,
-    color: colors.textMuted,
-    marginTop: 2,
-  },
-  statusBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 6,
-    borderWidth: 1,
-  },
-  statusBadgeOk: {
-    backgroundColor: colors.success + '18',
-    borderColor: colors.success + '55',
-  },
-  statusBadgeWarn: {
-    backgroundColor: colors.warning + '18',
-    borderColor: colors.warning + '55',
-  },
-  statusBadgeText: {
-    fontSize: 9,
-    fontWeight: '700',
-    letterSpacing: 1,
-  },
+  headerTitle: { fontSize: 17, fontWeight: '700', color: colors.text, letterSpacing: 0.5 },
+  headerSubtitle: { fontSize: 11, color: colors.textMuted, marginTop: 2 },
 
-  // Warning banner (connection)
   warningBanner: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    marginHorizontal: 12,
-    marginTop: 8,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 8,
-    backgroundColor: colors.warning + '12',
-    borderWidth: 1,
-    borderColor: colors.warning + '30',
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    marginHorizontal: 12, marginTop: 8, paddingHorizontal: 12, paddingVertical: 8,
+    borderRadius: 8, backgroundColor: colors.warning + '12', borderWidth: 1, borderColor: colors.warning + '30',
   },
-  warningText: {
-    flex: 1,
-    fontSize: 11,
-    color: colors.warning,
-    fontWeight: '500',
-  },
-
-  // Reboot banner
+  warningText: { flex: 1, fontSize: 11, color: colors.warning, fontWeight: '500' },
   rebootBanner: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    marginHorizontal: 12,
-    marginTop: 8,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 8,
-    backgroundColor: colors.warning + '12',
-    borderWidth: 1,
-    borderColor: colors.warning + '30',
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    marginHorizontal: 12, marginTop: 8, paddingHorizontal: 12, paddingVertical: 8,
+    borderRadius: 8, backgroundColor: colors.warning + '12', borderWidth: 1, borderColor: colors.warning + '30',
   },
-  rebootBannerText: {
-    flex: 1,
-    fontSize: 11,
-    color: colors.warning,
-    fontWeight: '500',
-  },
+  rebootBannerText: { flex: 1, fontSize: 11, color: colors.warning, fontWeight: '500' },
 
-  // Table header
   tableHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    marginTop: 8,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.border,
-    backgroundColor: colors.secondary,
+    flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, paddingVertical: 8,
+    marginTop: 8, borderBottomWidth: 1, borderBottomColor: colors.border, backgroundColor: colors.secondary,
   },
-  tableHeaderCell: {
-    fontSize: 10,
-    fontWeight: '700',
-    color: colors.textMuted,
-    letterSpacing: 1,
-    textTransform: 'uppercase',
-  },
-  tableHeaderParam: {
-    flex: 2,
-  },
-  tableHeaderValue: {
-    flex: 1,
-    textAlign: 'center',
-  },
+  tableHeaderCell: { fontSize: 10, fontWeight: '700', color: colors.textMuted, letterSpacing: 1, textTransform: 'uppercase' },
+  tableHeaderParam: { flex: 2 },
+  tableHeaderValue: { flex: 1, textAlign: 'center' },
 
-  // List
-  listScroll: {
-    flex: 1,
-  },
+  listScroll: { flex: 1 },
 
   // Row
   row: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.border + '40',
-    minHeight: 52,
+    flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, paddingVertical: 10,
+    borderBottomWidth: 1, borderBottomColor: colors.border + '40', minHeight: 52,
   },
-  rowLeft: {
-    flex: 2,
-    paddingRight: 6,
+  rowEditing: {
+    backgroundColor: colors.accent + '08',
+    borderBottomColor: colors.accent + '40',
   },
-  nameRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-  },
+  rowLeft: { flex: 2, paddingRight: 6 },
+  nameRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   paramName: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: colors.textPrimary,
+    fontSize: 12, fontWeight: '600', color: colors.textPrimary,
     fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
   },
   rebootBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 2,
-    backgroundColor: colors.warning + '25',
-    borderRadius: 3,
-    paddingHorizontal: 4,
-    paddingVertical: 1,
+    flexDirection: 'row', alignItems: 'center', gap: 2,
+    backgroundColor: colors.warning + '25', borderRadius: 3, paddingHorizontal: 4, paddingVertical: 1,
   },
-  rebootBadgeText: {
-    fontSize: 7,
-    fontWeight: '700',
-    color: colors.warning,
-    letterSpacing: 0.5,
-  },
-  badgeRow: {
-    marginTop: 3,
-  },
+  rebootBadgeText: { fontSize: 7, fontWeight: '700', color: colors.warning, letterSpacing: 0.5 },
+  badgeRow: { marginTop: 3 },
   badge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 3,
-    alignSelf: 'flex-start',
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 5,
-    borderWidth: 1,
+    flexDirection: 'row', alignItems: 'center', gap: 3, alignSelf: 'flex-start',
+    paddingHorizontal: 6, paddingVertical: 2, borderRadius: 5, borderWidth: 1,
   },
-  badgeOk: {
-    backgroundColor: colors.success + '15',
-    borderColor: colors.success + '35',
-  },
-  badgeWarn: {
-    backgroundColor: colors.warning + '15',
-    borderColor: colors.warning + '35',
-  },
-  badgePending: {
-    backgroundColor: colors.textMuted + '15',
-    borderColor: colors.textMuted + '25',
-  },
-  badgeText: {
-    fontSize: 8,
-    fontWeight: '700',
-    letterSpacing: 1,
-  },
-  badgeTextOk: {
-    color: colors.success,
-  },
-  badgeTextWarn: {
-    color: colors.warning,
-  },
+  badgeOk: { backgroundColor: colors.success + '15', borderColor: colors.success + '35' },
+  badgeWarn: { backgroundColor: colors.warning + '15', borderColor: colors.warning + '35' },
+  badgePending: { backgroundColor: colors.textMuted + '15', borderColor: colors.textMuted + '25' },
+  badgeText: { fontSize: 8, fontWeight: '700', letterSpacing: 1, color: colors.textMuted },
+  badgeTextOk: { color: colors.success },
+  badgeTextWarn: { color: colors.warning },
 
-  rowCenter: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
+  // Current value cell
+  rowCenter: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  currentValueBtn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4,
+    paddingHorizontal: 6, paddingVertical: 5, borderRadius: 6,
+    backgroundColor: colors.cardBg, borderWidth: 1, borderColor: colors.border,
+    minWidth: 56,
   },
   currentValueText: {
-    fontSize: 12,
-    color: colors.textSecondary,
+    fontSize: 12, color: colors.textSecondary,
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace', textAlign: 'center',
+  },
+  pencilIcon: { opacity: 0.6 },
+
+  // Inline edit
+  editRow: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  editInput: {
+    flex: 1, minWidth: 52, maxWidth: 72,
+    backgroundColor: colors.secondary,
+    borderWidth: 1, borderColor: colors.accent,
+    borderRadius: 6, paddingHorizontal: 6, paddingVertical: 4,
+    color: colors.text, fontSize: 12,
     fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
     textAlign: 'center',
+  },
+  editConfirmBtn: {
+    width: 24, height: 24, borderRadius: 12,
+    backgroundColor: colors.success, justifyContent: 'center', alignItems: 'center',
+  },
+  editCancelBtn: {
+    width: 24, height: 24, borderRadius: 12,
+    backgroundColor: colors.border, justifyContent: 'center', alignItems: 'center',
   },
 
-  rowRight: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
+  // Expected value cell
+  rowRight: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   expectedValueBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 4,
-    paddingHorizontal: 8,
-    paddingVertical: 6,
-    borderRadius: 6,
-    backgroundColor: colors.cardBg,
-    borderWidth: 1,
-    borderColor: colors.border,
-    minWidth: 60,
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4,
+    paddingHorizontal: 8, paddingVertical: 6, borderRadius: 6,
+    backgroundColor: colors.cardBg, borderWidth: 1, borderColor: colors.border, minWidth: 60,
   },
-  expectedValueBtnMismatch: {
-    borderColor: colors.warning + '50',
-    backgroundColor: colors.warning + '08',
-  },
+  expectedValueBtnMismatch: { borderColor: colors.warning + '50', backgroundColor: colors.warning + '08' },
   expectedValueText: {
-    fontSize: 12,
-    color: colors.accentLight,
-    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
-    fontWeight: '600',
-    textAlign: 'center',
+    fontSize: 12, color: colors.accentLight,
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace', fontWeight: '600', textAlign: 'center',
   },
-  editIcon: {
-    marginLeft: 2,
-  },
-  editInput: {
-    width: 70,
-    paddingHorizontal: 8,
-    paddingVertical: 5,
-    borderRadius: 6,
-    backgroundColor: colors.inputBg,
-    borderWidth: 1,
-    borderColor: colors.accent + '60',
-    fontSize: 12,
-    color: colors.text,
-    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
-    textAlign: 'center',
-  },
-  editInputSuccess: {
-    borderColor: colors.success + '80',
-    backgroundColor: colors.success + '15',
-  },
-  editInputError: {
-    borderColor: colors.danger + '80',
-    backgroundColor: colors.danger + '15',
-  },
-  applyStatusWrap: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    width: 30,
-    height: 30,
-  },
+  flashIcon: { opacity: 0.8 },
 
   // Bottom bar
   bottomBar: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    borderTopWidth: 1,
-    borderTopColor: colors.border,
-    backgroundColor: colors.secondary,
-    gap: 8,
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingHorizontal: 16, paddingVertical: 12,
+    borderTopWidth: 1, borderTopColor: colors.border, backgroundColor: colors.secondary, gap: 8,
   },
   backBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    borderRadius: 8,
-    backgroundColor: colors.cardBg,
-    borderWidth: 1,
-    borderColor: colors.border,
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    paddingHorizontal: 14, paddingVertical: 10, borderRadius: 8,
+    backgroundColor: colors.cardBg, borderWidth: 1, borderColor: colors.border,
   },
-  backBtnText: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: colors.text,
-  },
-  applyAllBtn: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 6,
-    paddingVertical: 12,
-    borderRadius: 10,
-    backgroundColor: colors.orangeBtn,
-  },
-  applyAllBtnDisabled: {
-    opacity: 0.5,
-  },
-  applyAllBtnText: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: colors.text,
-  },
+  backBtnText: { fontSize: 13, fontWeight: '600', color: colors.text },
   nextBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 6,
-    paddingHorizontal: 20,
-    paddingVertical: 12,
-    borderRadius: 10,
-    backgroundColor: colors.greenBtn,
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
+    paddingHorizontal: 20, paddingVertical: 12, borderRadius: 10, backgroundColor: colors.greenBtn,
   },
-  nextBtnDisabled: {
-    opacity: 0.4,
-  },
-  nextBtnText: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: colors.text,
-  },
+  nextBtnText: { fontSize: 14, fontWeight: '700', color: colors.text },
+  scrollSpacer: { height: 100 },
 });
 
 export default Step1ParamCheck;

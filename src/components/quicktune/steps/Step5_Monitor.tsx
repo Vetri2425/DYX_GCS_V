@@ -10,7 +10,9 @@ import {
 } from 'react-native';
 import { useRover } from '../../../context/RoverContext';
 import { quickTuneService } from '../../../services/quickTuneService';
+import { QUICKTUNE_AUX_CHANNEL, TUNING_STALL_TIMEOUT_MS } from '../../../constants/quicktune';
 import { colors } from '../../../theme/colors';
+import { qtLog } from '../../../utils/quicktuneLogger';
 
 interface Step5MonitorProps {
   onComplete: () => void;
@@ -24,34 +26,12 @@ interface LogEntry {
   progress: number | null;
   phase: 'steering' | 'speed' | 'unknown';
   isDone: boolean;
+  severity?: string;
 }
 
 // Progress regex: matches "RTun: .+ (\d+)% complete"
 const PROGRESS_REGEX = /RTun: .+ (\d+)% complete/;
 const DONE_REGEX = /RTun: Tuning DONE/;
-
-// Mock messages for testing
-const MOCK_MESSAGES: { message: string; delay: number }[] = [
-  { message: 'RTun: Starting tuning sequence...', delay: 2000 },
-  { message: 'RTun: Steering phase - initializing', delay: 4000 },
-  { message: 'RTun: Steering tune 10% complete', delay: 6000 },
-  { message: 'RTun: Steering tune 25% complete', delay: 8000 },
-  { message: 'RTun: Steering tune 40% complete', delay: 10000 },
-  { message: 'RTun: Steering tune 55% complete', delay: 12000 },
-  { message: 'RTun: Steering tune 70% complete', delay: 14000 },
-  { message: 'RTun: Steering tune 85% complete', delay: 16000 },
-  { message: 'RTun: Steering tune 100% complete', delay: 18000 },
-  { message: 'RTun: Speed phase - initializing', delay: 20000 },
-  { message: 'RTun: Speed tune 15% complete', delay: 22000 },
-  { message: 'RTun: Speed tune 30% complete', delay: 24000 },
-  { message: 'RTun: Speed tune 50% complete', delay: 26000 },
-  { message: 'RTun: Speed tune 75% complete', delay: 28000 },
-  { message: 'RTun: Speed tune 90% complete', delay: 30000 },
-  { message: 'RTun: Speed tune 100% complete', delay: 32000 },
-  { message: 'RTun: Tuning DONE', delay: 34000 },
-];
-
-const USE_MOCK = true;
 
 export default function Step5_Monitor({ onComplete, onAbort }: Step5MonitorProps) {
   const { socket } = useRover();
@@ -60,10 +40,28 @@ export default function Step5_Monitor({ onComplete, onAbort }: Step5MonitorProps
   const [currentPhase, setCurrentPhase] = useState<'steering' | 'speed' | 'unknown'>('unknown');
   const [isDone, setIsDone] = useState(false);
   const [isAborting, setIsAborting] = useState(false);
+  const [isDisconnected, setIsDisconnected] = useState(false);
+  const [isStalled, setIsStalled] = useState(false);
 
   const logIdRef = useRef(0);
   const scrollViewRef = useRef<ScrollView>(null);
-  const mockTimeoutsRef = useRef<NodeJS.Timeout[]>([]);
+  const STALL_TIMEOUT_MS = TUNING_STALL_TIMEOUT_MS;
+  const stallTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Start stall timer on mount, clear it when tuning completes.
+  // Empty deps is intentional — TUNING_STALL_TIMEOUT_MS is a module-level constant,
+  // not a reactive value, so this effect only needs to run once on mount.
+  useEffect(() => {
+    stallTimerRef.current = setTimeout(() => {
+      setIsStalled(true);
+    }, STALL_TIMEOUT_MS);
+    return () => {
+      if (stallTimerRef.current !== null) {
+        clearTimeout(stallTimerRef.current);
+        stallTimerRef.current = null;
+      }
+    };
+  }, []);
 
   // Auto-scroll to bottom when new logs arrive
   useEffect(() => {
@@ -72,17 +70,26 @@ export default function Step5_Monitor({ onComplete, onAbort }: Step5MonitorProps
     }
   }, [logs]);
 
-  // Parse a socket message and update state
-  const handleMessage = useCallback((message: string) => {
+  // Parse a socket message and update state.
+  // NOTE: currentPhase is read via ref inside the handler so the socket listener
+  // never needs to re-subscribe when the phase changes (fixes stale-closure race).
+  const currentPhaseRef = useRef(currentPhase);
+  useEffect(() => {
+    currentPhaseRef.current = currentPhase;
+  }, [currentPhase]);
+
+  const handleMessage = useCallback((message: string, severity?: string) => {
     // Check for completion
     if (DONE_REGEX.test(message)) {
+      qtLog.info('Step5', 'Tuning DONE received', { message });
       const entry: LogEntry = {
         id: ++logIdRef.current,
         timestamp: new Date(),
         message,
         progress: 100,
-        phase: currentPhase,
+        phase: currentPhaseRef.current,
         isDone: true,
+        severity,
       };
       setLogs((prev) => [...prev, entry]);
       setProgress(100);
@@ -95,6 +102,7 @@ export default function Step5_Monitor({ onComplete, onAbort }: Step5MonitorProps
     if (progressMatch) {
       const progressValue = parseInt(progressMatch[1], 10);
       const phase = message.toLowerCase().includes('speed') ? 'speed' : 'steering';
+      qtLog.info('Step5', `Progress update — ${phase} ${progressValue}%`, { message });
       setCurrentPhase(phase);
       setProgress(progressValue);
 
@@ -105,6 +113,7 @@ export default function Step5_Monitor({ onComplete, onAbort }: Step5MonitorProps
         progress: progressValue,
         phase,
         isDone: false,
+        severity,
       };
       setLogs((prev) => [...prev, entry]);
       return;
@@ -116,55 +125,71 @@ export default function Step5_Monitor({ onComplete, onAbort }: Step5MonitorProps
       timestamp: new Date(),
       message,
       progress: null,
-      phase: currentPhase,
+      phase: currentPhaseRef.current,
       isDone: false,
+      severity,
     };
     setLogs((prev) => [...prev, entry]);
-  }, [currentPhase]);
+  }, []); // stable — reads currentPhase via ref, no re-creation on phase changes
 
-  // Subscribe to socket events
+  // Stable ref so the socket handler always calls the latest handleMessage
+  // without the useEffect needing handleMessage as a dependency.
+  const handleMessageRef = useRef(handleMessage);
+  useEffect(() => {
+    handleMessageRef.current = handleMessage;
+  }, [handleMessage]);
+
+  // Subscribe to socket events — depends only on [socket], never re-subscribes on phase changes
   useEffect(() => {
     if (!socket) return;
 
     const handler = (data: unknown) => {
-      // Handle both string messages and object payloads
       let messageText = '';
+      let severityLabel: string | undefined;
       if (typeof data === 'string') {
         messageText = data;
       } else if (typeof data === 'object' && data !== null) {
-        // Check for STATUSTEXT pattern
         const obj = data as Record<string, unknown>;
         messageText = (obj.text as string) || (obj.message as string) || (obj.status_text as string) || JSON.stringify(data);
+        severityLabel = (obj.severity_label as string) || undefined;
       }
       if (messageText) {
-        handleMessage(messageText);
+        qtLog.socket('Step5', 'quicktune_log', { messageText, severityLabel });
+        handleMessageRef.current(messageText, severityLabel);
       }
+    };
+
+    const onDisconnect = (reason: string) => {
+      qtLog.warn('Step5', 'Socket disconnected during tuning', { reason });
+      console.warn('[Step5] Socket disconnected during tuning:', reason);
+      setIsDisconnected(true);
+    };
+
+    const onReconnect = () => {
+      qtLog.info('Step5', 'Socket reconnected');
+      console.log('[Step5] Socket reconnected');
+      setIsDisconnected(false);
     };
 
     socket.on('quicktune_log', handler);
+    socket.on('disconnect', onDisconnect);
+    socket.io.on('reconnect', onReconnect);
 
     return () => {
       socket.off('quicktune_log', handler);
+      socket.off('disconnect', onDisconnect);
+      socket.io.off('reconnect', onReconnect);
     };
-  }, [socket, handleMessage]);
+  }, [socket]); // only re-subscribes when the socket instance itself changes
 
-  // Mock mode: inject demo messages
+  // Clear stall timer as soon as tuning completes
   useEffect(() => {
-    if (!USE_MOCK) return;
-
-    const timeouts = MOCK_MESSAGES.map(({ message, delay }) => {
-      return setTimeout(() => {
-        handleMessage(message);
-      }, delay);
-    });
-
-    mockTimeoutsRef.current = timeouts;
-
-    return () => {
-      timeouts.forEach(clearTimeout);
-      mockTimeoutsRef.current = [];
-    };
-  }, [handleMessage]);
+    if (isDone && stallTimerRef.current !== null) {
+      clearTimeout(stallTimerRef.current);
+      stallTimerRef.current = null;
+      setIsStalled(false);
+    }
+  }, [isDone]);
 
   // Handle abort
   const handleAbort = useCallback(() => {
@@ -179,15 +204,12 @@ export default function Step5_Monitor({ onComplete, onAbort }: Step5MonitorProps
           onPress: async () => {
             setIsAborting(true);
             try {
-              // Send DO_AUX_FUNCTION(300, 0) to abort tuning
-              await quickTuneService.sendAuxFunction('stop', 300, 0);
-              // Clear mock timeouts if in mock mode
-              if (USE_MOCK) {
-                mockTimeoutsRef.current.forEach(clearTimeout);
-                mockTimeoutsRef.current = [];
-              }
+              qtLog.api('Step5', 'POST', '/api/quicktune/aux_function', { action: 'stop' });
+              await quickTuneService.sendAuxFunction('stop', QUICKTUNE_AUX_CHANNEL, 0);
+              qtLog.info('Step5', 'Abort stop command sent');
               onAbort();
             } catch (error) {
+              qtLog.error('Step5', 'Failed to abort tuning', error);
               console.error('Failed to abort tuning:', error);
             } finally {
               setIsAborting(false);
@@ -209,6 +231,28 @@ export default function Step5_Monitor({ onComplete, onAbort }: Step5MonitorProps
 
   return (
     <View style={styles.container}>
+      {/* Disconnect warning banner */}
+      {isDisconnected && (
+        <View style={styles.disconnectBanner}>
+          <ActivityIndicator size="small" color={colors.warning} />
+          <Text style={styles.disconnectBannerText}>
+            Connection lost — waiting to reconnect. Tuning may still be running on the vehicle.
+          </Text>
+        </View>
+      )}
+
+      {/* Stall warning banner — shown after 15 min with no completion */}
+      {isStalled && !isDone && (
+        <View style={styles.stallBanner}>
+          <Text style={styles.stallBannerText}>
+            Tuning has been running for over 15 minutes with no completion signal. The script may have stalled.
+          </Text>
+          <TouchableOpacity style={styles.stallAbortBtn} onPress={handleAbort}>
+            <Text style={styles.stallAbortBtnText}>Abort</Text>
+          </TouchableOpacity>
+        </View>
+      )}
+
       {/* Progress Section */}
       <View style={styles.progressCard}>
         <View style={styles.progressHeader}>
@@ -246,19 +290,24 @@ export default function Step5_Monitor({ onComplete, onAbort }: Step5MonitorProps
             <View style={styles.emptyLog}>
               <ActivityIndicator size="small" color={colors.accent} />
               <Text style={styles.emptyLogText}>Waiting for tuning messages...</Text>
-              {USE_MOCK && (
-                <Text style={styles.emptyLogHint}>Mock messages will appear shortly</Text>
-              )}
             </View>
           )}
-          {logs.map((entry) => (
+          {logs.map((entry) => {
+            const sevColor =
+              entry.severity === 'ERROR' || entry.severity === 'CRITICAL' ? colors.danger
+              : entry.severity === 'WARNING' ? colors.warning
+              : entry.severity === 'DEBUG' ? colors.textMuted
+              : colors.textPrimary;
+            return (
             <View key={entry.id} style={styles.logEntry}>
               <Text style={styles.logTimestamp}>
                 {entry.timestamp.toLocaleTimeString()}
+                {entry.severity ? ` [${entry.severity}]` : ''}
               </Text>
               <Text
                 style={[
                   styles.logMessage,
+                  { color: sevColor },
                   entry.isDone && styles.logMessageDone,
                 ]}
               >
@@ -268,7 +317,8 @@ export default function Step5_Monitor({ onComplete, onAbort }: Step5MonitorProps
                 <Text style={styles.logProgress}>{entry.progress}%</Text>
               )}
             </View>
-          ))}
+            );
+          })}
         </ScrollView>
       </View>
 
@@ -426,12 +476,6 @@ const styles = StyleSheet.create({
     color: colors.textMuted,
     textAlign: 'center',
   },
-  emptyLogHint: {
-    fontSize: 12,
-    color: colors.textMuted,
-    textAlign: 'center',
-    fontStyle: 'italic',
-  },
   logEntry: {
     paddingVertical: 6,
     borderBottomWidth: 1,
@@ -455,6 +499,52 @@ const styles = StyleSheet.create({
     fontSize: 11,
     color: colors.accent,
     marginTop: 2,
+  },
+
+  // Disconnect / stall banners
+  disconnectBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 8,
+    backgroundColor: colors.warning + '18',
+    borderWidth: 1,
+    borderColor: colors.warning + '50',
+  },
+  disconnectBannerText: {
+    flex: 1,
+    color: colors.warning,
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  stallBanner: {
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    borderRadius: 8,
+    backgroundColor: colors.danger + '15',
+    borderWidth: 1,
+    borderColor: colors.danger + '40',
+    gap: 10,
+  },
+  stallBannerText: {
+    color: colors.danger,
+    fontSize: 12,
+    fontWeight: '600',
+    lineHeight: 18,
+  },
+  stallAbortBtn: {
+    alignSelf: 'flex-start',
+    backgroundColor: colors.danger,
+    borderRadius: 6,
+    paddingHorizontal: 14,
+    paddingVertical: 6,
+  },
+  stallAbortBtnText: {
+    color: '#fff',
+    fontSize: 13,
+    fontWeight: '700',
   },
 
   // Action Row

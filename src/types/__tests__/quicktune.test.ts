@@ -22,11 +22,33 @@ describe('QuickTune Types', () => {
       const allStrings = PRETUNE_PARAMS.every((param) => typeof param === 'string');
       expect(allStrings).toBe(true);
     });
+
+    test('should contain real ArduRover 4.5.6 parameter names', () => {
+      expect(PRETUNE_PARAMS).toContain('SCR_ENABLE');
+      expect(PRETUNE_PARAMS).toContain('RTUN_ENABLE');
+      expect(PRETUNE_PARAMS).toContain('RTUN_AUTO_FILTER');
+      expect(PRETUNE_PARAMS).toContain('RTUN_STR_FFRATIO');
+      expect(PRETUNE_PARAMS).toContain('RTUN_SPD_FFRATIO');
+      expect(PRETUNE_PARAMS).toContain('CIRC_SPEED');
+      expect(PRETUNE_PARAMS).toContain('CIRC_RADIUS');
+      expect(PRETUNE_PARAMS).toContain('CIRC_DIR');
+      expect(PRETUNE_PARAMS).toContain('ATC_STR_ACC_MAX');
+      expect(PRETUNE_PARAMS).toContain('ATC_STR_RAT_MAX');
+      expect(PRETUNE_PARAMS).toContain('ATC_BRAKE');
+    });
   });
 
   describe('TUNED_PARAMS', () => {
     test('should have exactly 11 parameters', () => {
       expect(TUNED_PARAMS).toHaveLength(11);
+    });
+
+    test('should contain the params the Lua script actually modifies', () => {
+      expect(TUNED_PARAMS).toContain('ATC_STR_RAT_FF');
+      expect(TUNED_PARAMS).toContain('ATC_STR_RAT_P');
+      expect(TUNED_PARAMS).toContain('ATC_SPEED_P');
+      expect(TUNED_PARAMS).toContain('CRUISE_SPEED');
+      expect(TUNED_PARAMS).toContain('CRUISE_THROTTLE');
     });
   });
 
@@ -53,15 +75,15 @@ describe('QuickTune Types', () => {
 
     test('QuickTuneParam interface structure', () => {
       const param: QuickTuneParam = {
-        name: 'ATC_ACC_MAX',
+        name: 'ATC_ACCEL_MAX',
         currentValue: 2.5,
-        recommendedValue: 3.0,
+        recommendedValue: 2.0,
         min: 0,
         max: 10,
         units: 'm/s²',
         description: 'Maximum acceleration',
       };
-      expect(param.name).toBe('ATC_ACC_MAX');
+      expect(param.name).toBe('ATC_ACCEL_MAX');
       expect(typeof param.currentValue).toBe('number');
     });
 
@@ -70,7 +92,7 @@ describe('QuickTune Types', () => {
         passed: true,
         warnings: ['Low battery'],
         errors: [],
-        paramSnapshots: [{ name: 'ATC_ACC_MAX', before: 2.5 }],
+        paramSnapshots: [{ name: 'ATC_ACCEL_MAX', before: 2.5 }],
       };
       expect(result.passed).toBe(true);
       expect(Array.isArray(result.warnings)).toBe(true);
@@ -112,8 +134,8 @@ describe('QuickTune Types', () => {
       const result: TuneResult = {
         success: true,
         durationMs: 45000,
-        appliedParams: { ATC_ACC_MAX: 3.0 },
-        previousParams: { ATC_ACC_MAX: 2.5 },
+        appliedParams: { ATC_ACCEL_MAX: 2.0 },
+        previousParams: { ATC_ACCEL_MAX: 1.5 },
         logs: [],
       };
       expect(result.success).toBe(true);
@@ -124,8 +146,8 @@ describe('QuickTune Types', () => {
       const state: WizardSharedState = {
         currentStep: WizardStep.RunTuning,
         tuneState: TuneState.Tuning,
-        pretuneParams: { ATC_ACC_MAX: 2.5 },
-        tunedParams: { ATC_ACC_MAX: 3.0 },
+        pretuneParams: { ATC_ACCEL_MAX: 2.5 },
+        tunedParams: { ATC_ACCEL_MAX: 2.0 },
         checkResult: null,
         tuneResult: null,
         logs: [],
