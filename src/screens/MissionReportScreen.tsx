@@ -435,12 +435,14 @@ export default function MissionReportScreen() {
     setMissionWaypoints(next.map((wp, i) => ({ ...wp, sn: i + 1 })));
   };
 
-  // ✅ FIX: Depend on entire telemetry object to ensure live updates (matches DYX-GCS source)
+  // Depend on individual primitive fields, not the full telemetry object.
+  // telemetry is a new object reference every 50ms (from useRoverTelemetry),
+  // so [telemetry] never actually caches. Primitives only change when values change.
   const vehicleStatus = useMemo((): VehicleStatus => {
-    // 🔧 FIX: Handle hrms/vrms as strings or numbers (backend sends strings currently)
+    // Handle hrms/vrms as strings or numbers (backend sends strings currently)
     const hrmsValue = typeof telemetry.hrms === 'string' ? parseFloat(telemetry.hrms) : telemetry.hrms;
     const vrmsValue = typeof telemetry.vrms === 'string' ? parseFloat(telemetry.vrms) : telemetry.vrms;
-    
+
     return {
       battery: `${telemetry.battery.percentage.toFixed(1)}% (${telemetry.battery.voltage.toFixed(2)}V)`,
       gps: getFixTypeLabel(telemetry.rtk.fix_type),
@@ -450,9 +452,20 @@ export default function MissionReportScreen() {
       imu: telemetry.imu_status,
       mode: telemetry.state?.mode || 'UNKNOWN',
     };
-  }, [telemetry]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    telemetry.battery.percentage,
+    telemetry.battery.voltage,
+    telemetry.rtk.fix_type,
+    telemetry.global.satellites_visible,
+    telemetry.hrms,
+    telemetry.vrms,
+    telemetry.imu_status,
+    telemetry.state?.mode,
+  ]);
 
-  // ✅ FIX: Depend on entire objects to ensure live updates (matches DYX-GCS pattern)
+  // Depend on individual primitive fields, not the full telemetry/roverPosition objects.
+  // These objects are new references every 50ms, so the memo would never cache.
   const mapProps = useMemo(() => {
     const props = {
       roverLat: roverPosition?.lat ?? 0,
@@ -474,7 +487,14 @@ export default function MissionReportScreen() {
     }
 
     return props;
-  }, [roverPosition, telemetry]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    roverPosition?.lat,
+    roverPosition?.lng,
+    telemetry.attitude?.yaw_deg,
+    telemetry.state?.armed,
+    telemetry.rtk?.fix_type,
+  ]);
 
   // Calculate marked waypoints count from real-time statusMap
   const markedCount = useMemo(() => {

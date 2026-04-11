@@ -8,6 +8,7 @@ import {
   Dimensions,
   PanResponder,
   Animated,
+  Alert,
 } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { colors } from '../../theme/colors';
@@ -87,10 +88,10 @@ export const CADDrawingCanvas: React.FC<CADDrawingCanvasProps> = ({
       if (activeTool === 'line' || activeTool === 'spline') {
         const lastPoint = lastPointRef.current;
         if (lastPoint) {
-          const distance = Math.sqrt(
-            Math.pow(currentPoint.x - lastPoint.x, 2) + 
-            Math.pow(currentPoint.y - lastPoint.y, 2)
-          );
+        const distance = Math.hypot(
+          currentPoint.x - lastPoint.x,
+          currentPoint.y - lastPoint.y
+        );
           
           // Only add point if distance > 5 pixels (reduces waypoint density)
           if (distance > 5) {
@@ -156,6 +157,28 @@ export const CADDrawingCanvas: React.FC<CADDrawingCanvasProps> = ({
           { lat: currentPosition.lat + (p2.y - screenHeight/2) * 0.00001, lng: currentPosition.lng + (p2.x - screenWidth/2) * 0.00001 },
           { lat: currentPosition.lat + (p1.y - screenHeight/2) * 0.00001, lng: currentPosition.lng + (p2.x - screenWidth/2) * 0.00001 },
         ];
+      } else if (entity.type === 'circle' && entity.points.length >= 2) {
+        // For circle, generate points along the circumference
+        const center = entity.points[0];
+        const edge = entity.points[1];
+        const radius = Math.hypot(edge.x - center.x, edge.y - center.y);
+        const circlePoints = [];
+        
+        // Generate 24 points for smooth circle
+        for (let i = 0; i < 24; i++) {
+          const angle = (i * Math.PI * 2) / 24;
+          const x = center.x + radius * Math.cos(angle);
+          const y = center.y + radius * Math.sin(angle);
+          circlePoints.push({
+            lat: currentPosition.lat + (y - screenHeight/2) * 0.00001,
+            lng: currentPosition.lng + (x - screenWidth/2) * 0.00001,
+          });
+        }
+        
+        // Close the circle - reuse the first point
+        circlePoints.push(circlePoints[0]);
+        
+        return circlePoints;
       } else {
         // For other shapes, use all points
         return entity.points.map(point => ({
@@ -220,6 +243,48 @@ export const CADDrawingCanvas: React.FC<CADDrawingCanvasProps> = ({
               ]}
             />
           ))}
+        </View>
+      );
+    }
+    
+    // For circle tool - render actual circle
+    if (entity.type === 'circle' && entity.points.length >= 2) {
+      const center = entity.points[0];
+      const edge = entity.points[1];
+      const radius = Math.hypot(edge.x - center.x, edge.y - center.y);
+      
+      return (
+        <View key={entity.id} style={styles.entityContainer}>
+          <View
+            style={[
+              styles.circle,
+              {
+                left: center.x - radius,
+                top: center.y - radius,
+                width: radius * 2,
+                height: radius * 2,
+                borderRadius: radius,
+              }
+            ]}
+          />
+          <View
+            style={[
+              styles.circleCenter,
+              {
+                left: center.x - 3,
+                top: center.y - 3,
+              }
+            ]}
+          />
+          <View
+            style={[
+              styles.circleEdge,
+              {
+                left: edge.x - 2,
+                top: edge.y - 2,
+              }
+            ]}
+          />
         </View>
       );
     }
@@ -369,8 +434,25 @@ export const CADDrawingCanvas: React.FC<CADDrawingCanvasProps> = ({
             </View>
           )}
           
+          {/* Current drawing path - circle preview */}
+          {isDrawing && currentPath.length >= 2 && activeTool === 'circle' && (
+            <View
+              style={[
+                styles.circle,
+                {
+                  left: currentPath[0].x - Math.hypot(currentPath[1].x - currentPath[0].x, currentPath[1].y - currentPath[0].y),
+                  top: currentPath[0].y - Math.hypot(currentPath[1].x - currentPath[0].x, currentPath[1].y - currentPath[0].y),
+                  width: Math.hypot(currentPath[1].x - currentPath[0].x, currentPath[1].y - currentPath[0].y) * 2,
+                  height: Math.hypot(currentPath[1].x - currentPath[0].x, currentPath[1].y - currentPath[0].y) * 2,
+                  borderRadius: Math.hypot(currentPath[1].x - currentPath[0].x, currentPath[1].y - currentPath[0].y),
+                  opacity: 0.6,
+                }
+              ]}
+            />
+          )}
+
           {/* Current drawing path - other tools */}
-          {isDrawing && currentPath.length > 0 && activeTool !== 'line' && (
+          {isDrawing && currentPath.length > 0 && activeTool !== 'line' && activeTool !== 'circle' && (
             <View style={styles.currentPath}>
               <Text style={styles.pathText}>Drawing {activeTool}...</Text>
             </View>
@@ -580,6 +662,30 @@ const styles = StyleSheet.create({
     fontSize: 11,
     color: colors.text,
     fontWeight: '600',
+  },
+  circle: {
+    position: 'absolute',
+    borderWidth: 2,
+    borderColor: colors.blueBtn,
+    backgroundColor: 'rgba(59, 130, 246, 0.1)',
+  },
+  circleCenter: {
+    position: 'absolute',
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: colors.blueBtn,
+    borderWidth: 1,
+    borderColor: '#ffffff',
+  },
+  circleEdge: {
+    position: 'absolute',
+    width: 4,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: colors.accent,
+    borderWidth: 1,
+    borderColor: '#ffffff',
   },
   centerPoint: {
     position: 'absolute',

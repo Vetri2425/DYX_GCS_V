@@ -26,7 +26,7 @@ interface Props {
     missionMode?: string;
 }
 
-export const PathSequenceSidebar: React.FC<Props> = ({
+export const PathSequenceSidebar = React.memo(({
     waypoints,
     selectedWaypoint,
     onSelectWaypoint,
@@ -37,7 +37,7 @@ export const PathSequenceSidebar: React.FC<Props> = ({
     missionName = 'DRAWN MISSION - 4:15:34',
     onMissionNameChange,
     missionMode,
-}) => {
+}: Props) => {
     const [isEditingName, setIsEditingName] = useState(false);
     const [editedName, setEditedName] = useState(missionName);
     const [isFullScreenTable, setIsFullScreenTable] = useState(false);
@@ -408,7 +408,7 @@ export const PathSequenceSidebar: React.FC<Props> = ({
             />
         </View>
     );
-};
+});
 
 const styles = StyleSheet.create({
     container: {

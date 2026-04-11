@@ -13,15 +13,19 @@ interface Props {
   onTabChange: (tab: 'Dashboard' | 'Marking Plan' | 'Mission Progress') => void;
 }
 
-export const AppHeader: React.FC<Props> = ({
+const AppHeaderInner: React.FC<Props> = ({
   activeTab,
   onTabChange,
 }) => {
+  // Only destructure what AppHeader actually uses — not telemetry.
+  // Note: useRover() still triggers re-renders on every telemetry tick because
+  // it subscribes to the full context. Phase 2 (context split) will fix this.
+  const { missionMode, setMissionMode } = useRover();
+
   const [showSettings, setShowSettings] = useState(false);
   const [showModeDialog, setShowModeDialog] = useState(false);
   const [showDashConfigDialog, setShowDashConfigDialog] = useState(false);
-  const { telemetry, missionMode, setMissionMode } = useRover();
-  
+
   const getModeIcon = (mode: string): string => {
     switch (mode.toLowerCase()) {
       case 'dgps mark':
@@ -321,3 +325,8 @@ const styles = StyleSheet.create({
     color: '#ffffff',
   },
 });
+
+// Memoize AppHeader to prevent unnecessary re-renders from parent.
+// Note: This cannot prevent context-driven re-renders from useRover().
+// Phase 2 (context split) is needed to fully isolate AppHeader from 20Hz telemetry.
+export const AppHeader = React.memo(AppHeaderInner);

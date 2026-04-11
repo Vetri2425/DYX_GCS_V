@@ -94,26 +94,55 @@ export default function PathPlanScreen() {
     timersRef.current.clear();
   };
 
+  // Poll servo config, but pause when app is backgrounded to avoid unnecessary
+  // network requests and state updates that trigger re-renders.
   useEffect(() => {
+    const { AppState } = require('react-native');
+
+    let interval: ReturnType<typeof setInterval> | null = null;
+    let appStateSubscription: any = null;
+
     const fetchServoConfig = async () => {
       try {
         const res: any = await services.getMissionServoConfig();
         const cfg = res?.message || res?.config || res?.data || res;
         if (typeof cfg?.servo_enabled === 'boolean') {
           setGlobalServoEnabled(cfg.servo_enabled);
-          //console.log('[PathPlan] Servo config loaded:', cfg.servo_enabled);
         }
       } catch (err) {
-        // console.error('[PathPlan] Failed to fetch servo config:', err);
+        // Silently ignore — servo config fetch failure is non-critical
       }
     };
 
-    fetchServoConfig();
+    const startPolling = () => {
+      if (interval) clearInterval(interval);
+      fetchServoConfig(); // Fetch immediately on start/resume
+      interval = setInterval(fetchServoConfig, 2000);
+    };
 
-    // Poll for servo config changes every 2 seconds
-    const interval = setInterval(fetchServoConfig, 2000);
+    const stopPolling = () => {
+      if (interval) {
+        clearInterval(interval);
+        interval = null;
+      }
+    };
 
-    return () => clearInterval(interval);
+    // Start polling immediately
+    startPolling();
+
+    // Pause/resume polling on app background/foreground
+    appStateSubscription = AppState.addEventListener('change', (nextAppState: string) => {
+      if (nextAppState === 'active') {
+        startPolling();
+      } else {
+        stopPolling();
+      }
+    });
+
+    return () => {
+      stopPolling();
+      appStateSubscription?.remove();
+    };
   }, [services]);
 
   useEffect(() => {
@@ -384,6 +413,9 @@ export default function PathPlanScreen() {
 
   // Consolidated auto-save using refs to prevent multiple useEffect triggers
   // This prevents infinite loops from cascading state updates
+  // NOTE: selectedWaypoint is intentionally excluded from this callback's deps.
+  // It's saved in a separate effect to avoid triggering 5 AsyncStorage writes
+  // on every waypoint click.
   const autoSaveTimersRef = useRef<Record<string, NodeJS.Timeout>>({});
 
   const debouncedAutoSave = useCallback(() => {
@@ -416,10 +448,10 @@ export default function PathPlanScreen() {
       }, 300);
     }
 
-    // UI state - 300ms debounce
+    // UI state (collapsed state only) - 300ms debounce
     autoSaveTimersRef.current.uiState = setTimeout(() => {
       PersistentStorage.savePathPlanUIState({
-        selectedWaypoint,
+        selectedWaypoint: null, // Don't save selectedWaypoint here — saved separately
         isDrawingToolsCollapsed,
       }).catch(error => {
         console.error('[PathPlanScreen] Failed to persist UI state:', error);
@@ -432,7 +464,21 @@ export default function PathPlanScreen() {
         console.error('[PathPlanScreen] Failed to persist map visualization settings:', error);
       });
     }, 300);
-  }, [homePosition, isDrawingMode, activeDrawingTool, selectedWaypoint, isDrawingToolsCollapsed, mapVisualization]);
+  }, [homePosition, isDrawingMode, activeDrawingTool, isDrawingToolsCollapsed, mapVisualization]);
+
+  // Separate effect for selectedWaypoint — only saves when it actually changes,
+  // avoids triggering the full debouncedAutoSave cascade on every waypoint click.
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      PersistentStorage.savePathPlanUIState({
+        selectedWaypoint,
+        isDrawingToolsCollapsed,
+      }).catch(error => {
+        console.error('[PathPlanScreen] Failed to persist selected waypoint:', error);
+      });
+    }, 500);
+    return () => clearTimeout(timer);
+  }, [selectedWaypoint]);
 
   // Single consolidated useEffect for all auto-saves
   useEffect(() => {

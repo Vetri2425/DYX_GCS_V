@@ -35,7 +35,7 @@ type Props = {
     onManualControlOpen?: () => void;
 };
 
-const MissionOpsPanel: React.FC<Props> = ({
+const MissionOpsPanel = React.memo(({
     waypoints,
     roverPosition = null,
     onUpdateWaypoints,
@@ -50,7 +50,7 @@ const MissionOpsPanel: React.FC<Props> = ({
     onExportMission,
     onRequestUpload,
     onManualControlOpen,
-}) => {
+}: Props) => {
     const { missionMode, setMissionMode, telemetry } = useRover();
     const [showExportDialog, setShowExportDialog] = useState(false);
     const [selectedExportFormat, setSelectedExportFormat] = useState<'qgc' | 'csv' | 'dxf'>('qgc');
@@ -483,7 +483,7 @@ const MissionOpsPanel: React.FC<Props> = ({
             </Modal>
         </View>
     );
-};
+});
 
 const styles = StyleSheet.create({
     container: {

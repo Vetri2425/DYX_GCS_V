@@ -77,13 +77,13 @@ function detectUnits(dxf: any): CADUnits {
 }
 
 // ============================================================
-// ID Generation
+// ID Generation — per-parse counter (not module-level global)
 // ============================================================
 
-let entityCounter = 0;
-
-function nextId(prefix: string): string {
-  return `${prefix}_${++entityCounter}`;
+/** Creates a fresh ID generator for each parse operation. */
+function createIdGenerator() {
+  let counter = 0;
+  return (prefix: string): string => `${prefix}_${++counter}`;
 }
 
 // ============================================================
@@ -194,7 +194,7 @@ function scalePoint(p: Point2D, scale: number): Point2D {
 // Entity Conversion
 // ============================================================
 
-function convertLine(raw: any, unitScale: number): Line {
+function convertLine(raw: any, unitScale: number, nextId: (p: string) => string): Line {
   const start = scalePoint(
     { x: raw.vertices[0].x ?? 0, y: raw.vertices[0].y ?? 0 },
     unitScale
@@ -213,7 +213,7 @@ function convertLine(raw: any, unitScale: number): Line {
   };
 }
 
-function convertPoint(raw: any, unitScale: number): PointEntity {
+function convertPoint(raw: any, unitScale: number, nextId: (p: string) => string): PointEntity {
   const position = scalePoint(
     { x: raw.position?.x ?? 0, y: raw.position?.y ?? 0 },
     unitScale
@@ -227,7 +227,7 @@ function convertPoint(raw: any, unitScale: number): PointEntity {
   };
 }
 
-function convertArc(raw: any, unitScale: number): Arc {
+function convertArc(raw: any, unitScale: number, nextId: (p: string) => string): Arc {
   const center = scalePoint(
     { x: raw.center?.x ?? 0, y: raw.center?.y ?? 0 },
     unitScale
@@ -247,7 +247,7 @@ function convertArc(raw: any, unitScale: number): Arc {
   };
 }
 
-function convertCircle(raw: any, unitScale: number): Arc {
+function convertCircle(raw: any, unitScale: number, nextId: (p: string) => string): Arc {
   const center = scalePoint(
     { x: raw.center?.x ?? 0, y: raw.center?.y ?? 0 },
     unitScale
@@ -275,7 +275,7 @@ function convertCircle(raw: any, unitScale: number): Arc {
  *   - Line (bulge === 0 or absent)
  *   - Arc (bulge !== 0)
  */
-function convertLWPolyline(raw: any, unitScale: number): Polyline {
+function convertLWPolyline(raw: any, unitScale: number, nextId: (p: string) => string): Polyline {
   const vertices: Array<{ x: number; y: number; bulge?: number }> = raw.vertices || [];
   const isClosed = raw.shape === true || raw.closed === true;
 
@@ -331,7 +331,7 @@ function convertLWPolyline(raw: any, unitScale: number): Polyline {
  * POLYLINE uses a different structure: vertices are in a separate
  * `vertices` array with full vertex objects (x, y, bulge).
  */
-function convertPolyline(raw: any, unitScale: number): Polyline {
+function convertPolyline(raw: any, unitScale: number, nextId: (p: string) => string): Polyline {
   const vertices: Array<{ x: number; y: number; bulge?: number }> = raw.vertices || [];
   const isClosed = raw.shape === true || raw.closed === true;
 
@@ -403,7 +403,7 @@ function convertPolyline(raw: any, unitScale: number): Polyline {
  * @throws Error if parsing fails
  */
 export function parseDXF(dxfContent: string): CADModel {
-  entityCounter = 0;
+  const nextId = createIdGenerator();
 
   const parser = new DxfParserLib();
   let dxf: any;
@@ -426,33 +426,33 @@ export function parseDXF(dxfContent: string): CADModel {
     switch (entityType) {
       case 'LINE':
         if (raw.vertices && raw.vertices.length >= 2) {
-          entities.push(convertLine(raw, unitScale));
+          entities.push(convertLine(raw, unitScale, nextId));
         }
         break;
 
       case 'LWPOLYLINE':
         if (raw.vertices && raw.vertices.length >= 2) {
-          entities.push(convertLWPolyline(raw, unitScale));
+          entities.push(convertLWPolyline(raw, unitScale, nextId));
         }
         break;
 
       case 'POLYLINE':
         // Old-style polyline with nested vertices
         if (raw.vertices && raw.vertices.length >= 2) {
-          entities.push(convertPolyline(raw, unitScale));
+          entities.push(convertPolyline(raw, unitScale, nextId));
         }
         break;
 
       case 'ARC':
-        entities.push(convertArc(raw, unitScale));
+        entities.push(convertArc(raw, unitScale, nextId));
         break;
 
       case 'CIRCLE':
-        entities.push(convertCircle(raw, unitScale));
+        entities.push(convertCircle(raw, unitScale, nextId));
         break;
 
       case 'POINT':
-        entities.push(convertPoint(raw, unitScale));
+        entities.push(convertPoint(raw, unitScale, nextId));
         break;
 
       default:

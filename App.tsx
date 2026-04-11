@@ -4,6 +4,7 @@ import TabNavigator from './src/navigation/TabNavigator';
 import { LogBox, StatusBar } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { RoverProvider } from './src/context/RoverContext';
+import { WaypointProvider } from './src/context/WaypointContext';
 import { ComponentReadinessProvider } from './src/context/ComponentReadinessContext';
 import { ErrorBoundary } from './src/components/shared/ErrorBoundary';
 import { useImmersiveMode } from './src/hooks/useImmersiveMode';
@@ -45,11 +46,13 @@ function AppContent() {
 
   // RoverProvider mounts fresh NOW — getBackendURL() already returns the rover URL
   return (
-    <RoverProvider>
-      <NavigationContainer>
-        <TabNavigator />
-      </NavigationContainer>
-    </RoverProvider>
+    <WaypointProvider>
+      <RoverProvider>
+        <NavigationContainer>
+          <TabNavigator />
+        </NavigationContainer>
+      </RoverProvider>
+    </WaypointProvider>
   );
 }
 

@@ -64,9 +64,14 @@
       "Bash(python verify_distances.py)",
       "Bash(python create_verification_sheet.py)",
       "Bash(python -c ':*)",
-      "Bash(python format_excel.py)"
+      "Bash(python format_excel.py)",
+      "Bash(./gradlew bundleRelease --stacktrace)",
+      "Bash(./gradlew assembleRelease)",
+      "Bash(python3 -c \" import sys, json for line in sys.stdin: try: obj = json.loads\\(line.strip\\(\\)\\) if obj.get\\('type'\\) == 'assistant': for block in obj.get\\('message',{}\\).get\\('content',[]\\): if block.get\\('type'\\) == 'text': text = block['text'] if len\\(text\\) > 100: print\\(text[:3000]\\) print\\('---END_BLOCK---'\\) except: pass \")"
     ],
     "deny": [],
     "ask": []
-  }
+  },
+  "outputStyle": "Explanatory",
+  "prefersReducedMotion": false
 }

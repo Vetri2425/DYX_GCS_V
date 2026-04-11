@@ -1016,25 +1016,21 @@ export function useRoverTelemetry(): UseRoverTelemetryResult {
       lastDispatchRef.current = now;
       // Only update if component is still mounted
       if (mountedRef.current) {
-        // Deep copy to ensure React sees a new reference at all levels
-        const snapshot = JSON.parse(JSON.stringify(next));
-        // telemLog('[TELEMETRY] UI updated immediately', snapshot);
-        setTelemetrySnapshot(snapshot);
+        // Use reference directly — applyEnvelope already creates new objects via spread,
+        // so React will see new references for changed fields. Deep clone was costing
+        // 1-5ms per tick × 20Hz = 20-100ms/sec of JS thread time.
+        setTelemetrySnapshot(next);
       }
     } else {
       // Schedule update only if not already scheduled (using a flag to prevent re-entry)
       const delay = THROTTLE_MS - elapsed;
-      // telemLog(`[TELEMETRY] UI update scheduled in ${delay}ms`);
       const timeoutId = setTimeout(() => {
         // Double-check the timeout hasn't been cleared
         if (pendingDispatchRef.current === timeoutId) {
           pendingDispatchRef.current = null; // Clear FIRST to prevent race conditions
           if (mountedRef.current) {
             lastDispatchRef.current = performance.now();
-            // Deep copy to ensure React sees a new reference at all levels
-            const snapshot = JSON.parse(JSON.stringify(mutableRef.current.telemetry));
-            // telemLog('[TELEMETRY] UI updated (scheduled)', snapshot);
-            setTelemetrySnapshot(snapshot);
+            setTelemetrySnapshot(mutableRef.current.telemetry);
           }
         }
       }, delay);
