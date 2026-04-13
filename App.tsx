@@ -17,15 +17,15 @@ import RoverDiscoveryScreen from './src/screens/RoverDiscoveryScreen';
 GlobalCrashHandler.initialize();
 
 // Suppress noisy network errors in LogBox when developing offline (no backend/rover)
-LogBox.ignoreLogs([
-  '[fetchJson] Error',
-  'Network request failed',
-  '[SOCKET]',
-  'Socket not connected',
-  'WebSocket',
-  'connect ECONNREFUSED',
-  'Failed to fetch',
-]);
+//LogBox.ignoreLogs([
+//  '[fetchJson] Error',
+//  'Network request failed',
+//  '[SOCKET]',
+//  'Socket not connected',
+//  'WebSocket',
+//  'connect ECONNREFUSED',
+ // 'Failed to fetch',
+//]);
 
 function AppContent() {
   useImmersiveMode();

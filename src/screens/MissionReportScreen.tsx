@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { TouchableOpacity } from 'react-native';
 import { View, StyleSheet, ScrollView, SafeAreaView, StatusBar, Text, Alert } from 'react-native';
 import { colors } from '../theme/colors';
@@ -10,7 +10,9 @@ import { WaypointsTable } from '../components/missionreport/WaypointsTable';
 import { MissionMap } from '../components/missionreport/MissionMap';
 import { Mode, VehicleStatus, Waypoint } from '../components/missionreport/types';
 import { RTKInjectionScreen } from '../components/missionreport/RTKInjectionScreen';
-import { useRover } from '../context/RoverContext';
+import { useTelemetry } from '../context/TelemetryContext';
+import { useConnection } from '../context/ConnectionContext';
+import { useMission } from '../context/MissionContext';
 import { AutoAssignDialog } from '../components/missionreport/AutoAssignDialog';
 import { WaypointPreviewDialog } from '../components/missionreport/WaypointPreviewDialog';
 import { MissionCompletionDialog } from '../components/missionreport/MissionCompletionDialog';
@@ -61,7 +63,9 @@ export default function MissionReportScreen() {
     if (normalized === 'dash') return 'DASH';
     return null;
   };
-  const { telemetry, roverPosition, services, onMissionEvent, connectionState, missionWaypoints, setMissionWaypoints, clearMissionWaypoints, missionMode, setMissionMode } = useRover();
+  const { telemetry, roverPosition, onMissionEvent } = useTelemetry();
+  const { services, connectionState } = useConnection();
+  const { missionWaypoints, setMissionWaypoints, clearMissionWaypoints, missionMode, setMissionMode } = useMission();
   const [mode, setMode] = useState<Mode>('AUTO');
   const [currentIndex, setCurrentIndex] = useState<number | null>(null);
   const [statusMap, setStatusMap] = useState<Record<number, WpStatus>>({});
@@ -161,9 +165,9 @@ export default function MissionReportScreen() {
   const [showRTKInjection, setShowRTKInjection] = useState(false);
 
   // Toggle full screen map mode
-  const toggleMapFullscreen = () => {
+  const toggleMapFullscreen = useCallback(() => {
     setIsMapFullscreen(prev => !prev);
-  };
+  }, []);
 
   const openRTKInjection = () => setShowRTKInjection(true);
   const closeRTKInjection = () => setShowRTKInjection(false);
@@ -709,8 +713,9 @@ export default function MissionReportScreen() {
     }
   });
 
-  // Get mission data for display (current or previous)
-  const getDisplayMissionData = () => {
+  // Get mission data for display (current or previous) — memoized to avoid
+  // creating new object references on every telemetry-driven re-render
+  const displayData = useMemo(() => {
     // If we have a completed previous mission and no current mission activity, show previous
     if (previousMissionData && !isMissionActive && Object.keys(statusMap).length === 0) {
       return {
@@ -729,11 +734,10 @@ export default function MissionReportScreen() {
       startTime: missionStartTime,
       endTime: missionEndTime,
     };
-  };
+  }, [previousMissionData, isMissionActive, statusMap, waypoints, missionMode, missionStartTime, missionEndTime]);
 
   // Calculate mission statistics for completion dialog
   const getMissionStats = () => {
-    const displayData = getDisplayMissionData();
     const totalWaypoints = displayData.waypoints.length;
     const completedWaypoints = displayData.waypoints.filter(wp => {
       const wpStatus = displayData.statusMap[wp.sn];
@@ -2041,7 +2045,7 @@ export default function MissionReportScreen() {
           /* Full Screen Map Mode */
           <View style={styles.fullscreenMap}>
             <MissionMap
-              waypoints={getDisplayMissionData().waypoints}
+              waypoints={displayData.waypoints}
               roverLat={mapProps.roverLat}
               roverLon={mapProps.roverLon}
               heading={mapProps.heading}
@@ -2060,10 +2064,10 @@ export default function MissionReportScreen() {
                 isConnected={connectionState === 'connected'}
               />
               <MissionProgressCard
-                waypoints={getDisplayMissionData().waypoints}
+                waypoints={displayData.waypoints}
                 currentIndex={currentIndex}
                 markedCount={markedCount}
-                statusMap={getDisplayMissionData().statusMap}
+                statusMap={displayData.statusMap}
                 isMissionActive={isMissionActive}
                 wpDistCm={telemetry.wp_dist_cm}
                 distanceToNextM={telemetry.distance_to_next_m}
@@ -2080,7 +2084,7 @@ export default function MissionReportScreen() {
             <View style={styles.centerPanel}>
               <View style={styles.mapWrapper}>
                 <MissionMap
-                  waypoints={getDisplayMissionData().waypoints}
+                  waypoints={displayData.waypoints}
                   roverLat={mapProps.roverLat}
                   roverLon={mapProps.roverLon}
                   heading={mapProps.heading}
@@ -2115,12 +2119,12 @@ export default function MissionReportScreen() {
       {/* Bottom full-width waypoints table */}
       <View style={styles.bottomTableContainer}>
         <WaypointsTable
-          waypoints={getDisplayMissionData().waypoints}
+          waypoints={displayData.waypoints}
           onExport={handleExport}
           onExportComplete={handleExportComplete}
           onClear={() => setShowClearLogsDialog(true)}
-          statusMap={getDisplayMissionData().statusMap}
-          missionMode={getDisplayMissionData().missionMode}
+          statusMap={displayData.statusMap}
+          missionMode={displayData.missionMode}
           currentIndex={currentIndex}
           pinnedCount={PINNED_COUNT}
           onReorder={handleReorder}

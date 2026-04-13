@@ -17,7 +17,7 @@ interface Props {
   onToggleFullscreen?: () => void;
 }
 
-export const MissionMap: React.FC<Props> = ({
+const MissionMapBase: React.FC<Props> = ({
   roverLat = 0.0,
   roverLon = 0.0,
   waypoints = [],
@@ -34,15 +34,6 @@ export const MissionMap: React.FC<Props> = ({
   const lastUpdateRef = useRef<number>(0);
   const UPDATE_THROTTLE_MS = 100; // Throttle position updates to 100ms (10 Hz) to match web app
   const mapInitializedRef = useRef(false);
-  // TRAIL DISABLED: lastTrailLengthRef commented out
-  // const lastTrailLengthRef = useRef<number>(0); // Track trail length for incremental updates
-
-  // Stable mission key to detect actual waypoint changes (not just ref changes)
-  // Use index to avoid duplicate key issues when sn values are duplicated
-  const missionKey = useMemo(
-    () => waypoints.map((wp, idx) => `${idx}-${wp.sn}-${wp.lat.toFixed(7)}-${wp.lon.toFixed(7)}`).join('|'),
-    [waypoints]
-  );
 
   // Store initial rover data for one-time HTML generation
   const initialRoverData = useRef({
@@ -435,7 +426,36 @@ export const MissionMap: React.FC<Props> = ({
       if (liveRoverPos) bounds.push([liveRoverPos.lat, liveRoverPos.lon]);
       if (bounds.length > 0) map.fitBounds(bounds, { padding: [50, 50], animate: true });
     }
-    
+
+    // Track active waypoint index for highlight updates
+    let currentActiveIndex = waypoints.findIndex(wp => wp.isActive);
+    if (currentActiveIndex === -1) currentActiveIndex = -1;
+
+    // Set active waypoint highlight — swaps icons between old and new active markers
+    window.setActiveWaypoint = function(index) {
+      if (index === currentActiveIndex) return;
+
+      // Deactivate previous marker
+      if (currentActiveIndex >= 0 && currentActiveIndex < waypointMarkers.length) {
+        const prevMarker = waypointMarkers[currentActiveIndex];
+        prevMarker.setIcon(getWaypointIcon({
+          ...waypoints[currentActiveIndex],
+          isActive: false,
+        }, currentActiveIndex));
+      }
+
+      // Activate new marker
+      if (index >= 0 && index < waypointMarkers.length) {
+        const newMarker = waypointMarkers[index];
+        newMarker.setIcon(getWaypointIcon({
+          ...waypoints[index],
+          isActive: true,
+        }, index));
+      }
+
+      currentActiveIndex = index;
+    };
+
     // Notify React Native that map is ready
     setTimeout(() => {
       if (window.ReactNativeWebView) {
@@ -447,6 +467,9 @@ export const MissionMap: React.FC<Props> = ({
 </html>
     `;
   }, []); // Empty dependencies - HTML generated ONLY ONCE on mount, NEVER regenerated
+
+  // Memoize source prop to avoid new object reference every render
+  const mapSource = useMemo(() => ({ html: mapHTML }), [mapHTML]);
 
   // Initialize rover marker once when map is ready
   useEffect(() => {
@@ -559,6 +582,14 @@ export const MissionMap: React.FC<Props> = ({
       }
     };
   }, []);
+
+  // Update active waypoint highlight when index changes
+  useEffect(() => {
+    if (!mapReady || !webViewRef.current || activeWaypointIndex === undefined || activeWaypointIndex === null) return;
+    webViewRef.current.injectJavaScript(
+      `(function() { if (window.setActiveWaypoint) window.setActiveWaypoint(${activeWaypointIndex}); })(); true;`
+    );
+  }, [activeWaypointIndex, mapReady]);
 
   // Update rover position, heading, and trail via JavaScript injection
   useEffect(() => {
@@ -729,7 +760,7 @@ export const MissionMap: React.FC<Props> = ({
     <View style={styles.mapContainer}>
       <WebView
         ref={webViewRef}
-        source={{ html: mapHTML }}
+        source={mapSource}
         style={{ flex: 1, borderRadius: 12, backgroundColor: '#1e293b' }}
         onMessage={(event) => {
           try {
@@ -829,3 +860,5 @@ const styles = StyleSheet.create({
     zIndex: 2,
   },
 });
+
+export const MissionMap = React.memo(MissionMapBase);
