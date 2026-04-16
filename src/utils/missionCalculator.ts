@@ -135,7 +135,46 @@ export const calculateMissionStatistics = (
     };
 };
 
-export const haversineDistance = calculateDistance;
+/**
+ * Haversine distance between two points on a sphere (IUGG mean Earth radius).
+ * ~5-10x faster than Vincenty. Error < 0.5% vs WGS84 ellipsoid
+ * (under 2.5m at 500m, well below RTK GPS noise floor).
+ * Use for preview/recalculation where sub-meter accuracy isn't critical.
+ */
+export const haversineDistance = (
+    wp1: { lat: number; lon: number },
+    wp2: { lat: number; lon: number }
+): number => {
+    const R = 6371008.8; // IUGG mean Earth radius in meters
+    const toRad = Math.PI / 180;
+
+    const dLat = (wp2.lat - wp1.lat) * toRad;
+    const dLon = (wp2.lon - wp1.lon) * toRad;
+    const sinDLat = Math.sin(dLat * 0.5);
+    const sinDLon = Math.sin(dLon * 0.5);
+    const c1 = Math.cos(wp1.lat * toRad);
+    const c2 = Math.cos(wp2.lat * toRad);
+    const h = sinDLat * sinDLat + c1 * c2 * sinDLon * sinDLon;
+    // atan2 form — numerically stable for all distances, no asin domain errors
+    return 2 * R * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
+};
+
+/**
+ * Fast equirectangular distance approximation for short-range waypoints.
+ * Error < 0.25m at 500m, < 0.05% under 50km at mid-latitudes.
+ * ~20-30x faster than Vincenty. Ideal for inline WebView calculations
+ * and bulk recalculation where sub-meter accuracy isn't required.
+ */
+export const fastDistance = (
+    a: { lat: number; lon: number },
+    b: { lat: number; lon: number }
+): number => {
+    const R = 6371008.8; // IUGG mean Earth radius (meters)
+    const toRad = Math.PI / 180;
+    const x = (b.lon - a.lon) * toRad * Math.cos((a.lat + b.lat) * 0.5 * toRad);
+    const y = (b.lat - a.lat) * toRad;
+    return R * Math.sqrt(x * x + y * y);
+};
 
 /**
  * Calculate distance between two points using Vincenty's inverse formula (Karney method).
@@ -236,7 +275,7 @@ export const vincentyDistance = (
 
     // Failed to converge (antipodal points) - fall back to Haversine
     console.warn('[missionCalculator] Vincenty failed to converge, using Haversine fallback');
-    return calculateDistance(wp1, wp2);
+    return haversineDistance(wp1, wp2);
 };
 
 /**

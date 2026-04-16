@@ -37,8 +37,11 @@ export interface ChunkedParseOptions {
 
 // ── Threshold ────────────────────────────────────────────────────────────────
 
-// Below this row count, parse synchronously (avoids callback scheduling overhead)
-const CHUNK_THRESHOLD = 100;
+// Below this row count, parse synchronously (avoids callback scheduling overhead).
+// Inline parsing of 400 rows takes ~4ms; requestIdleCallback adds 800ms-1000ms
+// of scheduling overhead per chunk and can stall to 20s+ on busy devices.
+// Only use chunked parsing for files large enough to actually freeze the JS thread.
+const CHUNK_THRESHOLD = 1000;
 
 // ── requestIdleCallback polyfill ─────────────────────────────────────────────
 

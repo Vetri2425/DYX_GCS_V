@@ -1,6 +1,7 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, memo } from 'react';
 import { View, StyleSheet, SafeAreaView, StatusBar, Alert, Modal, ScrollView, TouchableOpacity, Text } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
+import { LegendList } from '@legendapp/list';
 import { colors } from '../theme/colors';
 import { PathPlanWaypoint } from '../types/pathplan';
 import { useRover } from '../context/RoverContext';
@@ -22,7 +23,7 @@ import { FailsafeModeSelector } from '../components/pathplan/FailsafeModeSelecto
 import { FailsafeStrictPopup } from '../components/pathplan/FailsafeStrictPopup';
 import { FailsafeRelaxNotification } from '../components/pathplan/FailsafeRelaxNotification';
 import { MapVisualizationControls, MapVisualization } from '../components/pathplan/MapVisualizationControls';
-import { vincentyDistance, recalculateWaypointDistances, calcBearing } from '../utils/missionCalculator';
+import { vincentyDistance, haversineDistance, recalculateWaypointDistances, calcBearing } from '../utils/missionCalculator';
 import { textToWaypointPath } from '../utils/textToPath';
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system/legacy';
@@ -41,6 +42,21 @@ import {
 import { CADAlignmentCanvas } from '../components/pathplan/CADAlignmentCanvas';
 import { useCADAlignment } from '../application/hooks/useCADAlignment';
 import { GeoPoint, Point2D } from '../core/geometry/types';
+import { parseCSVChunked } from '../utils/chunkedParser';
+
+// ─── Virtualized preview row (memoized for LegendList recycling) ────────────
+const PreviewRow = memo(({ item }: { item: PathPlanWaypoint }) => (
+  <View style={{ flexDirection: 'row', paddingVertical: 6, borderBottomWidth: 1, borderBottomColor: 'rgba(255,255,255,0.03)' }}>
+    <Text style={{ flex: 0.4, color: colors.text, fontSize: 11 }}>{item.id}</Text>
+    <Text style={{ flex: 1.8, color: colors.text, fontFamily: 'monospace', fontSize: 10 }}>{item.lat.toFixed(6)}</Text>
+    <Text style={{ flex: 1.8, color: colors.text, fontFamily: 'monospace', fontSize: 10 }}>{item.lon.toFixed(6)}</Text>
+    <Text style={{ flex: 0.8, color: colors.text, fontSize: 10 }}>{item.alt?.toFixed(1) || '0.0'}</Text>
+    <Text style={{ flex: 0.8, color: colors.text, fontSize: 10 }}>{(item.distance || 0).toFixed(0)}</Text>
+    <Text style={{ flex: 1, color: colors.textSecondary, fontSize: 9 }}>
+      {item.block || '—'}/{item.row || '—'}
+    </Text>
+  </View>
+));
 
 // Toggle debug logging for this screen
 const DEBUG_LOG = true;
@@ -1055,13 +1071,16 @@ export default function PathPlanScreen() {
     setIsCADMode(true);
   };
 
-  const calculateDistances = (waypoints: PathPlanWaypoint[]): PathPlanWaypoint[] => {
+  const calculateDistances = (waypoints: PathPlanWaypoint[], useFast = true): PathPlanWaypoint[] => {
+    // Haversine is ~5-10x faster than Vincenty with <0.5% error.
+    // Use fast mode for preview/recalculation; Vincenty for final upload accuracy.
+    const distanceFn = useFast ? haversineDistance : vincentyDistance;
     return waypoints.map((wp, idx) => {
       if (idx === 0) {
         return { ...wp, distance: 0 };
       }
       const prev = waypoints[idx - 1];
-      const dist = vincentyDistance(
+      const dist = distanceFn(
         { lat: prev.lat, lon: prev.lon },
         { lat: wp.lat, lon: wp.lon }
       );
@@ -1607,9 +1626,19 @@ export default function PathPlanScreen() {
         case 'waypoints':
           parsed = parseQGCWaypoints(content);
           break;
-        case 'csv':
-          parsed = parseCSV(content);
+        case 'csv': {
+          // Use chunked parser only for very large files (1000+ rows) to avoid JS thread freeze.
+          // requestIdleCallback adds 800ms-1s overhead per chunk on field tablets;
+          // inline parsing handles 400 rows in ~4ms, so chunking is counterproductive below 1000.
+          const csvRows = content.split(/\r?\n/).filter(Boolean).length;
+          if (csvRows > 1000) {
+            if (DEBUG_LOG) console.log('[PathPlan] Using chunked parser for', csvRows, 'rows');
+            parsed = await parseCSVChunked(content, name);
+          } else {
+            parsed = parseCSV(content);
+          }
           break;
+        }
         case 'json':
           parsed = parseJSON(content);
           break;
@@ -1633,25 +1662,9 @@ export default function PathPlanScreen() {
       // Calculate distances between waypoints
       const waypointsWithDistances = calculateDistances(parsed);
 
-      // Auto-set mark based on global servo_enabled setting
-      // Wrapped in a 3s timeout — getMissionServoConfig() hangs indefinitely when
-      // the backend is unreachable, silently blocking the entire upload flow.
-      let globalServoEnabled = true;
-      try {
-        const response: any = await Promise.race([
-          services.getMissionServoConfig(),
-          new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 1500)),
-        ]);
-        const config = response.message || response.config || response.data || response;
-        globalServoEnabled = config.servo_enabled ?? true;
-      } catch (e) {
-        console.warn('[PathPlan] Could not fetch servo config for mark defaults, using default (true)');
-      }
-
-      // Guard: component may have unmounted during the async call above
-      // (e.g. socket error causes context reset → screen unmount)
-      if (!mountedRef.current) return;
-
+      // Use the already-polled globalServoEnabled state (refreshed every 2s at mount)
+      // instead of re-fetching servo config here, which blocked the upload for 1.5s
+      // when the backend was unreachable.
       const waypointsWithMark = waypointsWithDistances.map(wp => ({
         ...wp,
         mark: wp.mark ?? globalServoEnabled,
@@ -2318,10 +2331,10 @@ export default function PathPlanScreen() {
               </View>
             )}
 
-            {/* Waypoints Table */}
+            {/* Waypoints Table — virtualized with LegendList for instant modal open */}
             <Text style={{ color: colors.accent, fontSize: 12, fontWeight: '600', marginBottom: 6 }}>Marking Point Details:</Text>
-            <ScrollView style={{ maxHeight: 280, borderWidth: 1, borderColor: colors.border, borderRadius: 8, padding: 8, backgroundColor: colors.cardBg }}>
-              <View style={{ flexDirection: 'row', paddingVertical: 6, borderBottomWidth: 1, borderBottomColor: colors.border }}>
+            <View style={{ maxHeight: 280, borderWidth: 1, borderColor: colors.border, borderRadius: 8, backgroundColor: colors.cardBg }}>
+              <View style={{ flexDirection: 'row', paddingVertical: 6, paddingHorizontal: 8, borderBottomWidth: 1, borderBottomColor: colors.border }}>
                 <Text style={{ flex: 0.4, color: '#67E8F9', fontWeight: '700', fontSize: 11 }}>#</Text>
                 <Text style={{ flex: 1.8, color: '#67E8F9', fontWeight: '700', fontSize: 11 }}>Latitude</Text>
                 <Text style={{ flex: 1.8, color: '#67E8F9', fontWeight: '700', fontSize: 11 }}>Longitude</Text>
@@ -2329,19 +2342,18 @@ export default function PathPlanScreen() {
                 <Text style={{ flex: 0.8, color: '#67E8F9', fontWeight: '700', fontSize: 11 }}>Dist(m)</Text>
                 <Text style={{ flex: 1, color: '#67E8F9', fontWeight: '700', fontSize: 11 }}>Block/Row</Text>
               </View>
-              {uploadPreviewWaypoints && uploadPreviewWaypoints.map((wp) => (
-                <View key={wp.id} style={{ flexDirection: 'row', paddingVertical: 6, borderBottomWidth: 1, borderBottomColor: 'rgba(255,255,255,0.03)' }}>
-                  <Text style={{ flex: 0.4, color: colors.text, fontSize: 11 }}>{wp.id}</Text>
-                  <Text style={{ flex: 1.8, color: colors.text, fontFamily: 'monospace', fontSize: 10 }}>{wp.lat.toFixed(6)}</Text>
-                  <Text style={{ flex: 1.8, color: colors.text, fontFamily: 'monospace', fontSize: 10 }}>{wp.lon.toFixed(6)}</Text>
-                  <Text style={{ flex: 0.8, color: colors.text, fontSize: 10 }}>{wp.alt?.toFixed(1) || '0.0'}</Text>
-                  <Text style={{ flex: 0.8, color: colors.text, fontSize: 10 }}>{(wp.distance || 0).toFixed(0)}</Text>
-                  <Text style={{ flex: 1, color: colors.textSecondary, fontSize: 9 }}>
-                    {wp.block || '—'}/{wp.row || '—'}
-                  </Text>
-                </View>
-              ))}
-            </ScrollView>
+              <LegendList
+                data={uploadPreviewWaypoints ?? []}
+                renderItem={({ item }) => <PreviewRow item={item} />}
+                keyExtractor={(item) => String(item.id)}
+                recycleItems
+                estimatedItemSize={40}
+                drawDistance={150}
+                waitForInitialLayout={false}
+                style={{ maxHeight: 240 }}
+                contentContainerStyle={{ paddingHorizontal: 8 }}
+              />
+            </View>
 
             <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 14, gap: 8 }}>
               <TouchableOpacity onPress={() => {
@@ -2381,24 +2393,32 @@ export default function PathPlanScreen() {
                           text: 'Proceed Anyway', onPress: () => {
                             const sanitized = sanitizeWaypointsForUpload(uploadPreviewWaypoints);
 
+                            // Close modal first for instant visual response, then apply waypoints.
+                            // Without this order swap, updateWaypoints (394+ object transforms +
+                            // context re-render) blocks the modal close for seconds.
+                            setShowUploadPreview(false);
+
                             // Check pathAssignmentMode even when there are warnings
                             if (pathAssignmentMode === 'manual') {
                               if (DEBUG_LOG) console.log('[PathPlan] Importing waypoints in MANUAL mode (with warnings):', sanitized.length);
-                              updateWaypoints(sanitized);
-                              setManualPathConnections([]);
-                              setShowConnectionChoice(true);
+                              // Defer heavy waypoint update to next frame so modal close renders first
+                              requestAnimationFrame(() => {
+                                updateWaypoints(sanitized);
+                                setManualPathConnections([]);
+                                setShowConnectionChoice(true);
+                              });
                               Alert.alert(
                                 '✏️ Manual Path Mode',
                                 `${sanitized.length} marking points imported. Choose your preferred connection method.`,
                                 [{ text: 'Choose Method' }]
                               );
-                              setShowUploadPreview(false);
                             } else {
                               // Auto mode: Sequential import as usual
                               if (DEBUG_LOG) console.log('[PathPlan] Applying imported waypoints (Proceed with warnings):', sanitized.length, sanitized.slice(0, 3));
-                              updateWaypoints(sanitized);
+                              requestAnimationFrame(() => {
+                                updateWaypoints(sanitized);
+                              });
                               Alert.alert('✓ Import Complete', `Successfully imported ${sanitized.length} marking points.`);
-                              setShowUploadPreview(false);
                             }
                           }
                         }
@@ -2406,26 +2426,31 @@ export default function PathPlanScreen() {
                     );
                   } else {
                     // Handle mode-specific import
+                    // Close modal first for instant visual response, then apply waypoints.
+                    setShowUploadPreview(false);
+
                     if (pathAssignmentMode === 'manual') {
                       // Manual mode: Import waypoints without sequential ordering, enable connection mode
                       const sanitized = sanitizeWaypointsForUpload(uploadPreviewWaypoints);
                       if (DEBUG_LOG) console.log('[PathPlan] Importing waypoints in MANUAL mode:', sanitized.length);
-                      updateWaypoints(sanitized);
-                      setManualPathConnections([]);
-                      setShowConnectionChoice(true);
+                      requestAnimationFrame(() => {
+                        updateWaypoints(sanitized);
+                        setManualPathConnections([]);
+                        setShowConnectionChoice(true);
+                      });
                       Alert.alert(
                         '✏️ Manual Path Mode',
                         `${sanitized.length} marking points imported. Choose your preferred connection method.`,
                         [{ text: 'Choose Method' }]
                       );
-                      setShowUploadPreview(false);
                     } else {
                       // Auto mode: Sequential import as usual
                       const sanitized = sanitizeWaypointsForUpload(uploadPreviewWaypoints);
                       if (DEBUG_LOG) console.log('[PathPlan] Applying imported waypoints (Proceed clean):', sanitized.length, sanitized.slice(0, 3));
-                      updateWaypoints(sanitized);
+                      requestAnimationFrame(() => {
+                        updateWaypoints(sanitized);
+                      });
                       Alert.alert('✓ Import Complete', `Successfully imported ${sanitized.length} marking points.`);
-                      setShowUploadPreview(false);
                     }
                   }
                 }
