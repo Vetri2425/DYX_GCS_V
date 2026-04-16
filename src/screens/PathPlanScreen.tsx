@@ -1848,8 +1848,8 @@ export default function PathPlanScreen() {
                     style={cadStyles.gpsInput}
                     onPress={() => {
                       // Use current rover position as default
-                      const curLat = telemetry?.lat?.toFixed(6) ?? '';
-                      const curLon = telemetry?.lon?.toFixed(6) ?? '';
+                      const curLat = telemetry?.global?.lat?.toFixed(6) ?? '';
+                      const curLon = telemetry?.global?.lon?.toFixed(6) ?? '';
                       setGpsInputA(prev => ({ ...prev, lat: curLat }));
                     }}
                   >
@@ -1859,7 +1859,7 @@ export default function PathPlanScreen() {
                   <TouchableOpacity
                     style={cadStyles.gpsInput}
                     onPress={() => {
-                      const curLon = telemetry?.lon?.toFixed(6) ?? '';
+                      const curLon = telemetry?.global?.lon?.toFixed(6) ?? '';
                       setGpsInputA(prev => ({ ...prev, lon: curLon }));
                     }}
                   >
@@ -2501,23 +2501,19 @@ export default function PathPlanScreen() {
       <CADDrawingCanvas
         visible={showCADCanvas}
         onClose={() => setShowCADCanvas(false)}
-        onSaveWaypoints={(waypoints) => {
-          // Add waypoints to the mission
-          waypoints.forEach((wp, index) => {
-            const newWaypoint: Waypoint = {
-              id: Date.now() + index,
-              lat: wp.lat,
-              lng: wp.lng,
-              altitude: 10,
-              speed: 5,
-              action: 'none',
-              heading: 0,
-              gimbalPitch: -90,
-              capturePhoto: false,
-              hoverTime: 0,
-            };
-            setWaypoints(prev => [...prev, newWaypoint]);
-          });
+        onSaveWaypoints={(cadWaypoints) => {
+          // Add waypoints to the mission using PathPlanWaypoint type
+          const newWaypoints: PathPlanWaypoint[] = cadWaypoints.map((wp, index) => ({
+            id: Date.now() + index,
+            lat: wp.lat,
+            lon: wp.lng,
+            alt: 0,
+            distance: 0,
+            block: '',
+            row: '',
+            pile: String(index + 1),
+          }));
+          updateWaypoints([...waypoints, ...newWaypoints]);
         }}
         currentPosition={roverPosition || { lat: 13.0827, lng: 80.2707 }}
       />

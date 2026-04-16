@@ -41,6 +41,7 @@ export const PathSequenceSidebar = React.memo(({
     const [isEditingName, setIsEditingName] = useState(false);
     const [editedName, setEditedName] = useState(missionName);
     const [isFullScreenTable, setIsFullScreenTable] = useState(false);
+    const [isEditMode, setIsEditMode] = useState(false); // Toggle between fast scroll and drag-to-reorder
     // Unicode icons: ↗ (arrow out), ↩ (arrow in)
 
     // Check if mark section should be hidden
@@ -342,6 +343,16 @@ export const PathSequenceSidebar = React.memo(({
                                     <MaterialCommunityIcons name="swap-vertical" size={16} color="#fff" />
                                     <Text style={styles.fsActionBtnText}>Reverse</Text>
                                 </TouchableOpacity>
+                                {/* Edit Mode Toggle */}
+                                <TouchableOpacity
+                                    onPress={() => setIsEditMode(!isEditMode)}
+                                    style={[styles.fsActionBtn, isEditMode ? styles.fsEditBtnActive : styles.fsEditBtn]}
+                                >
+                                    <Ionicons name={isEditMode ? 'create-outline' : 'eye-outline'} size={18} color={isEditMode ? '#fff' : '#222'} />
+                                    <Text style={[styles.fsActionBtnText, isEditMode && styles.fsActionBtnTextActive]}>
+                                        {isEditMode ? 'Edit' : 'View'}
+                                    </Text>
+                                </TouchableOpacity>
                                 <TouchableOpacity onPress={() => setIsFullScreenTable(false)} style={[styles.fsActionBtn, styles.fsCloseBtn]}>
                                     <MaterialCommunityIcons name="arrow-collapse" size={18} color="#222" />
                                 </TouchableOpacity>
@@ -378,6 +389,7 @@ export const PathSequenceSidebar = React.memo(({
                                 onToggleMark={onToggleMark}
                                 globalServoEnabled={globalServoEnabled}
                                 missionMode={missionMode}
+                                isEditMode={isEditMode}
                             />
                         </View>
                     </View>
@@ -638,10 +650,22 @@ const styles = StyleSheet.create({
         backgroundColor: colors.accent,
         borderColor: 'rgba(59, 130, 246, 0.5)',
     },
+    fsEditBtn: {
+        backgroundColor: colors.cardBg,
+        borderColor: colors.border,
+        paddingHorizontal: 14,
+    },
+    fsEditBtnActive: {
+        backgroundColor: colors.accent,
+        borderColor: 'rgba(59, 130, 246, 0.5)',
+    },
     fsCloseBtn: {
         backgroundColor: '#FFD600',
         borderColor: 'rgba(255, 214, 0, 0.5)',
         paddingHorizontal: 14,
+    },
+    fsActionBtnTextActive: {
+        color: '#ffffff',
     },
     fsActionBtnText: {
         color: '#ffffff',

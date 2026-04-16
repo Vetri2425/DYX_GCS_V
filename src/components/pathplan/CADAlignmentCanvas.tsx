@@ -393,7 +393,7 @@ function renderGrid(
   transform: ViewTransform
 ) {
   const gridColor = colors.surface + '40'; // transparent
-  const elements: JSX.Element[] = [];
+  const elements: React.ReactElement[] = [];
 
   // Compute grid spacing based on model size
   const modelWidth = bounds.maxX - bounds.minX;

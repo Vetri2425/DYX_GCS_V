@@ -13,6 +13,8 @@ import { setBackendURL } from './src/config';
 import { saveBackendURL } from './src/utils/backendStorage';
 import { JetsonDevice } from './src/utils/jetsonDiscovery';
 import RoverDiscoveryScreen from './src/screens/RoverDiscoveryScreen';
+import { useFonts } from 'expo-font';
+import { Fontisto, Ionicons, MaterialCommunityIcons, MaterialIcons } from '@expo/vector-icons';
 
 GlobalCrashHandler.initialize();
 
@@ -57,6 +59,17 @@ function AppContent() {
 }
 
 export default function App() {
+  const [fontsLoaded] = useFonts({
+    ...Fontisto.font,
+    ...Ionicons.font,
+    ...MaterialCommunityIcons.font,
+    ...MaterialIcons.font,
+  });
+
+  if (!fontsLoaded) {
+    return null;
+  }
+
   return (
     <ErrorBoundary componentName="App Root">
       <GestureHandlerRootView style={{ flex: 1 }}>

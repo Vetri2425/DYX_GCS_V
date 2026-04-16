@@ -3,6 +3,8 @@ export const colors = {
   primary: '#0f2b4cff',
   secondary: '#072347ff',
   panelBg: '#051d38ff',
+  background: '#0A1628',
+  surface: '#0D2A4B',
   
   // Accent colors
   accent: '#3B82F6',
@@ -13,6 +15,13 @@ export const colors = {
   warning: '#F59E0B',
   danger: '#EF4444',
   info: '#3B82F6',
+  
+  // Semantic color aliases (for convenience)
+  green: '#10B981',
+  yellow: '#F59E0B',
+  red: '#EF4444',
+  cyan: '#67E8F9',
+  magenta: '#F472B6',
   
   // Text colors
   text: '#FFFFFF',
