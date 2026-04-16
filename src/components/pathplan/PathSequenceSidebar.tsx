@@ -1,6 +1,6 @@
 import React, { useState, useCallback } from 'react';
 import { Modal, Alert } from 'react-native';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, FlatList } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { colors } from '../../theme/colors';
@@ -254,18 +254,18 @@ export const PathSequenceSidebar = React.memo(({
 
 
             {/* Waypoints List */}
-            <ScrollView style={styles.waypointsList} showsVerticalScrollIndicator={true}>
-                {/* Table Header */}
-                <View style={styles.tableHeaderRow}>
-                    <Text style={[styles.tableHeaderText, { flex: 0.4 }]}>Seq</Text>
-                    <Text style={[styles.tableHeaderText, { flex: 1.2 }]}>Latitude</Text>
-                    <Text style={[styles.tableHeaderText, { flex: 1.2 }]}>Longitude</Text>
-                    <Text style={[styles.tableHeaderText, { flex: 0.6 }]}>Dist</Text>
-                    {!isMarkHidden && <Text style={[styles.tableHeaderText, { flex: 0.4 }]}>Mark</Text>}
-                    <Text style={[styles.tableHeaderText, { flex: 0.5 }]}>Action</Text>
-                </View>
-
-                {waypoints.map((wp, index) => (
+            {/* Table Header — fixed above virtualized list */}
+            <View style={styles.tableHeaderRow}>
+                <Text style={[styles.tableHeaderText, { flex: 0.4 }]}>Seq</Text>
+                <Text style={[styles.tableHeaderText, { flex: 1.2 }]}>Latitude</Text>
+                <Text style={[styles.tableHeaderText, { flex: 1.2 }]}>Longitude</Text>
+                <Text style={[styles.tableHeaderText, { flex: 0.6 }]}>Dist</Text>
+                {!isMarkHidden && <Text style={[styles.tableHeaderText, { flex: 0.4 }]}>Mark</Text>}
+                <Text style={[styles.tableHeaderText, { flex: 0.5 }]}>Action</Text>
+            </View>
+            <FlatList
+                data={waypoints}
+                renderItem={({ item: wp, index }) => (
                     <TouchableOpacity
                         key={`${wp.id}-${index}`}
                         style={[
@@ -302,14 +302,21 @@ export const PathSequenceSidebar = React.memo(({
                             </TouchableOpacity>
                         </View>
                     </TouchableOpacity>
-                ))}
-                {waypoints.length === 0 && (
+                )}
+                keyExtractor={(wp, index) => `${wp.id}-${index}`}
+                initialNumToRender={15}
+                maxToRenderPerBatch={20}
+                windowSize={5}
+                getItemLayout={(_, index) => ({ length: 48, offset: 48 * index, index })}
+                style={styles.waypointsList}
+                ListEmptyComponent={
                     <View style={styles.emptyState}>
                         <Text style={styles.emptyText}>No marking points yet</Text>
                         <Text style={styles.emptyHint}>Tap on map to add</Text>
                     </View>
-                )}
-            </ScrollView>
+                }
+                extraData={selectedWaypoint}
+            />
 
             {/* Footer */}
             <View style={styles.footer}>

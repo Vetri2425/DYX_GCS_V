@@ -1,4 +1,4 @@
-import React, { useState, useRef, useMemo, useEffect } from 'react';
+﻿import React, { useState, useRef, useMemo, useEffect } from 'react';
 import { View, StyleSheet, TouchableOpacity, Text, Alert, PanResponder, Animated } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { WebView } from 'react-native-webview';
@@ -101,6 +101,7 @@ export const PathPlanMap: React.FC<Props> = ({
   const drawingPointsRef = useRef<{ lat: number; lng: number }[]>([]);
   const mapInitializedRef = useRef(false);
   const lastWaypointsRef = useRef<string>(''); // Track waypoints changes by serialized string
+  const lastSelectedRef = useRef<number | null>(null); // Track previous selectedWaypoint id for lightweight icon swap
   // TRAIL DISABLED: Trail state variables commented out
   // const trailPointsRef = useRef<Array<{lat: number, lon: number, timestamp: number}>>([]);
   // const lastTrailUpdateRef = useRef<number>(0);
@@ -332,6 +333,10 @@ export const PathPlanMap: React.FC<Props> = ({
     let missionPolyline = null;
     let missionGlowLine = null;
     const waypointMarkers = [];
+    // FIX 1: marker registry — key: wp.id, value: L.marker
+    const markerRegistry = new Map();
+    // FIX 2: drag-on-demand state
+    window._activeDragId = null;
 
     // TRAIL DISABLED: Single trail polyline for efficient rendering
     // window.roverTrail = null;
@@ -361,117 +366,36 @@ export const PathPlanMap: React.FC<Props> = ({
         iconAnchor: [size / 2, size],
       });
     }
-    
-    if (waypoints.length > 1) {
-      const pathCoords = waypoints.map(wp => [wp.lat, wp.lon]);
-      missionGlowLine = L.polyline(pathCoords, {
-        color: '#f97316',
-        weight: 6,
-        opacity: 0.2,
-      }).addTo(map);
-      missionPolyline = L.polyline(pathCoords, {
-        color: '#f97316',
-        weight: 2.5,
-        opacity: 0.9,
-      }).addTo(map);
-    }
-    
-    waypoints.forEach((wp, index) => {
+
+    // FIX 1: Extract marker creation into a reusable function (no drag, no popup)
+    function createMarker(wp, index) {
       const marker = L.marker([wp.lat, wp.lon], {
         icon: getWaypointIcon(wp, index),
-        draggable: true,
+        draggable: false,
       }).addTo(map);
-      
-      marker.bindPopup(\`
-        <strong>WP \${wp.id}</strong><br>
-        Row: \${wp.row || '-'}<br>
-        Block: \${wp.block || '-'}<br>
-        Pile: \${wp.pile || '-'}<br>
-        Alt: \${wp.alt}m
-      \`);
-      
-      // Prevent popup from opening when measure tool is active
-      marker.on('popupopen', function(e) {
-        if (window.isMeasureToolActive) {
-          marker.closePopup();
-        }
-      });
-      
+
       marker.on('click', function(e) {
         L.DomEvent.stopPropagation(e);
-        // Activate ortho guide for this waypoint - mark as intentionally activated
         if (window.orthoGuideState) {
           window.orthoGuideState.lastWaypoint = { lat: wp.lat, lon: wp.lon };
-          window.orthoGuideState.isIntentionallyActivated = true;  // User clicked this waypoint
+          window.orthoGuideState.isIntentionallyActivated = true;
         }
         window.ReactNativeWebView.postMessage(JSON.stringify({
           type: 'waypointClick',
           id: wp.id
         }));
-      });
-
-      marker.on('dragstart', function(e) {
-        window.dragPreviewState.isDragging = true;
-        window.dragPreviewState.draggingWpIndex = index;
-        // Hide main polyline during drag for cleaner visuals
-        if (missionPolyline) missionPolyline.setStyle({ opacity: 0.3 });
-        if (missionGlowLine) missionGlowLine.setStyle({ opacity: 0.1 });
-        
-        // Activate ortho guide ONLY if:
-        // 1. User intentionally clicked this waypoint first, OR
-        // 2. This is the last waypoint (for creating new waypoints)
-        if (window.orthoGuideState) {
-          const isLastWaypoint = index === waypoints.length - 1;
-          const wasIntentionallyActivated = window.orthoGuideState.isIntentionallyActivated && 
-                                            window.orthoGuideState.lastWaypoint && 
-                                            window.orthoGuideState.lastWaypoint.lat === wp.lat &&
-                                            window.orthoGuideState.lastWaypoint.lon === wp.lon;
-          
-          if (isLastWaypoint || wasIntentionallyActivated) {
-            // For last waypoint: use previous waypoint as reference
-            // For intentionally selected: use the waypoint itself as reference
-            if (isLastWaypoint && index > 0) {
-              const prevWp = waypoints[index - 1];
-              window.orthoGuideState.lastWaypoint = { lat: prevWp.lat, lon: prevWp.lon };
-            }
-            // If intentionally activated, lastWaypoint is already set from click
-          } else {
-            // Not intentionally activated and not last waypoint - disable ortho snap
-            window.orthoGuideState.isIntentionallyActivated = false;
-            window.orthoGuideState.lastWaypoint = null;
-          }
-        }
-      });
-
-      marker.on('drag', function(e) {
-        const pos = e.target.getLatLng();
-        updateDragPreview(pos, index, waypoints);
-        // Update ortho guide during drag - DISABLED in manual connection mode
-        if (window.orthoGuideState && window.updateOrthoGuide && !window.isManualConnectionMode) {
-          window.updateOrthoGuide(pos);
-        }
-      });
-
-      marker.on('dragend', function(e) {
-        clearDragPreview();
-        // Clear ortho guide after drag and reset intentional activation flag
-        if (window.orthoGuideState && window.clearOrthoGuide) {
-          window.clearOrthoGuide();
-          window.orthoGuideState.isIntentionallyActivated = false;
-        }
-        if (missionPolyline) missionPolyline.setStyle({ opacity: 1 });
-        if (missionGlowLine) missionGlowLine.setStyle({ opacity: 0.2 });
-        const newPos = e.target.getLatLng();
+        const rect = map.getContainer().getBoundingClientRect();
         window.ReactNativeWebView.postMessage(JSON.stringify({
-          type: 'waypointDrag',
-          id: wp.id,
-          lat: newPos.lat,
-          lng: newPos.lng
+          type: 'waypointContextMenu',
+          waypointId: wp.id,
+          x: e.originalEvent ? e.originalEvent.clientX - rect.left : 0,
+          y: e.originalEvent ? e.originalEvent.clientY - rect.top : 0
         }));
       });
 
       marker.on('contextmenu', function(e) {
         L.DomEvent.preventDefault(e);
+        L.DomEvent.stopPropagation(e);
         const mapContainer = map.getContainer();
         const rect = mapContainer.getBoundingClientRect();
         window.ReactNativeWebView.postMessage(JSON.stringify({
@@ -484,8 +408,76 @@ export const PathPlanMap: React.FC<Props> = ({
         }));
       });
 
-      waypointMarkers.push(marker);
-    });
+      return marker;
+    }
+
+    // FIX 1: Polyline rebuild extracted into standalone function
+    function updatePolyline(wps) {
+      if (missionPolyline) { map.removeLayer(missionPolyline); missionPolyline = null; }
+      if (missionGlowLine) { map.removeLayer(missionGlowLine); missionGlowLine = null; }
+      if (wps.length > 1) {
+        const pathCoords = wps.map(function(w) { return [w.lat, w.lon]; });
+        missionGlowLine = L.polyline(pathCoords, { color: '#f97316', weight: 6, opacity: 0.2 }).addTo(map);
+        missionPolyline = L.polyline(pathCoords, { color: '#f97316', weight: 2.5, opacity: 0.9 }).addTo(map);
+      }
+    }
+
+    // FIX 1: Diff engine — add/remove/move only changed markers
+    function diffAndUpdate(newWaypoints) {
+      const newIds = new Set(newWaypoints.map(function(w) { return w.id; }));
+      // Remove markers no longer in list
+      markerRegistry.forEach(function(marker, id) {
+        if (!newIds.has(id)) {
+          map.removeLayer(marker);
+          markerRegistry.delete(id);
+        }
+      });
+      // Add new markers or move existing ones
+      newWaypoints.forEach(function(wp, index) {
+        if (markerRegistry.has(wp.id)) {
+          const existing = markerRegistry.get(wp.id);
+          const pos = existing.getLatLng();
+          if (pos.lat !== wp.lat || pos.lng !== wp.lon) {
+            existing.setLatLng([wp.lat, wp.lon]);
+          }
+        } else {
+          const marker = createMarker(wp, index);
+          markerRegistry.set(wp.id, marker);
+        }
+      });
+      // Rebuild waypointMarkers[] in order for Effect B (uses index-based access)
+      waypointMarkers.length = 0;
+      newWaypoints.forEach(function(wp) {
+        waypointMarkers.push(markerRegistry.get(wp.id));
+      });
+      updatePolyline(newWaypoints);
+    }
+
+    // FIX 1: Chunked initial load — yields to render loop every 50 markers
+    function chunkedLoad(newWaypoints) {
+      const CHUNK = 50;
+      var i = 0;
+      function loadNext() {
+        var slice = newWaypoints.slice(i, i + CHUNK);
+        slice.forEach(function(wp, offset) {
+          var marker = createMarker(wp, i + offset);
+          markerRegistry.set(wp.id, marker);
+          waypointMarkers.push(marker);
+        });
+        i += CHUNK;
+        if (i < newWaypoints.length) {
+          setTimeout(loadNext, 0);
+        } else {
+          updatePolyline(newWaypoints);
+        }
+      }
+      loadNext();
+    }
+
+
+    // FIX 1: Initial load uses chunkedLoad (waypoints starts as [] so this is a no-op on mount)
+    chunkedLoad(waypoints);
+
     
     // console.log('[PathPlanMap] Rover data:', roverData);
 
@@ -1213,8 +1205,9 @@ export const PathPlanMap: React.FC<Props> = ({
     if (!mapReady || !webViewRef.current) return;
 
     // Create a stable key to detect actual changes including manual connections
+    // NOTE: selectedWaypoint intentionally excluded — handled by Effect B (lightweight icon swap)
     const waypointsKey = waypoints.map(wp => `${wp.id}-${wp.lat}-${wp.lon}`).join('|') +
-      `|manualMode:${isManualConnectionMode}|manualConns:${manualConnections.join(',')}|connMode:${manualConnectionMode}|selected:${selectedWaypoint}|pointTool:${activeDrawingTool === 'line'}`;
+      `|manualMode:${isManualConnectionMode}|manualConns:${manualConnections.join(',')}|connMode:${manualConnectionMode}|pointTool:${activeDrawingTool === 'line'}`;
 
     // Only update if waypoints actually changed OR if this is the first update after map ready
     if (waypointsKey === lastWaypointsRef.current && lastWaypointsRef.current !== '') return;
@@ -1229,7 +1222,7 @@ export const PathPlanMap: React.FC<Props> = ({
       block: wp.block,
       row: wp.row,
       pile: wp.pile,
-      isSelected: selectedWaypoint === wp.id,
+      isSelected: false, // Selection handled separately by Effect B (lightweight icon swap)
       isStart: idx === 0,
     })));
 
@@ -1541,205 +1534,79 @@ export const PathPlanMap: React.FC<Props> = ({
                     console.log('[MapDrag] Map dragging ENABLED for', connectionMode, 'mode');
                 }
 
-                // Clear existing waypoint markers
-                waypointMarkers.forEach(marker => map.removeLayer(marker));
-                waypointMarkers.length = 0;
+                // FIX 1: Manual connection mode — full rebuild (different icons/polylines needed)
+                // Normal mode — diff engine (add/remove/move only changed markers)
+                if (isManualMode) {
+                    // Full rebuild for manual connection mode (icon state depends on connection list)
+                    waypointMarkers.forEach(function(m) { map.removeLayer(m); });
+                    waypointMarkers.length = 0;
+                    markerRegistry.clear();
 
-                // Remove existing polyline
-                if (missionPolyline) {
-                    map.removeLayer(missionPolyline);
-                    missionPolyline = null;
-                }
-                if (missionGlowLine) {
-                    map.removeLayer(missionGlowLine);
-                    missionGlowLine = null;
-                }
+                    if (missionPolyline) { map.removeLayer(missionPolyline); missionPolyline = null; }
+                    if (missionGlowLine) { map.removeLayer(missionGlowLine); missionGlowLine = null; }
 
-                // Add polyline based on mode
-                if (isManualMode && manualConnections.length > 1) {
-                    const connectedWaypoints = manualConnections.map(id =>
-                        newWaypoints.find(wp => wp.id === id)
-                    ).filter(wp => wp !== undefined);
-
-                    if (connectedWaypoints.length > 1) {
-                        const pathCoords = connectedWaypoints.map(wp => [wp.lat, wp.lon]);
-                        missionGlowLine = L.polyline(pathCoords, {
-                            color: '#4ADE80',
-                            weight: 7,
-                            opacity: 0.2,
-                            dashArray: '5, 10',
-                        }).addTo(map);
-                        missionPolyline = L.polyline(pathCoords, {
-                            color: '#4ADE80',
-                            weight: 3,
-                            opacity: 0.9,
-                            dashArray: '5, 10',
-                        }).addTo(map);
-                    }
-                } else if (isManualMode && manualConnections.length === 1) {
-                    // Show single connected waypoint (no line yet)
-                } else if (!isManualMode && newWaypoints.length > 1) {
-                    const pathCoords = newWaypoints.map(wp => [wp.lat, wp.lon]);
-                    missionGlowLine = L.polyline(pathCoords, {
-                        color: '#f97316',
-                        weight: 6,
-                        opacity: 0.2,
-                    }).addTo(map);
-                    missionPolyline = L.polyline(pathCoords, {
-                        color: '#f97316',
-                        weight: 2.5,
-                        opacity: 0.9,
-                    }).addTo(map);
-                }
-
-                // Add new waypoint markers
-                newWaypoints.forEach((wp, index) => {
-                    const isConnected = isManualMode && manualConnections.includes(wp.id);
-                    const connectionIndex = manualConnections.indexOf(wp.id);
-                    
-                    let markerIcon;
-                    if (isManualMode && isConnected) {
-                        markerIcon = L.divIcon({
-                            html: \`<div style="position: relative;"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="48" height="48" fill="#4ADE80"><path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7z"/><text x="12" y="10.5" font-family="sans-serif" font-size="12" font-weight="bold" fill="white" text-anchor="middle" dy=".3em">\${wp.id}</text></svg><div style="position: absolute; top: -12px; right: -12px; background: #22c55e; color: white; border-radius: 50%; width: 30px; height: 30px; display: flex; align-items: center; justify-content: center; font-size: 15px; font-weight: bold; border: 2px solid white; z-index: 1000;">\${connectionIndex + 1}</div></div>\`,
-                            className: 'custom-marker' + (connectionMode === 'drag' ? ' drag-mode-active' : ''),
-                            iconSize: [48, 48],
-                            iconAnchor: [24, 48],
-                        });
-                    } else {
-                        const baseIcon = getWaypointIcon(wp, index);
-                        if (connectionMode === 'drag') {
-                             baseIcon.options.className += ' drag-mode-active';
+                    if (manualConnections.length > 1) {
+                        const connectedWaypoints = manualConnections.map(id =>
+                            newWaypoints.find(wp => wp.id === id)
+                        ).filter(wp => wp !== undefined);
+                        if (connectedWaypoints.length > 1) {
+                            const pathCoords = connectedWaypoints.map(wp => [wp.lat, wp.lon]);
+                            missionGlowLine = L.polyline(pathCoords, { color: '#4ADE80', weight: 7, opacity: 0.2, dashArray: '5, 10' }).addTo(map);
+                            missionPolyline = L.polyline(pathCoords, { color: '#4ADE80', weight: 3, opacity: 0.9, dashArray: '5, 10' }).addTo(map);
                         }
-                        markerIcon = baseIcon;
-                    }
-                    
-                    const marker = L.marker([wp.lat, wp.lon], {
-                        icon: markerIcon,
-                        draggable: !isManualMode && isPointToolActive,
-                    }).addTo(map);
-
-                    if (!isManualMode || connectionMode === 'pan') {
-                        marker.bindPopup(\`
-                            <strong>WP \${wp.id}</strong><br>
-                            Row: \${wp.row || '-'}<br>
-                            Block: \${wp.block || '-'}<br>
-                            Pile: \${wp.pile || '-'}<br>
-                            Alt: \${wp.alt}m
-                        \`);
                     }
 
-                    // Click handling - only for tap mode in manual connection, or normal mode
-                    if (connectionMode === 'tap' || !isManualMode) {
-                        marker.on('click', function(e) {
-                            L.DomEvent.stopPropagation(e);
-                            // Activate ortho guide for this waypoint - mark as intentionally activated
-                            if (window.orthoGuideState) {
-                                window.orthoGuideState.lastWaypoint = { lat: wp.lat, lon: wp.lon };
-                                window.orthoGuideState.isIntentionallyActivated = true;  // User clicked this waypoint
-                            }
-                            if (isManualMode && connectionMode === 'tap') {
-                                // Manual connection tap
-                                window.ReactNativeWebView.postMessage(JSON.stringify({
-                                    type: 'waypointClick',
-                                    id: wp.id
-                                }));
-                            } else {
-                                console.log('Waypoint clicked', wp.id, 'mode:', connectionMode);
-                                window.ReactNativeWebView.postMessage(JSON.stringify({
-                                    type: 'waypointClick',
-                                    id: wp.id
-                                }));
-                                
-                                const rect = map.getContainer().getBoundingClientRect();
-                                window.ReactNativeWebView.postMessage(JSON.stringify({
-                                    type: 'waypointContextMenu',
-                                    waypointId: wp.id,
-                                    x: e.originalEvent.clientX - rect.left,
-                                    y: e.originalEvent.clientY - rect.top
-                                }));
-                            }
-                        });
-                    }
-
-                    if (!isManualMode || connectionMode === 'pan') {
-                         marker.on('contextmenu', function(e) {
-                             L.DomEvent.preventDefault(e);
-                             L.DomEvent.stopPropagation(e);
-                             const mapContainer = map.getContainer();
-                             const rect = mapContainer.getBoundingClientRect();
-                             window.ReactNativeWebView.postMessage(JSON.stringify({
-                                 type: 'waypointContextMenu',
-                                 id: wp.id,
-                                 x: e.originalEvent.clientX - rect.left,
-                                 y: e.originalEvent.clientY - rect.top,
-                                 lat: wp.lat,
-                                 lon: wp.lon
-                             }));
-                         });
-                    }
-                    if (!isManualMode) {
-                        marker.on('dragstart', function(e) {
-                            window.dragPreviewState.isDragging = true;
-                            window.dragPreviewState.draggingWpIndex = index;
-                            if (missionPolyline) missionPolyline.setStyle({ opacity: 0.3 });
-                            if (missionGlowLine) missionGlowLine.setStyle({ opacity: 0.1 });
-                            
-                            // Activate ortho guide ONLY if:
-                            // 1. User intentionally clicked this waypoint first, OR
-                            // 2. This is the last waypoint (for creating new waypoints)
-                            if (window.orthoGuideState) {
-                                const isLastWaypoint = index === newWaypoints.length - 1;
-                                const wasIntentionallyActivated = window.orthoGuideState.isIntentionallyActivated && 
-                                                                  window.orthoGuideState.lastWaypoint && 
-                                                                  window.orthoGuideState.lastWaypoint.lat === wp.lat &&
-                                                                  window.orthoGuideState.lastWaypoint.lon === wp.lon;
-                                
-                                if (isLastWaypoint || wasIntentionallyActivated) {
-                                  // For last waypoint: use previous waypoint as reference
-                                  // For intentionally selected: use the waypoint itself as reference
-                                  if (isLastWaypoint && index > 0) {
-                                    const prevWp = newWaypoints[index - 1];
-                                    window.orthoGuideState.lastWaypoint = { lat: prevWp.lat, lon: prevWp.lon };
-                                  }
-                                  // If intentionally activated, lastWaypoint is already set from click
-                                } else {
-                                  // Not intentionally activated and not last waypoint - disable ortho snap
-                                  window.orthoGuideState.isIntentionallyActivated = false;
-                                  window.orthoGuideState.lastWaypoint = null;
+                    newWaypoints.forEach(function(wp, index) {
+                        const isConnected = manualConnections.includes(wp.id);
+                        const connectionIndex = manualConnections.indexOf(wp.id);
+                        let markerIcon;
+                        if (isConnected) {
+                            markerIcon = L.divIcon({
+                                html: \`<div style="position: relative;"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="48" height="48" fill="#4ADE80"><path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7z"/><text x="12" y="10.5" font-family="sans-serif" font-size="12" font-weight="bold" fill="white" text-anchor="middle" dy=".3em">\${wp.id}</text></svg><div style="position: absolute; top: -12px; right: -12px; background: #22c55e; color: white; border-radius: 50%; width: 30px; height: 30px; display: flex; align-items: center; justify-content: center; font-size: 15px; font-weight: bold; border: 2px solid white; z-index: 1000;">\${connectionIndex + 1}</div></div>\`,
+                                className: 'custom-marker' + (connectionMode === 'drag' ? ' drag-mode-active' : ''),
+                                iconSize: [48, 48], iconAnchor: [24, 48],
+                            });
+                        } else {
+                            const baseIcon = getWaypointIcon(wp, index);
+                            if (connectionMode === 'drag') baseIcon.options.className += ' drag-mode-active';
+                            markerIcon = baseIcon;
+                        }
+                        const marker = L.marker([wp.lat, wp.lon], { icon: markerIcon, draggable: false }).addTo(map);
+                        if (connectionMode === 'pan') {
+                            marker.bindPopup(\`<strong>WP \${wp.id}</strong><br>Row: \${wp.row || '-'}<br>Block: \${wp.block || '-'}<br>Pile: \${wp.pile || '-'}<br>Alt: \${wp.alt}m\`);
+                        }
+                        if (connectionMode === 'tap' || connectionMode === 'pan') {
+                            marker.on('click', function(e) {
+                                L.DomEvent.stopPropagation(e);
+                                if (window.orthoGuideState) {
+                                    window.orthoGuideState.lastWaypoint = { lat: wp.lat, lon: wp.lon };
+                                    window.orthoGuideState.isIntentionallyActivated = true;
                                 }
-                            }
-                        });
-
-                        marker.on('drag', function(e) {
-                            const pos = e.target.getLatLng();
-                            updateDragPreview(pos, index, newWaypoints);
-                            // Update ortho guide during drag
-                            if (window.orthoGuideState && window.updateOrthoGuide) {
-                                window.updateOrthoGuide(pos);
-                            }
-                        });
-
-                        marker.on('dragend', function(e) {
-                            clearDragPreview();
-                            // Clear ortho guide after drag and reset intentional activation flag
-                            if (window.orthoGuideState && window.clearOrthoGuide) {
-                                window.clearOrthoGuide();
-                                window.orthoGuideState.isIntentionallyActivated = false;
-                            }
-                            if (missionPolyline) missionPolyline.setStyle({ opacity: 1 });
-                            if (missionGlowLine) missionGlowLine.setStyle({ opacity: 0.2 });
-                            const newPos = e.target.getLatLng();
-                            window.ReactNativeWebView.postMessage(JSON.stringify({
-                                type: 'waypointDrag',
-                                id: wp.id,
-                                lat: newPos.lat,
-                                lng: newPos.lng
-                            }));
-                        });
+                                window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'waypointClick', id: wp.id }));
+                                if (connectionMode !== 'tap') {
+                                    const rect = map.getContainer().getBoundingClientRect();
+                                    window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'waypointContextMenu', waypointId: wp.id, x: e.originalEvent.clientX - rect.left, y: e.originalEvent.clientY - rect.top }));
+                                }
+                            });
+                        }
+                        if (connectionMode === 'pan') {
+                            marker.on('contextmenu', function(e) {
+                                L.DomEvent.preventDefault(e); L.DomEvent.stopPropagation(e);
+                                const rect = map.getContainer().getBoundingClientRect();
+                                window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'waypointContextMenu', id: wp.id, x: e.originalEvent.clientX - rect.left, y: e.originalEvent.clientY - rect.top, lat: wp.lat, lon: wp.lon }));
+                            });
+                        }
+                        markerRegistry.set(wp.id, marker);
+                        waypointMarkers.push(marker);
+                    });
+                } else {
+                    // FIX 1: Normal mode — diff engine or chunked initial load
+                    if (markerRegistry.size === 0 && newWaypoints.length > 50) {
+                        chunkedLoad(newWaypoints);
+                    } else {
+                        diffAndUpdate(newWaypoints);
                     }
-
-                    waypointMarkers.push(marker);
-                });
+                }
 
                 // Clear temporary line if mode switched
                 if (connectionMode !== 'drag') {
@@ -1760,7 +1627,49 @@ export const PathPlanMap: React.FC<Props> = ({
         `;
 
     webViewRef.current.injectJavaScript(updateWaypointsScript);
-  }, [waypoints, selectedWaypoint, mapReady, isManualConnectionMode, manualConnections, manualConnectionMode, activeDrawingTool]);
+  }, [waypoints, mapReady, isManualConnectionMode, manualConnections, manualConnectionMode, activeDrawingTool]);
+
+  // Effect B — Lightweight selection-only icon swap
+  // Fires ONLY when selectedWaypoint changes. Does NOT rebuild markers.
+  // Two icon swaps: deselect previous, select next. No forEach, no polyline rebuild.
+  useEffect(() => {
+    if (!mapReady || !webViewRef.current) return;
+    // Guard: don't fire before Effect A has built the markers
+    if (lastWaypointsRef.current === '') return;
+
+    const prev = lastSelectedRef.current;
+    const next = selectedWaypoint ?? null;
+    lastSelectedRef.current = next;
+
+    // Find array indices from waypoint ids using window.currentWaypoints (set by Effect A)
+    const selectionScript = `
+      (function() {
+        if (!window.currentWaypoints) return;
+        // Reset previous selection
+        if (${prev} !== null) {
+          const prevIdx = window.currentWaypoints.findIndex(function(w) { return w.id === ${prev}; });
+          if (prevIdx !== -1 && waypointMarkers[prevIdx]) {
+            const wp = window.currentWaypoints[prevIdx];
+            const fill = prevIdx === 0 ? '#16a34a' : '#f97316';
+            const size = 36;
+            const svgIcon = '<div style="display:inline-block;"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="' + size + '" height="' + size + '" fill="' + fill + '" style="filter: drop-shadow(0 2px 4px rgba(0,0,0,0.5));"><path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7z"/><text x="12" y="10.5" font-family="sans-serif" font-size="12" font-weight="bold" fill="white" text-anchor="middle" dy=".3em">' + (prevIdx + 1) + '</text></svg></div>';
+            waypointMarkers[prevIdx].setIcon(L.divIcon({ html: svgIcon, className: 'custom-marker', iconSize: [size, size], iconAnchor: [size / 2, size] }));
+          }
+        }
+        // Apply new selection
+        if (${next} !== null) {
+          const nextIdx = window.currentWaypoints.findIndex(function(w) { return w.id === ${next}; });
+          if (nextIdx !== -1 && waypointMarkers[nextIdx]) {
+            const size = 48;
+            const svgIcon = '<div class="wp-selected-pulse" style="display:inline-block;"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="' + size + '" height="' + size + '" fill="#3B82F6" style="filter: drop-shadow(0 2px 4px rgba(0,0,0,0.5));"><path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7z"/><text x="12" y="10.5" font-family="sans-serif" font-size="12" font-weight="bold" fill="white" text-anchor="middle" dy=".3em">' + (nextIdx + 1) + '</text></svg></div>';
+            waypointMarkers[nextIdx].setIcon(L.divIcon({ html: svgIcon, className: 'custom-marker', iconSize: [size, size], iconAnchor: [size / 2, size] }));
+          }
+        }
+      })();
+      true;
+    `;
+    webViewRef.current.injectJavaScript(selectionScript);
+  }, [selectedWaypoint, mapReady]);
 
   // TRAIL DISABLED: Update rover position without trail
   useEffect(() => {
@@ -2004,6 +1913,38 @@ export const PathPlanMap: React.FC<Props> = ({
     saveMeasurePosition();
   }, [measureOverlayPos]);
 
+  // FIX 2: Enable drag on a single marker on demand (called from waypointClick in normal mode)
+  const enableDragOnMarker = (id: number, index: number) => {
+    if (!webViewRef.current) return;
+    const script = `
+      (function() {
+        if (window._activeDragId !== null && markerRegistry.has(window._activeDragId)) {
+          markerRegistry.get(window._activeDragId).dragging.disable();
+        }
+        var marker = markerRegistry.get(${id});
+        if (marker) {
+          marker.dragging.enable();
+          window._activeDragId = ${id};
+          marker.off('dragend');
+          marker.on('dragend', function(e) {
+            var pos = e.target.getLatLng();
+            window.ReactNativeWebView.postMessage(JSON.stringify({
+              type: 'waypointDragged',
+              id: ${id},
+              index: ${index},
+              lat: pos.lat,
+              lon: pos.lng
+            }));
+            marker.dragging.disable();
+            window._activeDragId = null;
+          });
+        }
+      })();
+      true;
+    `;
+    webViewRef.current.injectJavaScript(script);
+  };
+
   return (
     <View style={styles.container}>
       <WebView
@@ -2023,12 +1964,20 @@ export const PathPlanMap: React.FC<Props> = ({
                 onMeasureWaypointSelect?.(message.id);
               } else {
                 onWaypointClick?.(message.id);
+                // FIX 2: Enable drag on the clicked marker (drag-on-demand)
+                if (!isManualConnectionMode && activeDrawingTool !== 'line') {
+                  const idx = waypoints.findIndex(w => w.id === message.id);
+                  if (idx !== -1) enableDragOnMarker(message.id, idx);
+                }
               }
               setContextMenu(null);
             } else if (message.type === 'waypointConnect') {
               onWaypointConnect?.(message.fromId, message.toId);
             } else if (message.type === 'waypointDrag') {
               onWaypointDrag?.(message.id, { latitude: message.lat, longitude: message.lng });
+            } else if (message.type === 'waypointDragged') {
+              // FIX 2: drag-on-demand dragend — same handler as waypointDrag
+              onWaypointDrag?.(message.id, { latitude: message.lat, longitude: message.lon });
             } else if (message.type === 'waypointContextMenu') {
               // Suppress context menu entirely in measure mode
               if (activeDrawingTool === 'measure') return;
