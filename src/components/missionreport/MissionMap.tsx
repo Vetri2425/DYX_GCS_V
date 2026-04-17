@@ -484,7 +484,6 @@ const MissionMapBase: React.FC<Props> = ({
     function fitToMission() {
       const bounds = [];
       waypoints.forEach(wp => bounds.push([wp.lat, wp.lon]));
-      if (liveRoverPos) bounds.push([liveRoverPos.lat, liveRoverPos.lon]);
       if (bounds.length > 0) map.fitBounds(bounds, { padding: [50, 50], animate: true });
     }
 
@@ -551,15 +550,37 @@ const MissionMapBase: React.FC<Props> = ({
       currentActiveIndex = index;
     };
 
+    // Clear all waypoint markers and polyline from the map
+    window.clearAllMarkers = function() {
+      try {
+        // Remove all waypoint markers
+        for (let i = 0; i < waypointMarkers.length; i++) {
+          if (waypointMarkers[i] && map.hasLayer(waypointMarkers[i])) {
+            map.removeLayer(waypointMarkers[i]);
+          }
+        }
+        waypointMarkers.length = 0;
+
+        // Remove mission polyline
+        if (missionPolyline) {
+          map.removeLayer(missionPolyline);
+          missionPolyline = null;
+        }
+      } catch(e) {
+        console.error('[MissionMap] clearAllMarkers error:', e);
+      }
+    };
+
     // Receive waypoints from React Native after WebView loads
-    // Called via injectedJavaScript once mapReady fires
-    // PERFORMANCE: Waypoints are injected as a global variable, not parsed from JSON string
-    // This avoids string escaping issues and reduces parsing overhead
+    // Called via injectedJavaScript whenever waypoints change
     window.loadWaypointsFromReactNative = function(wpArray) {
       try {
         // wpArray is already an array (injected as global), not a JSON string
         const newWaypoints = Array.isArray(wpArray) ? wpArray : (typeof wpArray === 'string' ? JSON.parse(wpArray) : []);
         if (!Array.isArray(newWaypoints) || newWaypoints.length === 0) return;
+
+        // Clear existing markers before loading new ones
+        window.clearAllMarkers();
 
         // Update global waypoints array
         waypoints.length = 0;
@@ -608,14 +629,25 @@ const MissionMapBase: React.FC<Props> = ({
   // Memoize source prop to avoid new object reference every render
   const mapSource = useMemo(() => ({ html: mapHTML }), [mapHTML]);
 
-  // Inject waypoints after WebView loads (deferred from HTML generation)
-  // This avoids blocking the JS thread with JSON.stringify of 400+ waypoints during render
+  // Inject waypoints after WebView loads AND when waypoints change
   useEffect(() => {
     if (!mapReady || !webViewRef.current) return;
-    if (!waypoints || waypoints.length === 0) return;
 
-    // PERFORMANCE: Inject waypoints as a global variable, then call loader
-    // This avoids JSON string escaping issues and reduces parsing overhead
+    // Empty waypoints — clear the map
+    if (!waypoints || waypoints.length === 0) {
+      webViewRef.current.injectJavaScript(`
+        (function() {
+          try {
+            if (window.clearAllMarkers) window.clearAllMarkers();
+            if (missionPolyline) { map.removeLayer(missionPolyline); missionPolyline = null; }
+            waypoints.length = 0;
+          } catch(e) { console.error('[MissionMap] Clear error:', e); }
+        })();
+        true;
+      `);
+      return;
+    }
+
     const waypointsArray = waypoints.map((wp, idx) => ({
       id: wp.sn,
       uniqueId: `wp-${idx}-${wp.sn}`,
@@ -629,8 +661,6 @@ const MissionMapBase: React.FC<Props> = ({
       isEnd: idx === waypoints.length - 1,
     }));
 
-    // Inject as global variable, then call loader
-    // This is faster than JSON.stringify + string interpolation
     webViewRef.current.injectJavaScript(`
       (function() {
         window.__waypointsData = ${JSON.stringify(waypointsArray)};
@@ -641,8 +671,8 @@ const MissionMapBase: React.FC<Props> = ({
       })();
       true;
     `);
-    console.log(`[MissionMap] Injected ${waypoints.length} waypoints after mapReady`);
-  }, [mapReady]); // Only on mapReady, NOT on waypoints changes — waypoint data is read-only
+    console.log(`[MissionMap] Injected ${waypoints.length} waypoints`);
+  }, [mapReady, waypoints, activeWaypointIndex]); // Re-inject when waypoints or active index change
 
   // Pause/resume Leaflet rendering when visibility changes
   // This stops tile loading, marker animation, and continuous redraws when hidden

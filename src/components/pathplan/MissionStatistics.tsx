@@ -3,9 +3,11 @@ import { View, Text, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { colors } from '../../theme/colors';
 import { PathPlanWaypoint } from '../../types/pathplan';
+import { vincentyDistance } from '../../utils/missionCalculator';
 
 interface Props {
     waypoints: PathPlanWaypoint[];
+    roverPosition?: { lat: number; lon: number } | null;
 }
 
 // Card accent colors
@@ -18,12 +20,20 @@ const CARD_COLORS = {
     status: '#22c55e',
 };
 
-export const MissionStatistics: React.FC<Props> = ({ waypoints }) => {
+export const MissionStatistics: React.FC<Props> = ({ waypoints, roverPosition }) => {
     const totalWaypoints = waypoints.length;
     const totalRows = new Set(waypoints.map(wp => wp.row).filter(Boolean)).size;
     const totalBlocks = new Set(waypoints.map(wp => wp.block).filter(Boolean)).size;
 
-    const totalDistance = waypoints.reduce((sum, wp) => sum + (wp.distance || 0), 0);
+    // First leg: distance from rover to first waypoint (if rover position available)
+    const firstLegDistance = (roverPosition && waypoints.length > 0)
+        ? vincentyDistance(
+            { lat: roverPosition.lat, lon: roverPosition.lon },
+            { lat: waypoints[0].lat, lon: waypoints[0].lon }
+          )
+        : 0;
+
+    const totalDistance = waypoints.reduce((sum, wp) => sum + (wp.distance || 0), 0) + firstLegDistance;
     const totalDistanceM = totalDistance.toFixed(2);
 
     const totalTimeSeconds = totalDistance / 1;

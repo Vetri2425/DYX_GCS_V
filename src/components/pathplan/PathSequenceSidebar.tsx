@@ -8,7 +8,7 @@ import { PathPlanWaypoint } from '../../types/pathplan';
 import { RowAssignmentDialog, BlockAssignmentDialog, PileAssignmentDialog, RowBlockPileButtons } from './RowBlockPileDialogs';
 import { EditWaypointDialog } from './EditWaypointDialog';
 import { DraggableWaypointsTable } from './DraggableWaypointsTable';
-import { recalculateWaypointDistances } from '../../utils/missionCalculator';
+import { recalculateWaypointDistances, vincentyDistance } from '../../utils/missionCalculator';
 import CheckBox from '@react-native-community/checkbox';
 import * as FileSystem from 'expo-file-system';
 import { Paths } from 'expo-file-system';
@@ -24,6 +24,7 @@ interface Props {
     missionName?: string;
     onMissionNameChange?: (name: string) => void;
     missionMode?: string;
+    roverPosition?: { lat: number; lon: number } | null;
 }
 
 export const PathSequenceSidebar = React.memo(({
@@ -37,6 +38,7 @@ export const PathSequenceSidebar = React.memo(({
     missionName = 'DRAWN MISSION - 4:15:34',
     onMissionNameChange,
     missionMode,
+    roverPosition,
 }: Props) => {
     const [isEditingName, setIsEditingName] = useState(false);
     const [editedName, setEditedName] = useState(missionName);
@@ -67,8 +69,16 @@ export const PathSequenceSidebar = React.memo(({
         setIsEditingName(false);
     };
 
-    // Calculate distance from previous waypoint
+    // Calculate distance from previous waypoint (or rover for the first waypoint)
     const getDistance = (index: number): string => {
+        if (index === 0 && roverPosition && waypoints.length > 0) {
+            const wp = waypoints[0];
+            const dist = vincentyDistance(
+                { lat: roverPosition.lat, lon: roverPosition.lon },
+                { lat: wp.lat, lon: wp.lon }
+            );
+            return `${dist.toFixed(1)}m`;
+        }
         if (index === 0) return '0.0m';
         const wp = waypoints[index];
         return wp.distance ? `${wp.distance.toFixed(1)}m` : '0.0m';
@@ -277,7 +287,7 @@ export const PathSequenceSidebar = React.memo(({
                         <Text style={[styles.waypointCell, { flex: 0.4, fontWeight: 'bold' }]}>{index + 1}</Text>
                         <Text style={[styles.waypointCell, { flex: 1.2, fontFamily: 'monospace', fontSize: 10 }]}>{wp.lat?.toFixed(7) ?? '0.0000000'}</Text>
                         <Text style={[styles.waypointCell, { flex: 1.2, fontFamily: 'monospace', fontSize: 10 }]}>{wp.lon?.toFixed(7) ?? '0.0000000'}</Text>
-                        <Text style={[styles.waypointCell, { flex: 0.6 }]}>{wp.distance?.toFixed(1) ?? '0.0'}</Text>
+                        <Text style={[styles.waypointCell, { flex: 0.6 }]}>{getDistance(index)}</Text>
 
                         {/* Mark Checkbox */}
                         {!isMarkHidden && (

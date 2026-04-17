@@ -1,7 +1,26 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo, useCallback } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
 import { MaterialCommunityIcons, Fontisto, Ionicons } from '@expo/vector-icons';
 import { colors } from '../../theme/colors';
+import { PathPlanWaypoint } from '../../types/pathplan';
+import { optimizePath, PathAxis, PathDirection } from '../../utils/optimizePath';
+import { vincentyDistance } from '../../utils/missionCalculator';
+
+// ─── Precise Path Axis / Direction Options ───────────────────
+
+const AXIS_OPTIONS: { value: PathAxis; shortLabel: string; icon: string }[] = [
+  { value: 'EAST_WEST', shortLabel: 'E\u2194W', icon: 'arrow-left-right' },
+  { value: 'WEST_EAST', shortLabel: 'W\u2194E', icon: 'arrow-left-right' },
+  { value: 'NORTH_SOUTH', shortLabel: 'N\u2194S', icon: 'arrow-up-down' },
+  { value: 'SOUTH_NORTH', shortLabel: 'S\u2194N', icon: 'arrow-up-down' },
+];
+
+const DIRECTION_OPTIONS: { value: PathDirection; label: string }[] = [
+  { value: 'LEFT_RIGHT', label: 'Left \u2192 Right' },
+  { value: 'RIGHT_LEFT', label: 'Right \u2192 Left' },
+];
+
+// ─── Props ───────────────────────────────────────────────────
 
 interface DrawingToolsPanelProps {
   activeDrawingTool: string | null;
@@ -12,9 +31,15 @@ interface DrawingToolsPanelProps {
   onShowCADDrawing: () => void;
   onShowManualConnection: () => void;
   onShowReverseTool: () => void;
-  onShowPrecisePath?: () => void;
   isCollapsed?: boolean;
   onToggleCollapse?: () => void;
+  // Precise path props — when isPrecisePathActive=true, panel shows controls inline
+  isPrecisePathActive?: boolean;
+  precisePathWaypoints?: PathPlanWaypoint[];
+  onPrecisePathPreviewChange?: (preview: PathPlanWaypoint[]) => void;
+  onPrecisePathApply?: (optimized: PathPlanWaypoint[]) => void;
+  onPrecisePathClose?: () => void;
+  onPrecisePathActivate?: () => void;
 }
 
 export const DrawingToolsPanel: React.FC<DrawingToolsPanelProps> = ({
@@ -26,12 +51,21 @@ export const DrawingToolsPanel: React.FC<DrawingToolsPanelProps> = ({
   onShowCADDrawing,
   onShowManualConnection,
   onShowReverseTool,
-  onShowPrecisePath,
   isCollapsed = false,
   onToggleCollapse,
+  isPrecisePathActive = false,
+  precisePathWaypoints = [],
+  onPrecisePathPreviewChange,
+  onPrecisePathApply,
+  onPrecisePathClose,
+  onPrecisePathActivate,
 }) => {
   const [internalCollapsed, setInternalCollapsed] = useState(false);
   const collapsed = onToggleCollapse ? isCollapsed : internalCollapsed;
+
+  // Precise path local state
+  const [axis, setAxis] = useState<PathAxis>('EAST_WEST');
+  const [direction, setDirection] = useState<PathDirection>('LEFT_RIGHT');
 
   const handleToggle = () => {
     if (onToggleCollapse) {
@@ -40,6 +74,64 @@ export const DrawingToolsPanel: React.FC<DrawingToolsPanelProps> = ({
       setInternalCollapsed(!internalCollapsed);
     }
   };
+
+  // Memoized optimization preview
+  const preview = useMemo(() => {
+    if (!isPrecisePathActive || precisePathWaypoints.length < 2) return null;
+    return optimizePath(precisePathWaypoints, { axis, direction });
+  }, [isPrecisePathActive, precisePathWaypoints, axis, direction]);
+
+  // Stats for the preview
+  const stats = useMemo(() => {
+    if (!preview || precisePathWaypoints.length < 2) return null;
+    let originalDist = 0;
+    let optimizedDist = 0;
+    for (let i = 1; i < precisePathWaypoints.length; i++) {
+      originalDist += vincentyDistance(
+        { lat: precisePathWaypoints[i - 1].lat, lon: precisePathWaypoints[i - 1].lon },
+        { lat: precisePathWaypoints[i].lat, lon: precisePathWaypoints[i].lon },
+      );
+    }
+    for (let i = 1; i < preview.length; i++) {
+      optimizedDist += vincentyDistance(
+        { lat: preview[i - 1].lat, lon: preview[i - 1].lon },
+        { lat: preview[i].lat, lon: preview[i].lon },
+      );
+    }
+    const savings = originalDist > 0 ? Math.max(0, ((originalDist - optimizedDist) / originalDist) * 100) : 0;
+
+    const groupKey = axis === 'EAST_WEST' || axis === 'WEST_EAST' ? 'lat' : 'lon';
+    const sorted = [...precisePathWaypoints].sort((a, b) => a[groupKey] - b[groupKey]);
+    let groupCount = 1;
+    for (let i = 1; i < sorted.length; i++) {
+      if (Math.abs(sorted[i][groupKey] - sorted[i - 1][groupKey]) > 0.00001) {
+        groupCount++;
+      }
+    }
+
+    return { optimizedDist, savings, groupCount };
+  }, [precisePathWaypoints, preview, axis]);
+
+  // Push preview to parent
+  React.useEffect(() => {
+    if (preview && onPrecisePathPreviewChange) {
+      onPrecisePathPreviewChange(preview);
+    }
+  }, [preview, onPrecisePathPreviewChange]);
+
+  const formatDist = (m: number): string => {
+    if (m < 1000) return `${Math.round(m)}m`;
+    return `${(m / 1000).toFixed(2)}km`;
+  };
+
+  const handleApply = useCallback(() => {
+    if (!preview || !onPrecisePathApply) return;
+    onPrecisePathApply(preview);
+  }, [preview, onPrecisePathApply]);
+
+  const handlePreciseClose = useCallback(() => {
+    onPrecisePathClose?.();
+  }, [onPrecisePathClose]);
 
   const drawingTools = [
     { name: 'line', mdiIcon: 'star-three-points-outline', title: 'Points', color: colors.greenBtn },
@@ -70,7 +162,14 @@ export const DrawingToolsPanel: React.FC<DrawingToolsPanelProps> = ({
     if (toolName === 'cad-draw') { onShowCADDrawing(); return; }
     if (toolName === 'manual-connection') { onShowManualConnection(); return; }
     if (toolName === 'reverse') { onShowReverseTool(); return; }
-    if (toolName === 'precise') { onShowPrecisePath?.(); return; }
+    if (toolName === 'precise') {
+      if (isPrecisePathActive) {
+        handlePreciseClose();
+      } else {
+        onPrecisePathActivate?.();
+      }
+      return;
+    }
     onToolSelect(activeDrawingTool === toolName ? null : toolName);
   };
 
@@ -82,9 +181,11 @@ export const DrawingToolsPanel: React.FC<DrawingToolsPanelProps> = ({
       <View style={styles.header}>
         <View style={styles.headerLeft}>
           <View style={styles.headerIconWrap}>
-            <Ionicons name="pencil" size={16} color={colors.accent} />
+            <Ionicons name="pencil" size={16} color={isPrecisePathActive ? colors.blueBtn : colors.accent} />
           </View>
-          <Text style={styles.headerTitle}>DRAWING TOOLS</Text>
+          <Text style={[styles.headerTitle, isPrecisePathActive && { color: colors.blueBtn }]}>
+            {isPrecisePathActive ? 'PRECISE PATH' : 'DRAWING TOOLS'}
+          </Text>
         </View>
         <TouchableOpacity style={styles.collapseBtn} onPress={handleToggle} activeOpacity={0.7}>
           <MaterialCommunityIcons
@@ -96,59 +197,156 @@ export const DrawingToolsPanel: React.FC<DrawingToolsPanelProps> = ({
       </View>
 
       {!collapsed && (
-        <>
-          {/* Tool Grid */}
-          <View style={styles.toolGrid}>
-            {allTools.map((tool) => {
-              const isActive = activeDrawingTool === tool.name;
-              const isGen = (tool as GeneratorTool).onPress !== undefined;
-              return (
-                <TouchableOpacity
-                  key={tool.name}
-                  style={[styles.toolBtn, isActive && { borderColor: tool.color, backgroundColor: tool.color + '15' }]}
-                  onPress={() => isGen ? (tool as GeneratorTool).onPress() : handleToolPress(tool.name)}
-                  activeOpacity={0.75}
-                >
-                  <View style={[styles.toolAccent, { backgroundColor: isActive ? tool.color : 'transparent' }]} />
-                  <View style={styles.toolInner}>
-                    <View style={[styles.toolIconWrap, { borderColor: (isActive ? tool.color : colors.textSecondary) + '40' }]}>
-                      {(tool as any).mdiIcon ? (
-                        <MaterialCommunityIcons
-                          name={(tool as any).mdiIcon}
-                          size={20}
-                          color={isActive ? tool.color : colors.textSecondary}
-                        />
-                      ) : (tool as any).fontistoIcon ? (
-                        <Fontisto
-                          name={(tool as any).fontistoIcon}
-                          size={18}
-                          color={isActive ? tool.color : colors.textSecondary}
-                        />
-                      ) : null}
-                    </View>
-                    <Text style={[styles.toolLabel, isActive && { color: '#ffffff' }]}>{tool.title}</Text>
-                  </View>
-                </TouchableOpacity>
-              );
-            })}
-          </View>
+        isPrecisePathActive ? (
+          /* ─── Precise Path Controls (inline) ─── */
+          <View style={styles.preciseSection}>
+            {/* Axis selector */}
+            <View style={styles.preciseRow}>
+              <Text style={styles.preciseLabel}>AXIS</Text>
+              <View style={styles.axisRow}>
+                {AXIS_OPTIONS.map(opt => (
+                  <TouchableOpacity
+                    key={opt.value}
+                    style={[styles.axisBtn, axis === opt.value && styles.axisBtnActive]}
+                    onPress={() => setAxis(opt.value)}
+                    activeOpacity={0.7}
+                  >
+                    <MaterialCommunityIcons
+                      name={opt.icon as any}
+                      size={14}
+                      color={axis === opt.value ? '#ffffff' : colors.textSecondary}
+                    />
+                    <Text style={[styles.axisBtnText, axis === opt.value && styles.axisBtnTextActive]}>
+                      {opt.shortLabel}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </View>
 
-          {/* Active tool instructions */}
-          {activeDrawingTool && (
-            <View style={styles.instructions}>
-              <Text style={styles.instructionText}>
-                {activeDrawingTool === 'line' && '✦ Click to place points. Double-tap to finish.'}
-                {activeDrawingTool === 'cad-draw' && '🔧 Professional CAD drawing with precision tools.'}
-                {activeDrawingTool === 'precise' && '🎯 Optimize waypoint sequence using advanced path planning.'}
-                {activeDrawingTool === 'text' && '✏️ Click to place text annotation on map.'}
-                {activeDrawingTool === 'measure' && '✦ Click points to measure distance.'}
-              </Text>
-              <TouchableOpacity style={styles.cancelBtn} onPress={() => onToolSelect(null)} activeOpacity={0.7}>
-                <Text style={styles.cancelBtnText}>✕ Cancel</Text>
+            {/* Direction selector */}
+            <View style={styles.preciseRow}>
+              <Text style={styles.preciseLabel}>DIR</Text>
+              <View style={styles.dirRow}>
+                {DIRECTION_OPTIONS.map(opt => (
+                  <TouchableOpacity
+                    key={opt.value}
+                    style={[styles.dirBtn, direction === opt.value && styles.dirBtnActive]}
+                    onPress={() => setDirection(opt.value)}
+                    activeOpacity={0.7}
+                  >
+                    <Text style={[styles.dirBtnText, direction === opt.value && styles.dirBtnTextActive]}>
+                      {opt.label}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </View>
+
+            {/* Stats + Actions */}
+            {stats && (
+              <View style={styles.preciseStatsRow}>
+                <View style={styles.statItem}>
+                  <Text style={styles.statLabel}>POINTS</Text>
+                  <Text style={styles.statValue}>{preview?.length ?? precisePathWaypoints.length}</Text>
+                </View>
+                <View style={styles.statDivider} />
+                <View style={styles.statItem}>
+                  <Text style={styles.statLabel}>
+                    {axis === 'EAST_WEST' || axis === 'WEST_EAST' ? 'ROWS' : 'COLS'}
+                  </Text>
+                  <Text style={styles.statValue}>{stats.groupCount}</Text>
+                </View>
+                <View style={styles.statDivider} />
+                <View style={styles.statItem}>
+                  <Text style={styles.statLabel}>DIST</Text>
+                  <Text style={[styles.statValue, { color: colors.success }]}>
+                    {formatDist(stats.optimizedDist)}
+                  </Text>
+                </View>
+                {stats.savings > 0.5 && (
+                  <>
+                    <View style={styles.statDivider} />
+                    <View style={[styles.statItem, styles.savingsBadge]}>
+                      <Text style={styles.savingsText}>-{stats.savings.toFixed(1)}%</Text>
+                    </View>
+                  </>
+                )}
+              </View>
+            )}
+
+            {/* Apply / Cancel */}
+            <View style={styles.preciseActions}>
+              <TouchableOpacity style={styles.preciseCancelBtn} onPress={handlePreciseClose} activeOpacity={0.7}>
+                <MaterialCommunityIcons name="close" size={16} color={colors.textSecondary} />
+                <Text style={styles.preciseCancelBtnText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.preciseApplyBtn, (!preview || preview.length < 2) && styles.preciseApplyBtnDisabled]}
+                onPress={handleApply}
+                disabled={!preview || preview.length < 2}
+                activeOpacity={0.7}
+              >
+                <MaterialCommunityIcons name="check-circle" size={16} color="#ffffff" />
+                <Text style={styles.preciseApplyBtnText}>Apply</Text>
               </TouchableOpacity>
             </View>
-          )}
-        </>
+          </View>
+        ) : (
+          /* ─── Normal Tool Grid ─── */
+          <>
+            <View style={styles.toolGrid}>
+              {allTools.map((tool) => {
+                const isActive = activeDrawingTool === tool.name;
+                const isGen = (tool as GeneratorTool).onPress !== undefined;
+                return (
+                  <TouchableOpacity
+                    key={tool.name}
+                    style={[styles.toolBtn, isActive && { borderColor: tool.color, backgroundColor: tool.color + '15' }]}
+                    onPress={() => isGen ? (tool as GeneratorTool).onPress() : handleToolPress(tool.name)}
+                    activeOpacity={0.75}
+                  >
+                    <View style={[styles.toolAccent, { backgroundColor: isActive ? tool.color : 'transparent' }]} />
+                    <View style={styles.toolInner}>
+                      <View style={[styles.toolIconWrap, { borderColor: (isActive ? tool.color : colors.textSecondary) + '40' }]}>
+                        {(tool as any).mdiIcon ? (
+                          <MaterialCommunityIcons
+                            name={(tool as any).mdiIcon}
+                            size={20}
+                            color={isActive ? tool.color : colors.textSecondary}
+                          />
+                        ) : (tool as any).fontistoIcon ? (
+                          <Fontisto
+                            name={(tool as any).fontistoIcon}
+                            size={18}
+                            color={isActive ? tool.color : colors.textSecondary}
+                          />
+                        ) : null}
+                      </View>
+                      <Text style={[styles.toolLabel, isActive && { color: '#ffffff' }]}>{tool.title}</Text>
+                    </View>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+
+            {/* Active tool instructions */}
+            {activeDrawingTool && (
+              <View style={styles.instructions}>
+                <Text style={styles.instructionText}>
+                  {activeDrawingTool === 'line' && 'Click to place points. Double-tap to finish.'}
+                  {activeDrawingTool === 'cad-draw' && 'Professional CAD drawing with precision tools.'}
+                  {activeDrawingTool === 'precise' && 'Optimize waypoint sequence using boustrophedon path planning.'}
+                  {activeDrawingTool === 'text' && 'Click to place text annotation on map.'}
+                  {activeDrawingTool === 'measure' && 'Click points to measure distance.'}
+                </Text>
+                <TouchableOpacity style={styles.cancelBtn} onPress={() => onToolSelect(null)} activeOpacity={0.7}>
+                  <Text style={styles.cancelBtnText}>Cancel</Text>
+                </TouchableOpacity>
+              </View>
+            )}
+          </>
+        )
       )}
     </View>
   );
@@ -275,6 +473,153 @@ const styles = StyleSheet.create({
   cancelBtnText: {
     color: '#ffffff',
     fontSize: 12,
+    fontWeight: '700',
+  },
+
+  // ── PRECISE PATH CONTROLS ──
+  preciseSection: {
+    gap: 10,
+  },
+  preciseRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  preciseLabel: {
+    fontSize: 9,
+    fontWeight: '700',
+    color: 'rgba(103, 232, 249, 0.7)',
+    letterSpacing: 1.5,
+    width: 30,
+  },
+  axisRow: {
+    flexDirection: 'row',
+    gap: 4,
+    flex: 1,
+  },
+  axisBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    paddingVertical: 5,
+    paddingHorizontal: 7,
+    backgroundColor: colors.cardBg,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  axisBtnActive: {
+    backgroundColor: 'rgba(59, 130, 246, 0.2)',
+    borderColor: colors.accent,
+  },
+  axisBtnText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: colors.textSecondary,
+  },
+  axisBtnTextActive: {
+    color: '#ffffff',
+  },
+  dirRow: {
+    flexDirection: 'row',
+    gap: 4,
+    flex: 1,
+  },
+  dirBtn: {
+    paddingVertical: 5,
+    paddingHorizontal: 8,
+    backgroundColor: colors.cardBg,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  dirBtnActive: {
+    backgroundColor: 'rgba(16, 185, 129, 0.15)',
+    borderColor: colors.success,
+  },
+  dirBtnText: {
+    fontSize: 9,
+    fontWeight: '700',
+    color: colors.textSecondary,
+  },
+  dirBtnTextActive: {
+    color: '#ffffff',
+  },
+  preciseStatsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingVertical: 6,
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(255,255,255,0.05)',
+  },
+  statItem: {
+    alignItems: 'center',
+  },
+  statLabel: {
+    fontSize: 7,
+    fontWeight: '700',
+    color: 'rgba(103, 232, 249, 0.7)',
+    letterSpacing: 1.5,
+  },
+  statValue: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#ffffff',
+  },
+  statDivider: {
+    width: 1,
+    height: 18,
+    backgroundColor: colors.border,
+  },
+  savingsBadge: {
+    backgroundColor: colors.success,
+    borderRadius: 4,
+    paddingHorizontal: 5,
+    paddingVertical: 2,
+  },
+  savingsText: {
+    color: '#ffffff',
+    fontSize: 9,
+    fontWeight: '700',
+  },
+  preciseActions: {
+    flexDirection: 'row',
+    gap: 8,
+    justifyContent: 'flex-end',
+  },
+  preciseCancelBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingVertical: 7,
+    paddingHorizontal: 10,
+    backgroundColor: colors.cardBg,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  preciseCancelBtnText: {
+    color: colors.textSecondary,
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  preciseApplyBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingVertical: 7,
+    paddingHorizontal: 12,
+    backgroundColor: colors.accent,
+    borderRadius: 8,
+  },
+  preciseApplyBtnDisabled: {
+    backgroundColor: colors.textMuted,
+    opacity: 0.5,
+  },
+  preciseApplyBtnText: {
+    color: '#ffffff',
+    fontSize: 11,
     fontWeight: '700',
   },
 });

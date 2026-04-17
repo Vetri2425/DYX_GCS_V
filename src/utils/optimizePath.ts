@@ -1,34 +1,88 @@
 import { PathPlanWaypoint } from '../types/pathplan';
 import { recalculateWaypointDistances } from './missionCalculator';
 
-export type PathAxis = 'EAST_WEST' | 'NORTH_SOUTH';
-export type PathDirection = 'FORWARD' | 'REVERSE';
+/**
+ * Traverse axis — determines how groups are formed and sorted.
+ *
+ * EAST_WEST:  Rows run horizontally. Groups by latitude, advance top→bottom.
+ * WEST_EAST:  Rows run horizontally. Groups by latitude, advance bottom→top.
+ * NORTH_SOUTH: Columns run vertically. Groups by longitude, advance left→right.
+ * SOUTH_NORTH: Columns run vertically. Groups by longitude, advance right→left.
+ */
+export type PathAxis = 'EAST_WEST' | 'WEST_EAST' | 'NORTH_SOUTH' | 'SOUTH_NORTH';
+
+/**
+ * Direction within each group row/column.
+ *
+ * LEFT_RIGHT:  First group goes left→right (or top→bottom for columns).
+ * RIGHT_LEFT:  First group goes right→left (or bottom→top for columns).
+ */
+export type PathDirection = 'LEFT_RIGHT' | 'RIGHT_LEFT';
 
 export interface OptimizePathOptions {
   axis: PathAxis;
   direction: PathDirection;
 }
 
+// ~0.00001° latitude ≈ 1.1m — good threshold for rover row detection.
+const GROUP_THRESHOLD = 0.00001;
+
 /**
- * Group points by proximity on the secondary axis.
- * EAST_WEST: group by latitude (rows)
- * NORTH_SOUTH: group by longitude (columns)
+ * Group-by configuration for each axis mode.
+ * groupKey: which coordinate to group by.
+ * groupSortDir: how to sort groups (1 = ascending, -1 = descending).
+ * inGroupSortKey: which coordinate to sort within groups.
+ * inGroupSortDir: how to sort within groups (1 = ascending, -1 = descending).
+ */
+interface GroupConfig {
+  groupKey: 'lat' | 'lon';
+  groupSortDir: 1 | -1;
+  inGroupSortKey: 'lat' | 'lon';
+  inGroupSortDir: 1 | -1;
+}
+
+const GROUP_CONFIGS: Record<PathAxis, GroupConfig> = {
+  EAST_WEST: {
+    groupKey: 'lat',
+    groupSortDir: -1,   // groups sorted top→bottom (lat DESC)
+    inGroupSortKey: 'lon',
+    inGroupSortDir: 1,  // within group: left→right (lon ASC)
+  },
+  WEST_EAST: {
+    groupKey: 'lat',
+    groupSortDir: 1,    // groups sorted bottom→top (lat ASC)
+    inGroupSortKey: 'lon',
+    inGroupSortDir: -1, // within group: right→left (lon DESC)
+  },
+  NORTH_SOUTH: {
+    groupKey: 'lon',
+    groupSortDir: 1,    // groups sorted left→right (lon ASC)
+    inGroupSortKey: 'lat',
+    inGroupSortDir: -1, // within group: top→bottom (lat DESC)
+  },
+  SOUTH_NORTH: {
+    groupKey: 'lon',
+    groupSortDir: -1,   // groups sorted right→left (lon DESC)
+    inGroupSortKey: 'lat',
+    inGroupSortDir: 1,  // within group: bottom→top (lat ASC)
+  },
+};
+
+/**
+ * Group points by proximity on the grouping coordinate.
+ * Uses sort-then-merge: sort by group key, then merge consecutive
+ * points within threshold distance into the same group.
  *
- * Uses a simple sort-then-merge approach:
- * sort by grouping key, then merge consecutive points
- * within the threshold into the same group.
+ * O(n log n) for the sort, O(n) for the merge.
  */
 function groupByAxis(
   points: PathPlanWaypoint[],
-  axis: PathAxis,
-  threshold: number,
+  config: GroupConfig,
 ): PathPlanWaypoint[][] {
-  const groupKey = axis === 'EAST_WEST' ? 'lat' : 'lon';
+  const { groupKey, groupSortDir } = config;
+
   const sorted = [...points].sort((a, b) => {
-    const diff = a[groupKey] - b[groupKey];
-    return axis === 'EAST_WEST' ? -diff : diff;
-    // EAST_WEST: rows sorted top→bottom (lat DESC)
-    // NORTH_SOUTH: columns sorted left→right (lon ASC)
+    return groupSortDir * (a[groupKey] - b[groupKey]);
   });
 
   const groups: PathPlanWaypoint[][] = [];
@@ -38,7 +92,7 @@ function groupByAxis(
     const prevKey = sorted[i - 1][groupKey];
     const currKey = sorted[i][groupKey];
 
-    if (Math.abs(currKey - prevKey) <= threshold) {
+    if (Math.abs(currKey - prevKey) <= GROUP_THRESHOLD) {
       currentGroup.push(sorted[i]);
     } else {
       groups.push(currentGroup);
@@ -51,34 +105,28 @@ function groupByAxis(
 }
 
 /**
- * Sort waypoints within each group by the primary axis.
- * EAST_WEST: sort each row by longitude (left→right)
- * NORTH_SOUTH: sort each column by latitude (top→bottom)
+ * Sort waypoints within each group by the in-group coordinate.
+ * O(m log m) per group, O(n log n) total across all groups.
  */
 function sortGroupInternally(
   groups: PathPlanWaypoint[][],
-  axis: PathAxis,
+  config: GroupConfig,
 ): PathPlanWaypoint[][] {
-  const sortKey = axis === 'EAST_WEST' ? 'lon' : 'lat';
+  const { inGroupSortKey, inGroupSortDir } = config;
 
   return groups.map(group =>
-    [...group].sort((a, b) => {
-      if (axis === 'NORTH_SOUTH') {
-        // top→bottom = lat DESC
-        return b[sortKey] - a[sortKey];
-      }
-      // left→right = lon ASC
-      return a[sortKey] - b[sortKey];
-    }),
+    [...group].sort((a, b) => inGroupSortDir * (a[inGroupSortKey] - b[inGroupSortKey])),
   );
 }
 
 /**
- * Apply zig-zag (boustrophedon) reversal to alternate groups.
+ * Apply boustrophedon (zig-zag) reversal to alternate groups.
  *
- * For each group index:
- *   shouldReverse = (index % 2 === 1 && direction === FORWARD)
- *                  || (index % 2 === 0 && direction === REVERSE)
+ * LEFT_RIGHT: even groups keep natural order, odd groups reverse.
+ * RIGHT_LEFT: even groups reverse, odd groups keep natural order.
+ *
+ * This creates the classic "mowing the lawn" pattern where
+ * the rover doesn't waste time traveling back to the start of each row.
  */
 function applyZigZag(
   groups: PathPlanWaypoint[][],
@@ -86,8 +134,8 @@ function applyZigZag(
 ): PathPlanWaypoint[][] {
   return groups.map((group, index) => {
     const shouldReverse =
-      (index % 2 === 1 && direction === 'FORWARD') ||
-      (index % 2 === 0 && direction === 'REVERSE');
+      (index % 2 === 1 && direction === 'LEFT_RIGHT') ||
+      (index % 2 === 0 && direction === 'RIGHT_LEFT');
 
     return shouldReverse ? [...group].reverse() : group;
   });
@@ -96,25 +144,14 @@ function applyZigZag(
 /**
  * Deterministic path reorder for structured grid traversal.
  *
- * This is NOT a path planning or TSP algorithm.
+ * This is NOT a path planning, clustering, or TSP algorithm.
  * It groups points into rows/columns by proximity, sorts within
  * each group, and applies boustrophedon (zig-zag) traversal.
  *
- * Algorithm for EAST_WEST:
- *   1. Group by latitude (threshold ≈ 0.00001° ≈ 1.1m)
- *   2. Sort groups top→bottom (lat DESC)
- *   3. Sort within each group left→right (lon ASC)
- *   4. Apply zig-zag reversal
- *   5. Flatten, reassign IDs 1..N, recalculate distances
+ * All operations are O(n log n) or better. No mutation of input.
  *
- * Algorithm for NORTH_SOUTH:
- *   1. Group by longitude (threshold ≈ 0.00001°)
- *   2. Sort groups left→right (lon ASC)
- *   3. Sort within each column top→bottom (lat DESC)
- *   4. Apply zig-zag reversal
- *   5. Flatten, reassign IDs 1..N, recalculate distances
- *
- * Returns a NEW array — does NOT mutate input.
+ * Returns a NEW array with IDs reassigned 1..N and distances
+ * recalculated from consecutive pairs using Vincenty formula.
  */
 export function optimizePath(
   points: PathPlanWaypoint[],
@@ -124,25 +161,22 @@ export function optimizePath(
   if (points.length <= 1) return [{ ...points[0], id: 1, distance: 0 }];
 
   const { axis, direction } = options;
+  const config = GROUP_CONFIGS[axis];
 
-  // ~0.00001° latitude ≈ 1.1m; good threshold for rover row detection
-  const GROUP_THRESHOLD = 0.00001;
+  // Step 1: Group by secondary axis — O(n log n)
+  const groups = groupByAxis(points, config);
 
-  // Step 1: Group by secondary axis
-  const groups = groupByAxis(points, axis, GROUP_THRESHOLD);
+  // Step 2: Sort within each group — O(n log n) total
+  const sortedGroups = sortGroupInternally(groups, config);
 
-  // Step 2: Sort within each group by primary axis
-  const sortedGroups = sortGroupInternally(groups, axis);
-
-  // Step 3: Apply zig-zag reversal
+  // Step 3: Apply zig-zag reversal — O(n)
   const zigZagged = applyZigZag(sortedGroups, direction);
 
-  // Step 4: Flatten
+  // Step 4: Flatten — O(n)
   const flattened = zigZagged.flat();
 
   // Step 5: Validate — no missing or duplicate waypoints
   if (flattened.length !== points.length) {
-    // Should never happen with deterministic grouping, but guard anyway
     console.error(
       `[optimizePath] Length mismatch: input=${points.length}, output=${flattened.length}. ` +
       `Falling back to input with re-sequenced IDs.`,
@@ -152,7 +186,7 @@ export function optimizePath(
     );
   }
 
-  // Step 6: Reassign sequential IDs and recalculate distances
+  // Step 6: Reassign sequential IDs and recalculate distances — O(n)
   const resequenced = flattened.map((wp, index) => ({
     ...wp,
     id: index + 1,

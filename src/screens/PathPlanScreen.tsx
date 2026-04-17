@@ -10,7 +10,6 @@ import MissionOpsPanel from '../components/pathplan/MissionOpsPanel';
 import { MissionStatistics } from '../components/pathplan/MissionStatistics';
 import { PathPlanMap } from '../components/pathplan/PathPlanMap';
 import { DrawingToolsPanel } from '../components/pathplan/DrawingToolsPanel';
-import { PrecisePathPlanningDialog } from '../components/pathplan/PrecisePathPlanningDialog';
 import { CircleGeneratorDialog } from '../components/pathplan/CircleGeneratorDialog';
 import { SurveyGridDialog } from '../components/pathplan/SurveyGridDialog';
 import { TextAnnotationDialog } from '../components/pathplan/TextAnnotationDialog';
@@ -269,6 +268,25 @@ export default function PathPlanScreen({ isVisible = true }: PathPlanScreenProps
   const [showTextDialog, setShowTextDialog] = useState(false);
   const [showCADCanvas, setShowCADCanvas] = useState(false);
   const [showPrecisePathDialog, setShowPrecisePathDialog] = useState(false);
+  const [precisePathPreview, setPrecisePathPreview] = useState<PathPlanWaypoint[] | null>(null);
+
+  // When precise path mode is active, the map shows preview waypoints instead
+  const displayedWaypoints = precisePathPreview ?? waypoints;
+
+  const handlePrecisePathPreviewChange = React.useCallback((preview: PathPlanWaypoint[]) => {
+    setPrecisePathPreview(preview);
+  }, []);
+
+  const handlePrecisePathApply = React.useCallback((optimized: PathPlanWaypoint[]) => {
+    updateWaypoints(optimized);
+    setPrecisePathPreview(null);
+    setShowPrecisePathDialog(false);
+  }, [updateWaypoints]);
+
+  const handlePrecisePathClose = React.useCallback(() => {
+    setPrecisePathPreview(null);
+    setShowPrecisePathDialog(false);
+  }, []);
 
   // ── CAD Georeferencing state ──────────────────────────────
   const [isCADMode, setIsCADMode] = useState(false);
@@ -1957,15 +1975,15 @@ export default function PathPlanScreen({ isVisible = true }: PathPlanScreenProps
           /* Full Screen Map Mode */
           <View style={styles.fullscreenMap}>
             <PathPlanMap
-              waypoints={waypoints}
-              onMapPress={handleMapPress}
-              onWaypointDrag={handleWaypointDrag}
-              onWaypointClick={handleWaypointClick}
-              onAddWaypoints={handleAddWaypoints}
+              waypoints={displayedWaypoints}
+              onMapPress={showPrecisePathDialog ? undefined : handleMapPress}
+              onWaypointDrag={showPrecisePathDialog ? undefined : handleWaypointDrag}
+              onWaypointClick={showPrecisePathDialog ? undefined : handleWaypointClick}
+              onAddWaypoints={showPrecisePathDialog ? undefined : handleAddWaypoints}
               roverPosition={roverPosition ? { lat: roverPosition.lat, lon: roverPosition.lng } : { lat: 0, lon: 0 }}
               heading={telemetry.attitude?.yaw_deg ?? null}
-              activeDrawingTool={activeDrawingTool}
-              onDrawingComplete={handleDrawingComplete}
+              activeDrawingTool={showPrecisePathDialog ? null : activeDrawingTool}
+              onDrawingComplete={showPrecisePathDialog ? undefined : handleDrawingComplete}
               isDrawingMode={false}
               onToggleFullscreen={toggleMapFullscreen}
               isManualConnectionMode={isConnectingPath}
@@ -1996,9 +2014,14 @@ export default function PathPlanScreen({ isVisible = true }: PathPlanScreenProps
                     setShowManualConnectionCanvas(true);
                   }}
                   onShowReverseTool={() => setShowReverseDialog(true)}
-                  onShowPrecisePath={() => setShowPrecisePathDialog(true)}
                   isCollapsed={isDrawingToolsCollapsed}
                   onToggleCollapse={() => setIsDrawingToolsCollapsed(!isDrawingToolsCollapsed)}
+                  isPrecisePathActive={showPrecisePathDialog}
+                  precisePathWaypoints={waypoints}
+                  onPrecisePathPreviewChange={handlePrecisePathPreviewChange}
+                  onPrecisePathApply={handlePrecisePathApply}
+                  onPrecisePathClose={handlePrecisePathClose}
+                  onPrecisePathActivate={() => setShowPrecisePathDialog(true)}
                 />
               </View>
               {/* PathSequenceSidebar - Always shown; collapses the DrawingToolsPanel to free up vertical space */}
@@ -2016,6 +2039,7 @@ export default function PathPlanScreen({ isVisible = true }: PathPlanScreenProps
                 missionName={missionName}
                 onMissionNameChange={setMissionName}
                 missionMode={missionMode}
+                roverPosition={roverPosition ? { lat: roverPosition.lat, lon: roverPosition.lng } : null}
               />
             </View>
 
@@ -2023,11 +2047,11 @@ export default function PathPlanScreen({ isVisible = true }: PathPlanScreenProps
             <View style={styles.centerPanel}>
               <View style={styles.mapWrapper}>
                 <PathPlanMap
-                  waypoints={waypoints}
-                  onMapPress={handleMapPress}
-                  onWaypointDrag={handleWaypointDrag}
-                  onWaypointClick={handleWaypointClick}
-                  onAddWaypoints={handleAddWaypoints}
+                  waypoints={displayedWaypoints}
+                  onMapPress={showPrecisePathDialog ? undefined : handleMapPress}
+                  onWaypointDrag={showPrecisePathDialog ? undefined : handleWaypointDrag}
+                  onWaypointClick={showPrecisePathDialog ? undefined : handleWaypointClick}
+                  onAddWaypoints={showPrecisePathDialog ? undefined : handleAddWaypoints}
                   roverPosition={roverPosition ? { lat: roverPosition.lat, lon: roverPosition.lng } : { lat: 0, lon: 0 }}
                   heading={telemetry.attitude?.yaw_deg ?? null}
                   activeDrawingTool={activeDrawingTool}
@@ -2230,6 +2254,7 @@ export default function PathPlanScreen({ isVisible = true }: PathPlanScreenProps
                     ? manualPathConnections.map(id => waypoints.find(wp => wp.id === id)).filter(Boolean) as PathPlanWaypoint[]
                     : waypoints
                   }
+                  roverPosition={roverPosition ? { lat: roverPosition.lat, lon: roverPosition.lng } : null}
                 />
               </View>
             </View>
@@ -2529,21 +2554,6 @@ export default function PathPlanScreen({ isVisible = true }: PathPlanScreenProps
             ? { lat: roverPosition.lat, lng: roverPosition.lng }
             : undefined
         }
-      />
-
-      {/* Precise Path Planning Dialog */}
-      <PrecisePathPlanningDialog
-        visible={showPrecisePathDialog}
-        onClose={() => setShowPrecisePathDialog(false)}
-        onApply={(optimizedWaypoints) => {
-          updateWaypoints(optimizedWaypoints);
-          Alert.alert(
-            'Path Optimized',
-            `Reordered ${optimizedWaypoints.length} marking points for efficient traversal.`,
-            [{ text: 'OK' }]
-          );
-        }}
-        waypoints={waypoints}
       />
 
       {/* CAD Drawing Canvas */}

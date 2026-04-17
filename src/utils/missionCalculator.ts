@@ -280,13 +280,20 @@ export const vincentyDistance = (
 
 /**
  * Recalculate distances for all waypoints after reordering.
- * First waypoint gets distance = 0, subsequent ones get distance from previous.
+ * When originPoint is provided, the first waypoint's distance is measured
+ * from that origin (e.g., rover position). Otherwise, first waypoint = 0.
  */
 export const recalculateWaypointDistances = (
-    waypoints: PathPlanWaypoint[]
+    waypoints: PathPlanWaypoint[],
+    originPoint?: { lat: number; lon: number }
 ): PathPlanWaypoint[] => {
     return waypoints.map((wp, idx) => {
-        if (idx === 0) return { ...wp, distance: 0 };
+        if (idx === 0) {
+            const dist = originPoint
+                ? calculateDistance(originPoint, { lat: wp.lat, lon: wp.lon })
+                : 0;
+            return { ...wp, distance: dist };
+        }
         const prev = waypoints[idx - 1];
         const dist = calculateDistance(
             { lat: prev.lat, lon: prev.lon },
