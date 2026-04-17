@@ -50,7 +50,11 @@ type WpStatus = {
   position_error_cm?: number; // Distance error in cm (was position_error_mm)
 };
 
-export default function MissionReportScreen() {
+interface MissionReportScreenProps {
+  isVisible?: boolean;
+}
+
+export default function MissionReportScreen({ isVisible = true }: MissionReportScreenProps) {
   const DEBUG_MISSION_LOGS = false;
   const missionLog = (...args: any[]) => {
     if (DEBUG_MISSION_LOGS) console.log(...args);
@@ -98,19 +102,8 @@ export default function MissionReportScreen() {
     'mission-report-screen',
     'Mission Report Screen',
     async (setProgress) => {
-      setProgress(20, 'Loading waypoints...');
-      await new Promise(resolve => setTimeout(resolve, 100));
-      
-      setProgress(40, 'Initializing telemetry...');
-      await new Promise(resolve => setTimeout(resolve, 100));
-      
-      setProgress(60, 'Setting up map...');
-      await new Promise(resolve => setTimeout(resolve, 100));
-      
-      setProgress(80, 'Connecting services...');
-      await new Promise(resolve => setTimeout(resolve, 100));
-      
-      // Screen ready
+      // No artificial delays — screen becomes ready as soon as async init completes
+      setProgress(100, 'Ready');
     },
     true, // critical
     [] // No dependencies
@@ -1194,74 +1187,69 @@ export default function MissionReportScreen() {
     };
   }, []);
 
-  // Load persisted mission state on mount
+  // Load persisted mission state on mount — single batch read for speed
   useEffect(() => {
     const loadPersistedState = async () => {
       try {
-        const [savedStatusMap, savedStartTime, savedEndTime, savedIsActive, savedMode, savedUIState] = await Promise.all([
-          PersistentStorage.loadStatusMap(),
-          PersistentStorage.loadMissionStartTime(),
-          PersistentStorage.loadMissionEndTime(),
-          PersistentStorage.loadMissionActive(),
-          PersistentStorage.loadMissionMode(),
-          PersistentStorage.loadMissionReportUIState(),
-        ]);
+        // BATCH READ: Single AsyncStorage.multiGet instead of 6 separate reads
+        const data = await PersistentStorage.loadAllMissionReportData();
+        if (!data) return;
 
-        if (savedStatusMap && Object.keys(savedStatusMap).length > 0) {
-          setStatusMap(savedStatusMap);
-          console.log('[MissionReportScreen] 📂 Restored status map with', Object.keys(savedStatusMap).length, 'entries');
+        if (data.statusMap && Object.keys(data.statusMap).length > 0) {
+          setStatusMap(data.statusMap);
+          console.log('[MissionReportScreen] 📂 Restored status map with', Object.keys(data.statusMap).length, 'entries');
         }
 
-        if (savedStartTime) {
-          setMissionStartTime(savedStartTime);
+        if (data.startTime) {
+          setMissionStartTime(data.startTime);
           console.log('[MissionReportScreen] 📂 Restored mission start time');
         }
 
-        if (savedEndTime) {
-          setMissionEndTime(savedEndTime);
+        if (data.endTime) {
+          setMissionEndTime(data.endTime);
           console.log('[MissionReportScreen] 📂 Restored mission end time');
         }
 
-        if (savedIsActive) {
+        if (data.isActive) {
           // 🔧 FIX: Only restore mission active state if backend telemetry confirms mission is actually running
           // This prevents showing STOP button when backend mission is not running
           const currentBackendStatus = telemetry?.mission?.status?.toString().toLowerCase();
           const isBackendActuallyRunning = currentBackendStatus === 'running' || currentBackendStatus === 'active';
-          
+
           if (isBackendActuallyRunning) {
-            setIsMissionActive(savedIsActive);
-            console.log('[MissionReportScreen] 📂 Restored mission active state:', savedIsActive, '(confirmed by backend)');
+            setIsMissionActive(data.isActive);
+            console.log('[MissionReportScreen] 📂 Restored mission active state:', data.isActive, '(confirmed by backend)');
           } else if (currentBackendStatus === undefined || currentBackendStatus === '') {
             // If no telemetry yet, temporarily restore but will be corrected by MissionControlCard sync
-            setIsMissionActive(savedIsActive);
-            console.log('[MissionReportScreen] 📂 Restored mission active state temporarily (no telemetry yet):', savedIsActive);
+            setIsMissionActive(data.isActive);
+            console.log('[MissionReportScreen] 📂 Restored mission active state temporarily (no telemetry yet):', data.isActive);
           } else {
             setIsMissionActive(false);
             console.log('[MissionReportScreen] 📂 Skipped restoring mission active state - backend shows:', currentBackendStatus || 'no status');
           }
         }
 
-        if (savedMode) {
-          setMissionMode(savedMode);
-          console.log('[MissionReportScreen] 📂 Restored mission mode:', savedMode);
+        if (data.mode) {
+          setMissionMode(data.mode);
+          console.log('[MissionReportScreen] 📂 Restored mission mode:', data.mode);
         } else {
           // Ensure mode is set to default if no saved mode
           setMissionMode('DGPS Mark');
         }
 
         // Restore UI state
-        if (savedUIState) {
-          if (savedUIState.isMapFullscreen !== undefined) {
-            setIsMapFullscreen(savedUIState.isMapFullscreen);
-            console.log('[MissionReportScreen] 📂 Restored map fullscreen state:', savedUIState.isMapFullscreen);
+        if (data.uiState) {
+          if (data.uiState.isMapFullscreen !== undefined) {
+            setIsMapFullscreen(data.uiState.isMapFullscreen);
+            console.log('[MissionReportScreen] 📂 Restored map fullscreen state:', data.uiState.isMapFullscreen);
           }
-          if (savedUIState.currentIndex !== undefined) {
-            setCurrentIndex(savedUIState.currentIndex);
-            console.log('[MissionReportScreen] 📂 Restored current waypoint index:', savedUIState.currentIndex);
+          if (data.uiState.currentIndex !== undefined) {
+            setCurrentIndex(data.uiState.currentIndex);
+            console.log('[MissionReportScreen] 📂 Restored current waypoint index:', data.uiState.currentIndex);
           }
-          if (savedUIState.mode) {
-            setMode(savedUIState.mode);
-            console.log('[MissionReportScreen] 📂 Restored mode:', savedUIState.mode);
+          if (data.uiState.mode) {
+            setMode(data.uiState.mode);
+            console.log('[MissionReportScreen] 📂 Restored mode:', data.uiState.mode);
           }
         }
       } catch (error) {
@@ -2053,6 +2041,7 @@ export default function MissionReportScreen() {
               armed={mapProps.armed}
               rtkFixType={mapProps.rtkFixType}
               onToggleFullscreen={toggleMapFullscreen}
+              isVisible={isVisible}
             />
           </View>
         ) : (
@@ -2094,6 +2083,7 @@ export default function MissionReportScreen() {
                   armed={mapProps.armed}
                   rtkFixType={mapProps.rtkFixType}
                   onToggleFullscreen={toggleMapFullscreen}
+                  isVisible={isVisible}
                 />
               </View>
             </View>

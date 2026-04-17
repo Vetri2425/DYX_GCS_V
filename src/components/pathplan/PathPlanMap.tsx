@@ -51,6 +51,7 @@ interface Props {
   measureResult?: { distance: number; heading: number } | null;
   onMeasureClear?: () => void;
   onMeasureWaypointSelect?: (id: number) => void;
+  isVisible?: boolean;     // When false, pauses Leaflet rendering to save GPU/CPU
 }
 
 export const PathPlanMap: React.FC<Props> = ({
@@ -85,6 +86,7 @@ export const PathPlanMap: React.FC<Props> = ({
   measureResult = null,
   onMeasureClear,
   onMeasureWaypointSelect,
+  isVisible = true,
 }) => {
   const webViewRef = useRef<WebView | null>(null);
   const [mapReady, setMapReady] = useState(false);
@@ -266,18 +268,38 @@ export const PathPlanMap: React.FC<Props> = ({
     }
 
     /* ── Waypoint pulse animation ── */
+    /* PERFORMANCE: Changed from box-shadow to transform/opacity for GPU acceleration */
     @keyframes wp-pulse {
-      0% { box-shadow: 0 0 0 0 rgba(59,130,246,0.5); }
-      70% { box-shadow: 0 0 0 10px rgba(59,130,246,0); }
-      100% { box-shadow: 0 0 0 0 rgba(59,130,246,0); }
+      0% { transform: scale(1); opacity: 1; }
+      70% { transform: scale(1.3); opacity: 0; }
+      100% { transform: scale(1); opacity: 0; }
     }
     .wp-selected-pulse {
-      animation: wp-pulse 1.8s ease-out infinite;
+      position: relative;
+    }
+    .wp-selected-pulse::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
       border-radius: 50%;
+      border: 2px solid rgba(59,130,246,0.6);
+      animation: wp-pulse 1.8s ease-out infinite;
+      will-change: transform, opacity;
+    }
+
+    /* ── Marker GPU acceleration ── */
+    .custom-marker {
+      will-change: transform;
+      transform: translateZ(0);
+      backface-visibility: hidden;
     }
 
     /* ── Polyline glow filter ── */
-    .leaflet-overlay-pane svg { filter: drop-shadow(0 0 3px rgba(249,115,22,0.4)); }
+    /* PERFORMANCE: Drop-shadow filter disabled - causes lag with 100+ waypoints during zoom */
+    /* .leaflet-overlay-pane svg { filter: drop-shadow(0 0 3px rgba(249,115,22,0.4)); } */
   </style>
 </head>
 <body>
@@ -322,6 +344,11 @@ export const PathPlanMap: React.FC<Props> = ({
       maxZoom: 26,
       zoomControl: false,
       attributionControl: false,
+      zoomAnimation: false,        // Disable zoom animation to prevent marker re-render during zoom
+      markerZoomAnimation: false,  // Disable marker animation during zoom for better performance with 100+ waypoints
+      preferCanvas: false,         // Keep SVG rendering (Canvas doesn't help with markers)
+      updateWhenZooming: false,    // CRITICAL: Don't update layers during zoom
+      updateWhenIdle: true,        // Only update after zoom completes
     });
 
     L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
@@ -347,13 +374,16 @@ export const PathPlanMap: React.FC<Props> = ({
       if (wp.isSelected) fill = '#3B82F6';
       
       const size = wp.isSelected ? 48 : 36;
-      const shadow = 'filter: drop-shadow(0 2px 4px rgba(0,0,0,0.5));';
+      // PERFORMANCE: Drop-shadow filter removed - causes lag with 100+ waypoints during zoom
+      // Use simple border instead for visual depth
+      const shadow = '';
+      const border = 'stroke: rgba(0,0,0,0.3); stroke-width: 0.5;';
       const pulseClass = wp.isSelected ? 'wp-selected-pulse' : '';
       
       const svgIcon = \`
         <div class="\${pulseClass}" style="display:inline-block;">
         <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="\${size}" height="\${size}" fill="\${fill}" style="\${shadow}">
-          <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7z"/>
+          <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7z" style="\${border}"/>
           <text x="12" y="10.5" font-family="sans-serif" font-size="12" font-weight="bold" fill="white" text-anchor="middle" dy=".3em">\${index + 1}</text>
         </svg>
         </div>
@@ -367,12 +397,44 @@ export const PathPlanMap: React.FC<Props> = ({
       });
     }
 
-    // FIX 1: Extract marker creation into a reusable function (no drag, no popup)
+    // FIX 1: Extract marker creation into a reusable function (drag enabled when point tool is active)
     function createMarker(wp, index) {
+      const canDrag = window.isPointToolActive && !window.isManualConnectionMode;
       const marker = L.marker([wp.lat, wp.lon], {
         icon: getWaypointIcon(wp, index),
-        draggable: false,
+        draggable: canDrag,
       }).addTo(map);
+
+      // Attach drag handlers if point tool is active
+      if (canDrag) {
+        marker._dragHandlersAttached = true;
+        const wpId = wp.id;
+        marker.on('dragstart', function(e) {
+          window.dragPreviewState.isDragging = true;
+          var wpIdx = window.currentWaypoints.findIndex(function(w) { return w.id === wpId; });
+          window.dragPreviewState.draggingWpIndex = wpIdx;
+          if (missionPolyline) missionPolyline.setStyle({ opacity: 0.3 });
+          if (missionGlowLine) missionGlowLine.setStyle({ opacity: 0.1 });
+        });
+        marker.on('drag', function(e) {
+          var pos = e.target.getLatLng();
+          var wpIdx = window.currentWaypoints.findIndex(function(w) { return w.id === wpId; });
+          if (wpIdx !== -1) updateDragPreview(pos, wpIdx, window.currentWaypoints);
+        });
+        marker.on('dragend', function(e) {
+          clearDragPreview();
+          window.clearOrthoGuide();
+          if (missionPolyline) missionPolyline.setStyle({ opacity: 1 });
+          if (missionGlowLine) missionGlowLine.setStyle({ opacity: 0.2 });
+          var pos = e.target.getLatLng();
+          window.ReactNativeWebView.postMessage(JSON.stringify({
+            type: 'waypointDrag',
+            id: wpId,
+            lat: pos.lat,
+            lng: pos.lng
+          }));
+        });
+      }
 
       marker.on('click', function(e) {
         L.DomEvent.stopPropagation(e);
@@ -748,6 +810,22 @@ export const PathPlanMap: React.FC<Props> = ({
       }
     });
     // ========== END ORTHO SNAP FEATURE ==========
+    
+    // PERFORMANCE: Freeze marker pane during zoom to prevent re-renders
+    map.on('zoomstart', function() {
+      const markerPane = map.getPane('markerPane');
+      if (markerPane) {
+        markerPane.style.willChange = 'transform';
+        markerPane.style.pointerEvents = 'none';
+      }
+    });
+    
+    map.on('zoomend', function() {
+      const markerPane = map.getPane('markerPane');
+      if (markerPane) {
+        markerPane.style.pointerEvents = '';
+      }
+    });
     
     map.on('click', function(e) {
       // Clear ortho guide when creating new waypoint
@@ -1199,6 +1277,43 @@ export const PathPlanMap: React.FC<Props> = ({
 
     mapInitializedRef.current = true;
   }, [mapReady]);
+
+  // Pause/resume Leaflet rendering when visibility changes
+  // Stops tile loading, continuous redraws, and interactions when hidden
+  useEffect(() => {
+    if (!mapReady || !webViewRef.current) return;
+
+    if (isVisible) {
+      webViewRef.current.injectJavaScript(`
+        (function() {
+          try {
+            if (typeof map !== 'undefined' && map) {
+              map.invalidateSize();
+              map.dragging.enable();
+              map.touchZoom.enable();
+              map.doubleClickZoom.enable();
+              map.scrollWheelZoom.enable();
+            }
+          } catch(e) {}
+        })();
+        true;
+      `);
+    } else {
+      webViewRef.current.injectJavaScript(`
+        (function() {
+          try {
+            if (typeof map !== 'undefined' && map) {
+              map.dragging.disable();
+              map.touchZoom.disable();
+              map.doubleClickZoom.disable();
+              map.scrollWheelZoom.disable();
+            }
+          } catch(e) {}
+        })();
+        true;
+      `);
+    }
+  }, [isVisible, mapReady]);
 
   // Update waypoints via JavaScript injection - no HTML regeneration
   useEffect(() => {
@@ -1652,7 +1767,8 @@ export const PathPlanMap: React.FC<Props> = ({
             const wp = window.currentWaypoints[prevIdx];
             const fill = prevIdx === 0 ? '#16a34a' : '#f97316';
             const size = 36;
-            const svgIcon = '<div style="display:inline-block;"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="' + size + '" height="' + size + '" fill="' + fill + '" style="filter: drop-shadow(0 2px 4px rgba(0,0,0,0.5));"><path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7z"/><text x="12" y="10.5" font-family="sans-serif" font-size="12" font-weight="bold" fill="white" text-anchor="middle" dy=".3em">' + (prevIdx + 1) + '</text></svg></div>';
+            const border = 'stroke: rgba(0,0,0,0.3); stroke-width: 0.5;';
+            const svgIcon = '<div style="display:inline-block;"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="' + size + '" height="' + size + '" fill="' + fill + '"><path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7z" style="' + border + '"/><text x="12" y="10.5" font-family="sans-serif" font-size="12" font-weight="bold" fill="white" text-anchor="middle" dy=".3em">' + (prevIdx + 1) + '</text></svg></div>';
             waypointMarkers[prevIdx].setIcon(L.divIcon({ html: svgIcon, className: 'custom-marker', iconSize: [size, size], iconAnchor: [size / 2, size] }));
           }
         }
@@ -1661,7 +1777,8 @@ export const PathPlanMap: React.FC<Props> = ({
           const nextIdx = window.currentWaypoints.findIndex(function(w) { return w.id === ${next}; });
           if (nextIdx !== -1 && waypointMarkers[nextIdx]) {
             const size = 48;
-            const svgIcon = '<div class="wp-selected-pulse" style="display:inline-block;"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="' + size + '" height="' + size + '" fill="#3B82F6" style="filter: drop-shadow(0 2px 4px rgba(0,0,0,0.5));"><path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7z"/><text x="12" y="10.5" font-family="sans-serif" font-size="12" font-weight="bold" fill="white" text-anchor="middle" dy=".3em">' + (nextIdx + 1) + '</text></svg></div>';
+            const border = 'stroke: rgba(0,0,0,0.3); stroke-width: 0.5;';
+            const svgIcon = '<div class="wp-selected-pulse" style="display:inline-block;"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="' + size + '" height="' + size + '" fill="#3B82F6"><path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7z" style="' + border + '"/><text x="12" y="10.5" font-family="sans-serif" font-size="12" font-weight="bold" fill="white" text-anchor="middle" dy=".3em">' + (nextIdx + 1) + '</text></svg></div>';
             waypointMarkers[nextIdx].setIcon(L.divIcon({ html: svgIcon, className: 'custom-marker', iconSize: [size, size], iconAnchor: [size / 2, size] }));
           }
         }
@@ -1672,7 +1789,9 @@ export const PathPlanMap: React.FC<Props> = ({
   }, [selectedWaypoint, mapReady]);
 
   // TRAIL DISABLED: Update rover position without trail
+  // Skip updates when not visible to save JS thread and GPU
   useEffect(() => {
+    if (!isVisible) return;
     if (!mapReady || !webViewRef.current) {
       if (Math.random() < 0.05) { // Log 5% of skipped updates for debugging
         console.log('[PathPlanMap] Skipping rover update - mapReady:', mapReady, 'webViewRef:', !!webViewRef.current);
@@ -1835,17 +1954,56 @@ export const PathPlanMap: React.FC<Props> = ({
   }, [visualization, mapReady, isManualConnectionMode]);
 
   // Update measure tool active state and point tool state
+  // Also toggle marker dragging so waypoints are draggable in points tool mode
   useEffect(() => {
     if (!mapReady || !webViewRef.current) return;
     const isMeasureActive = activeDrawingTool === 'measure';
     const isPointToolActive = activeDrawingTool === 'line';
+    const shouldEnableDrag = isPointToolActive && !isManualConnectionMode;
     const script = `
       window.isMeasureToolActive = ${isMeasureActive};
       window.isPointToolActive = ${isPointToolActive};
+      // Toggle dragging on all markers when point tool activates/deactivates
+      markerRegistry.forEach(function(marker, id) {
+        if (${shouldEnableDrag}) {
+          marker.dragging.enable();
+          // Attach drag handlers if not already present
+          if (!marker._dragHandlersAttached) {
+            marker._dragHandlersAttached = true;
+            marker.on('dragstart', function(e) {
+              window.dragPreviewState.isDragging = true;
+              var wpIdx = window.currentWaypoints.findIndex(function(w) { return w.id === id; });
+              window.dragPreviewState.draggingWpIndex = wpIdx;
+              if (missionPolyline) missionPolyline.setStyle({ opacity: 0.3 });
+              if (missionGlowLine) missionGlowLine.setStyle({ opacity: 0.1 });
+            });
+            marker.on('drag', function(e) {
+              var pos = e.target.getLatLng();
+              var wpIdx = window.currentWaypoints.findIndex(function(w) { return w.id === id; });
+              if (wpIdx !== -1) updateDragPreview(pos, wpIdx, window.currentWaypoints);
+            });
+            marker.on('dragend', function(e) {
+              clearDragPreview();
+              window.clearOrthoGuide();
+              if (missionPolyline) missionPolyline.setStyle({ opacity: 1 });
+              if (missionGlowLine) missionGlowLine.setStyle({ opacity: 0.2 });
+              var pos = e.target.getLatLng();
+              window.ReactNativeWebView.postMessage(JSON.stringify({
+                type: 'waypointDrag',
+                id: id,
+                lat: pos.lat,
+                lng: pos.lng
+              }));
+            });
+          }
+        } else {
+          marker.dragging.disable();
+        }
+      });
       true;
     `;
     webViewRef.current.injectJavaScript(script);
-  }, [activeDrawingTool, mapReady]);
+  }, [activeDrawingTool, mapReady, isManualConnectionMode]);
 
   // Inject measure ring-markers + connecting line into Leaflet, and open popup on selected waypoints
   useEffect(() => {
@@ -1927,6 +2085,8 @@ export const PathPlanMap: React.FC<Props> = ({
           window._activeDragId = ${id};
           marker.off('dragend');
           marker.on('dragend', function(e) {
+            clearDragPreview();
+            window.clearOrthoGuide();
             var pos = e.target.getLatLng();
             window.ReactNativeWebView.postMessage(JSON.stringify({
               type: 'waypointDragged',
@@ -1965,7 +2125,7 @@ export const PathPlanMap: React.FC<Props> = ({
               } else {
                 onWaypointClick?.(message.id);
                 // FIX 2: Enable drag on the clicked marker (drag-on-demand)
-                if (!isManualConnectionMode && activeDrawingTool !== 'line') {
+                if (!isManualConnectionMode) {
                   const idx = waypoints.findIndex(w => w.id === message.id);
                   if (idx !== -1) enableDragOnMarker(message.id, idx);
                 }

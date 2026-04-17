@@ -12,6 +12,7 @@ interface DrawingToolsPanelProps {
   onShowCADDrawing: () => void;
   onShowManualConnection: () => void;
   onShowReverseTool: () => void;
+  onShowPrecisePath?: () => void;
   isCollapsed?: boolean;
   onToggleCollapse?: () => void;
 }
@@ -25,6 +26,7 @@ export const DrawingToolsPanel: React.FC<DrawingToolsPanelProps> = ({
   onShowCADDrawing,
   onShowManualConnection,
   onShowReverseTool,
+  onShowPrecisePath,
   isCollapsed = false,
   onToggleCollapse,
 }) => {
@@ -42,7 +44,7 @@ export const DrawingToolsPanel: React.FC<DrawingToolsPanelProps> = ({
   const drawingTools = [
     { name: 'line', mdiIcon: 'star-three-points-outline', title: 'Points', color: colors.greenBtn },
     { name: 'cad-draw', mdiIcon: 'draw-pen', title: 'CAD Draw', color: colors.accent },
-    { name: 'rectangle', mdiIcon: 'rectangle-outline', title: 'Rectangle', color: colors.blueBtn },
+    { name: 'precise', mdiIcon: 'map-marker-path', title: 'Precise\nPath', color: colors.blueBtn },
     { name: 'text', mdiIcon: 'text-box-edit-outline', title: 'Text', color: colors.accent },
     { name: 'measure', mdiIcon: 'ruler', title: 'Measure', color: colors.accent },
     { name: 'manual-connection', mdiIcon: 'vector-polyline-edit', title: 'Manual\nConnection', color: colors.orangeBtn },
@@ -68,6 +70,7 @@ export const DrawingToolsPanel: React.FC<DrawingToolsPanelProps> = ({
     if (toolName === 'cad-draw') { onShowCADDrawing(); return; }
     if (toolName === 'manual-connection') { onShowManualConnection(); return; }
     if (toolName === 'reverse') { onShowReverseTool(); return; }
+    if (toolName === 'precise') { onShowPrecisePath?.(); return; }
     onToolSelect(activeDrawingTool === toolName ? null : toolName);
   };
 
@@ -136,7 +139,7 @@ export const DrawingToolsPanel: React.FC<DrawingToolsPanelProps> = ({
               <Text style={styles.instructionText}>
                 {activeDrawingTool === 'line' && '✦ Click to place points. Double-tap to finish.'}
                 {activeDrawingTool === 'cad-draw' && '🔧 Professional CAD drawing with precision tools.'}
-                {activeDrawingTool === 'rectangle' && '✦ Click first corner, then drag to second corner.'}
+                {activeDrawingTool === 'precise' && '🎯 Optimize waypoint sequence using advanced path planning.'}
                 {activeDrawingTool === 'text' && '✏️ Click to place text annotation on map.'}
                 {activeDrawingTool === 'measure' && '✦ Click points to measure distance.'}
               </Text>

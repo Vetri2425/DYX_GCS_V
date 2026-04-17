@@ -10,6 +10,7 @@ import MissionOpsPanel from '../components/pathplan/MissionOpsPanel';
 import { MissionStatistics } from '../components/pathplan/MissionStatistics';
 import { PathPlanMap } from '../components/pathplan/PathPlanMap';
 import { DrawingToolsPanel } from '../components/pathplan/DrawingToolsPanel';
+import { PrecisePathPlanningDialog } from '../components/pathplan/PrecisePathPlanningDialog';
 import { CircleGeneratorDialog } from '../components/pathplan/CircleGeneratorDialog';
 import { SurveyGridDialog } from '../components/pathplan/SurveyGridDialog';
 import { TextAnnotationDialog } from '../components/pathplan/TextAnnotationDialog';
@@ -61,7 +62,11 @@ const PreviewRow = memo(({ item }: { item: PathPlanWaypoint }) => (
 // Toggle debug logging for this screen
 const DEBUG_LOG = true;
 
-export default function PathPlanScreen() {
+interface PathPlanScreenProps {
+  isVisible?: boolean;
+}
+
+export default function PathPlanScreen({ isVisible = true }: PathPlanScreenProps) {
   const {
     telemetry,
     roverPosition,
@@ -263,6 +268,7 @@ export default function PathPlanScreen() {
   const [showSurveyGridDialog, setShowSurveyGridDialog] = useState(false);
   const [showTextDialog, setShowTextDialog] = useState(false);
   const [showCADCanvas, setShowCADCanvas] = useState(false);
+  const [showPrecisePathDialog, setShowPrecisePathDialog] = useState(false);
 
   // ── CAD Georeferencing state ──────────────────────────────
   const [isCADMode, setIsCADMode] = useState(false);
@@ -1970,6 +1976,7 @@ export default function PathPlanScreen() {
               measureResult={measureResult}
               onMeasureClear={() => { setMeasurePoints([]); setMeasureResult(null); }}
               onMeasureWaypointSelect={handleMeasureWaypointSelect}
+              isVisible={isVisible}
             />
           </View>
         ) : (
@@ -1989,6 +1996,7 @@ export default function PathPlanScreen() {
                     setShowManualConnectionCanvas(true);
                   }}
                   onShowReverseTool={() => setShowReverseDialog(true)}
+                  onShowPrecisePath={() => setShowPrecisePathDialog(true)}
                   isCollapsed={isDrawingToolsCollapsed}
                   onToggleCollapse={() => setIsDrawingToolsCollapsed(!isDrawingToolsCollapsed)}
                 />
@@ -2034,6 +2042,7 @@ export default function PathPlanScreen() {
                   measureResult={measureResult}
                   onMeasureClear={() => { setMeasurePoints([]); setMeasureResult(null); }}
               onMeasureWaypointSelect={handleMeasureWaypointSelect}
+                  isVisible={isVisible}
                 />
               </View>
             </View>
@@ -2520,6 +2529,21 @@ export default function PathPlanScreen() {
             ? { lat: roverPosition.lat, lng: roverPosition.lng }
             : undefined
         }
+      />
+
+      {/* Precise Path Planning Dialog */}
+      <PrecisePathPlanningDialog
+        visible={showPrecisePathDialog}
+        onClose={() => setShowPrecisePathDialog(false)}
+        onApply={(optimizedWaypoints) => {
+          updateWaypoints(optimizedWaypoints);
+          Alert.alert(
+            'Path Optimized',
+            `Reordered ${optimizedWaypoints.length} marking points for efficient traversal.`,
+            [{ text: 'OK' }]
+          );
+        }}
+        waypoints={waypoints}
       />
 
       {/* CAD Drawing Canvas */}

@@ -12,11 +12,13 @@ import { useRover } from '../context/RoverContext';
 export default function TabNavigator() {
   const { missionMode } = useRover();
   const [activeTab, setActiveTab] = useState<'Dashboard' | 'Marking Plan' | 'Mission Progress'>('Mission Progress');
+  // Keep ALL visited tabs mounted — never unmount them.
+  // This prevents WebView recreation (the #1 cause of tab switch lag).
+  // Leaflet maps are paused via isVisible prop when hidden.
   const [mountedTabs, setMountedTabs] = useState<Set<string>>(new Set(['Mission Progress']));
   const [isLoadingTab, setIsLoadingTab] = useState(true);
   const previousTabRef = useRef<string>('Mission Progress');
   const mountedRef = useRef(true);
-  const unmountTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Load last active tab on mount - restore where user left off
   useEffect(() => {
@@ -41,7 +43,7 @@ export default function TabNavigator() {
     loadLastActiveTab();
   }, []);
 
-  // Handle tab changes with cleanup delay to prevent memory spikes
+  // Handle tab changes — keep all tabs mounted, just toggle visibility
   const handleTabChange = useCallback((newTab: 'Dashboard' | 'Marking Plan' | 'Mission Progress') => {
     if (!mountedRef.current) {
       console.warn('[TabNavigator] Component unmounted, ignoring tab change');
@@ -54,14 +56,11 @@ export default function TabNavigator() {
 
     console.log(`[TabNavigator] Switching from "${previousTabRef.current}" to "${newTab}"`);
 
-    // Clear any pending unmount timer
-    if (unmountTimerRef.current) {
-      clearTimeout(unmountTimerRef.current);
-      unmountTimerRef.current = null;
-    }
-
-    // Mark new tab as mounted
-    setMountedTabs(prev => new Set(prev).add(newTab));
+    // Mark new tab as mounted (if not already)
+    setMountedTabs(prev => {
+      if (prev.has(newTab)) return prev;
+      return new Set(prev).add(newTab);
+    });
     setActiveTab(newTab);
 
     // Save active tab for restoration after crash/restart
@@ -69,18 +68,9 @@ export default function TabNavigator() {
       console.error('[TabNavigator] Failed to save active tab:', error);
     });
 
-    // Unmount previous tab after a delay to allow smooth transition
-    const previousTab = previousTabRef.current;
     previousTabRef.current = newTab;
-
-    // Keep only current tab mounted to save memory
-    unmountTimerRef.current = setTimeout(() => {
-      if (mountedRef.current) {
-        setMountedTabs(new Set([newTab]));
-        console.log(`[TabNavigator] Unmounted "${previousTab}" to free memory`);
-      }
-      unmountTimerRef.current = null;
-    }, 500);
+    // NOTE: No unmount timer! Tabs stay mounted with display:none.
+    // Leaflet maps are paused/resumed via the isVisible prop.
   }, [activeTab]);
 
   // Cleanup on unmount
@@ -89,46 +79,13 @@ export default function TabNavigator() {
 
     return () => {
       mountedRef.current = false;
-
-      // Clear unmount timer
-      if (unmountTimerRef.current) {
-        clearTimeout(unmountTimerRef.current);
-        unmountTimerRef.current = null;
-      }
-
       console.log('[TabNavigator] Component unmounting, cleaning up all tabs');
       setMountedTabs(new Set());
     };
   }, []);
 
-  const renderScreen = () => {
-    // Only render mounted tabs to prevent memory issues and ensure fresh mounts
-    return (
-      <>
-        {mountedTabs.has('Dashboard') && (
-          <View style={{ flex: 1, display: activeTab === 'Dashboard' ? 'flex' : 'none' }}>
-            <ErrorBoundary componentName="Dashboard Screen">
-              <DashboardScreen />
-            </ErrorBoundary>
-          </View>
-        )}
-        {mountedTabs.has('Marking Plan') && (
-          <View style={{ flex: 1, display: activeTab === 'Marking Plan' ? 'flex' : 'none' }}>
-            <ErrorBoundary componentName="Marking Plan Screen">
-              <PathPlanScreen />
-            </ErrorBoundary>
-          </View>
-        )}
-        {mountedTabs.has('Mission Progress') && (
-          <View style={{ flex: 1, display: activeTab === 'Mission Progress' ? 'flex' : 'none' }}>
-            <ErrorBoundary componentName="Mission Progress Screen">
-              <MissionReportScreen />
-            </ErrorBoundary>
-          </View>
-        )}
-      </>
-    );
-  };
+  const isMarkingPlanVisible = activeTab === 'Marking Plan';
+  const isMissionProgressVisible = activeTab === 'Mission Progress';
 
   return (
     <View style={{ flex: 1, backgroundColor: colors.primary }}>
@@ -138,8 +95,28 @@ export default function TabNavigator() {
         onTabChange={handleTabChange}
       />
 
-      {/* Screen Content */}
-      {renderScreen()}
+      {/* Screen Content — all visited tabs stay mounted, hidden ones use display:none */}
+      {mountedTabs.has('Dashboard') && (
+        <View style={{ flex: 1, display: activeTab === 'Dashboard' ? 'flex' : 'none' }}>
+          <ErrorBoundary componentName="Dashboard Screen">
+            <DashboardScreen />
+          </ErrorBoundary>
+        </View>
+      )}
+      {mountedTabs.has('Marking Plan') && (
+        <View style={{ flex: 1, display: isMarkingPlanVisible ? 'flex' : 'none' }}>
+          <ErrorBoundary componentName="Marking Plan Screen">
+            <PathPlanScreen isVisible={isMarkingPlanVisible} />
+          </ErrorBoundary>
+        </View>
+      )}
+      {mountedTabs.has('Mission Progress') && (
+        <View style={{ flex: 1, display: isMissionProgressVisible ? 'flex' : 'none' }}>
+          <ErrorBoundary componentName="Mission Progress Screen">
+            <MissionReportScreen isVisible={isMissionProgressVisible} />
+          </ErrorBoundary>
+        </View>
+      )}
     </View>
   );
 }
