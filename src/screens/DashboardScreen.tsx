@@ -1,5 +1,5 @@
 import React, { useMemo, useEffect, useRef, useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, useWindowDimensions, ActivityIndicator } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, ActivityIndicator } from 'react-native';
 import { MaterialCommunityIcons, Ionicons } from '@expo/vector-icons';
 import { colors } from '../theme/colors';
 import { useRover } from '../context/RoverContext';
@@ -7,6 +7,7 @@ import { RobotSettingsModal } from '../components/dashboard/RobotSettingsModal';
 import QuickTuneScreen from './QuickTuneScreen';
 import { saveParamsToFile, loadParamsFromFile } from '../services/paramFileService';
 
+// ── UTILS ────────────────────────────────────────────────────────
 function getFixTypeLabel(fixType: number): string {
   const labels: { [key: number]: string } = {
     0: 'No GPS', 1: 'No Fix', 2: '2D Fix',
@@ -24,17 +25,238 @@ const getStatusColor = (level: 'healthy' | 'warning' | 'critical' | 'neutral') =
   }
 };
 
+// ── MEMOIZED SUB-COMPONENTS FOR PERFORMANCE ──────────────────────
+
+const TopCard = React.memo(({ title, value, color, danger, flex = 1 }: any) => (
+  <View style={[styles.topCard, { flex }, danger && styles.borderDanger]}>
+    <Text style={styles.blockLabel}>{title}</Text>
+    <Text style={[styles.topValue, { color: color || colors.textPrimary }]} numberOfLines={1} adjustsFontSizeToFit>
+      {value}
+    </Text>
+  </View>
+));
+
+const SubCardLayer = ({ children, style }: any) => (
+  <View style={[styles.gridBlock, style]}>
+    {children}
+  </View>
+);
+
+const GroundSpeedCard = React.memo(({ speed }: { speed: number }) => (
+  <View style={[styles.gridBlock, styles.flex2]}>
+    <View style={styles.rowBetween}>
+      <Text style={styles.blockLabel}>GROUND SPEED</Text>
+      <View style={styles.chip}>
+        <View style={[styles.dot, { backgroundColor: colors.accent }]} />
+        <Text style={styles.chipText}>M/S</Text>
+      </View>
+    </View>
+    <View style={styles.centerOuter}>
+      <Text style={styles.hugeValue} numberOfLines={1} adjustsFontSizeToFit>{speed.toFixed(1)}</Text>
+    </View>
+    <View style={styles.placeholderBox}>
+      <Text style={styles.placeholderText}>SPEED HISTORY · 60S</Text>
+    </View>
+  </View>
+));
+
+const HeadingCard = React.memo(({ heading }: { heading: number }) => (
+  <View style={[styles.gridBlock, styles.flex2]}>
+    <View style={styles.rowBetween}>
+      <Text style={styles.blockLabel}>HEADING</Text>
+      <View style={styles.chip}>
+        <View style={[styles.dot, { backgroundColor: colors.accent }]} />
+        <Text style={styles.chipText}>DEG</Text>
+      </View>
+    </View>
+    <View style={styles.centerOuter}>
+      <Text style={styles.hugeValue} numberOfLines={1} adjustsFontSizeToFit>{Math.round(heading)}°</Text>
+    </View>
+    <View style={styles.placeholderBox}>
+      <Text style={styles.placeholderText}>COMPASS ROSE · N/E/S/W</Text>
+    </View>
+  </View>
+));
+
+const HeroStateCard = React.memo(({ armStatus, mode, connectionState, sysStatus, flex = 3 }: any) => {
+  const isArmed = armStatus === 'ARMED';
+  const mainColor = isArmed ? colors.danger : colors.textPrimary;
+  const isConnected = connectionState === 'connected';
+
+  return (
+    <View style={[styles.gridBlock, styles.heroContainer, { flex }]}>
+      <Text style={styles.heroSystemTitle}>System State</Text>
+      <Text
+        style={[styles.heroHugeText, { color: mainColor }]}
+        numberOfLines={1}
+        adjustsFontSizeToFit
+      >
+        {isConnected ? sysStatus || armStatus : 'DISCONNECTED'}
+      </Text>
+
+      <View style={styles.heroPillRow}>
+        <View style={styles.heroPill}>
+          <View style={[styles.dot, { backgroundColor: colors.accent }]} />
+          <Text style={styles.heroPillText}>MODE: {mode}</Text>
+        </View>
+        <View style={[styles.heroPill, { borderColor: colors.warning }]}>
+          <View style={[styles.dot, { backgroundColor: colors.warning }]} />
+          <Text style={[styles.heroPillText, { color: colors.warning }]}>
+            {isConnected ? (isArmed ? 'ACTIVE' : 'NEUTRAL') : 'OFFLINE'}
+          </Text>
+        </View>
+      </View>
+
+      <Text style={styles.heroBottomText}>
+        {isConnected ? 'ready · awaiting command' : 'check connection...'}
+      </Text>
+    </View>
+  );
+});
+
+const MiniMissionProgress = React.memo(({ status, wp, totalWp, pct, flex = 1 }: any) => (
+  <View style={[styles.rowGap, { flex }]}>
+        <View style={[styles.gridBlock, styles.missionStatBox, { flex: 1 }]}>
+          <Text style={styles.blockLabel}>WAYPOINT</Text>
+          <View style={styles.centerOuter}>
+            <Text style={styles.medValue} numberOfLines={1} adjustsFontSizeToFit>
+              {wp} <Text style={styles.medValueSub}>/ {totalWp || 1}</Text>
+            </Text>
+          </View>
+        </View>
+        <View style={styles.hGapSpace} />
+        <View style={[styles.gridBlock, styles.missionStatBox, { flex: 1 }]}>
+          <View style={styles.rowBetween}>
+            <Text style={styles.blockLabel}>MISSION PROGRESS</Text>
+            <View style={styles.chip}>
+              <View style={[styles.dot, { backgroundColor: colors.accent }]} />
+              <Text style={styles.chipText}>{status || 'IDLE'}</Text>
+            </View>
+          </View>
+          <View style={styles.centerOuter}>
+            <Text style={styles.medValue} numberOfLines={1} adjustsFontSizeToFit>{Math.round(pct)}%</Text>
+          </View>
+          <View style={styles.progressBg}>
+            <View style={[styles.progressFill, { width: `${pct}%` as any }]} />
+          </View>
+        </View>
+  </View>
+));
+
+const DetailedBatteryCard = React.memo(({ pct, voltage, current }: any) => {
+  const isDanger = pct <= 20;
+  return (
+    <View style={[styles.gridBlock, styles.flex2, isDanger && styles.borderDanger]}>
+      <View style={styles.rowBetween}>
+        <Text style={styles.blockLabel}>BATTERY</Text>
+        <View style={[styles.chip, { borderColor: isDanger ? colors.danger : colors.success }]}>
+          <View style={[styles.dot, { backgroundColor: isDanger ? colors.danger : colors.success }]} />
+          <Text style={[styles.chipText, { color: isDanger ? colors.danger : colors.success }]}>
+            {isDanger ? 'LOW' : 'OK'}
+          </Text>
+        </View>
+      </View>
+      <View style={styles.centerOuterLevel2}>
+        <View style={styles.batteryMainRow}>
+          <Text style={styles.bigValue} numberOfLines={1} adjustsFontSizeToFit>{Math.round(pct)}</Text>
+          <Text style={styles.bigValueSub}>%</Text>
+        </View>
+      </View>
+
+      {/* Custom Bar representing limits */}
+      <View style={styles.batteryBarContainer}>
+        <View style={styles.batteryBarTrack}>
+          <View style={[styles.batteryBarFill, { width: `${Math.max(0, Math.min(100, pct))}%`, backgroundColor: isDanger ? colors.danger : colors.success }]} />
+        </View>
+      </View>
+      <View style={styles.rowBetween}>
+        <Text style={styles.microText}>{voltage.toFixed(1)} V</Text>
+        <Text style={styles.microText}>{current.toFixed(1)} A</Text>
+      </View>
+    </View>
+  );
+});
+
+const DetailedRTKCard = React.memo(({ fixLevel, fixLabel, sats, baseLink, rtkBase }: any) => {
+  const isDanger = fixLevel < 2;
+  return (
+    <View style={[styles.gridBlock, styles.flex2, isDanger && styles.borderDanger]}>
+      <View style={styles.rowBetween}>
+        <Text style={styles.blockLabel}>RTK / GPS</Text>
+        <View style={[styles.chip, { borderColor: baseLink ? colors.success : colors.danger }]}>
+          <View style={[styles.dot, { backgroundColor: baseLink ? colors.success : colors.danger }]} />
+          <Text style={[styles.chipText, { color: baseLink ? colors.success : colors.danger }]}>
+            {baseLink ? 'BASE LINKED' : 'BASE LOST'}
+          </Text>
+        </View>
+      </View>
+      <View style={styles.centerOuter}>
+        <Text style={[styles.hugeValue2, { color: isDanger ? colors.danger : colors.textPrimary }]} numberOfLines={1} adjustsFontSizeToFit>
+          {fixLabel}
+        </Text>
+      </View>
+      <Text style={styles.microTextCentered}>{sats} sats</Text>
+      
+      <View style={styles.flexSpacer} />
+      <Text style={[styles.microText, { textAlign: 'right' }]}>RTK: {(rtkBase || '--')}</Text>
+    </View>
+  );
+});
+
+const BottomActionBtn = React.memo(({ title, children, status, statusColor, disabled, onPress, flex = 1 }: any) => (
+  <TouchableOpacity 
+    style={[styles.gridBlock, { flex }, disabled && styles.opacityLow]} 
+    onPress={onPress}
+    disabled={disabled}
+    activeOpacity={0.7}
+  >
+    <View style={styles.rowBetweenBase}>
+      <Text style={styles.blockLabel}>{title}</Text>
+      {status && (
+        <View style={[styles.chip, { borderColor: statusColor || colors.accent }]}>
+          <Text style={[styles.chipText, { color: statusColor || colors.accent }]}>{status}</Text>
+        </View>
+      )}
+    </View>
+    <View style={styles.actionContent}>
+      {children}
+    </View>
+  </TouchableOpacity>
+));
+
+const BottomParamFileCard = React.memo(({ onSave, onLoad, saving, loading, disabled, flex = 1 }: any) => (
+  <View style={[styles.gridBlock, { flex }]}>
+    <View style={styles.rowBetweenBase}>
+      <Text style={styles.blockLabel}>EVENTS / FILES</Text>
+      <Text style={styles.microTextBase}>.PARAM</Text>
+    </View>
+    <View style={styles.fileButtonsRow}>
+      <TouchableOpacity 
+        style={[styles.smallBtn, disabled && styles.opacityLow, { borderColor: colors.success }]} 
+        onPress={onSave} disabled={disabled || saving}
+      >
+        {saving ? <ActivityIndicator size={12} color={colors.success} /> : <Text style={[styles.smallBtnText, { color: colors.success }]}>SAVE PARAMS</Text>}
+      </TouchableOpacity>
+      <TouchableOpacity 
+        style={[styles.smallBtn, disabled && styles.opacityLow, { borderColor: colors.accentLight }]} 
+        onPress={onLoad} disabled={disabled || loading}
+      >
+        {loading ? <ActivityIndicator size={12} color={colors.accentLight} /> : <Text style={[styles.smallBtnText, { color: colors.accentLight }]}>LOAD PARAMS</Text>}
+      </TouchableOpacity>
+    </View>
+  </View>
+));
+
+
+// ── MAIN SCREEN COMPONENT ────────────────────────────────────────
+
 export default function DashboardScreen() {
   const { telemetry, connectionState, roverPosition, services } = useRover();
-  const { width } = useWindowDimensions();
   const mountedRef = useRef(true);
   const [showRobotSettings, setShowRobotSettings] = useState(false);
   const [showQuickTune, setShowQuickTune] = useState(false);
   const [paramSaving, setParamSaving] = useState(false);
   const [paramLoading, setParamLoading] = useState(false);
-
-  const isTablet = width > 600;
-  const columnWidth = isTablet ? (width - 24 - 12) / 2 : ('100%' as any);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -44,896 +266,422 @@ export default function DashboardScreen() {
   const handleSaveParams = async () => {
     if (paramSaving) return;
     setParamSaving(true);
-    try {
-      await saveParamsToFile(services);
-    } finally {
-      if (mountedRef.current) setParamSaving(false);
-    }
+    try { await saveParamsToFile(services); } 
+    finally { if (mountedRef.current) setParamSaving(false); }
   };
 
   const handleLoadParams = async () => {
     if (paramLoading) return;
     setParamLoading(true);
-    try {
-      await loadParamsFromFile(services);
-    } finally {
-      if (mountedRef.current) setParamLoading(false);
-    }
+    try { await loadParamsFromFile(services); } 
+    finally { if (mountedRef.current) setParamLoading(false); }
   };
 
   const vehicleStatus = useMemo(() => {
-    const isConnected = connectionState === 'connected';
     const isArmed = telemetry.state.armed;
-    let statusLevel: 'healthy' | 'warning' | 'critical' | 'neutral' = 'neutral';
-    if (!isConnected) statusLevel = 'critical';
-    else if (isArmed && telemetry.state.system_status === 'ACTIVE') statusLevel = 'healthy';
-    else if (isArmed) statusLevel = 'warning';
-    
     return {
-      isConnected,
+      isConnected: connectionState === 'connected',
       armStatus: isArmed ? 'ARMED' : 'DISARMED',
-      statusLevel,
+      sysStatus: telemetry.state.system_status || (isArmed ? 'ARMED' : 'DISARMED'),
       fixTypeLabel: getFixTypeLabel(telemetry.rtk.fix_type),
       mode: telemetry.state.mode || 'UNKNOWN',
-      systemStatus: isArmed ? 'ARMED' : 'DISARMED', // Same logic as pills
     };
   }, [telemetry.state.armed, telemetry.state.mode, telemetry.state.system_status, telemetry.rtk.fix_type, connectionState]);
 
-  const batteryLevel: 'healthy' | 'warning' | 'critical' =
-    telemetry.battery.percentage > 30 ? 'healthy' : telemetry.battery.percentage > 15 ? 'warning' : 'critical';
-  const rtkLevel: 'healthy' | 'warning' | 'critical' =
-    telemetry.rtk.fix_type >= 5 ? 'healthy' : telemetry.rtk.fix_type >= 2 ? 'warning' : 'critical';
-  const networkLevel: 'healthy' | 'warning' | 'critical' =
-    telemetry.network.connection_type !== 'none' && telemetry.network.wifi_rssi > -70 ? 'healthy'
-    : telemetry.network.connection_type !== 'none' ? 'warning' : 'critical';
+  const isConnected = connectionState === 'connected';
 
-  const connColor = vehicleStatus.isConnected ? colors.success : colors.danger;
-  const armColor  = vehicleStatus.armStatus === 'ARMED' ? colors.danger : colors.textMuted;
+  // Derived styles and data
+  const connColor = isConnected ? colors.success : colors.danger;
+  const armColor  = vehicleStatus.armStatus === 'ARMED' ? colors.danger : colors.textPrimary;
+  const fixColor  = telemetry.rtk.fix_type < 2 ? colors.danger : colors.textPrimary;
 
   return (
     <View style={styles.container}>
-      <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
+      
+      {/* ── 1. HORIZONTAL TOP BAR ── */}
+      <View style={styles.topRow}>
+        <TopCard title="ARM" value={vehicleStatus.armStatus} />
+        <TopCard title="MODE" value={vehicleStatus.mode} />
+        <TopCard title="GPS / RTK" value={vehicleStatus.fixTypeLabel} color={fixColor} danger={telemetry.rtk.fix_type < 2} flex={1.2} />
+        <TopCard title="NETWORK" value={telemetry.network.connection_type.toUpperCase()} flex={0.8} />
+        <TopCard title="BATTERY" value={`${Math.round(telemetry.battery.percentage)}%`} flex={0.7} />
+        <TopCard title="SIGNAL" value={telemetry.network.wifi_connected ? `${telemetry.network.wifi_rssi}` : '—'} flex={0.6} />
+      </View>
 
-        {/* ── HEADER ── */}
-        <View style={styles.header}>
-          <View style={styles.headerLeft}>
-            <View style={styles.headerIconWrap}>
-              <MaterialCommunityIcons name="view-dashboard-outline" size={16} color={colors.accent} />
-            </View>
-            <Text style={styles.headerTitle}>DASHBOARD</Text>
-          </View>
-          <View style={[styles.headerBadge, { backgroundColor: connColor + '18', borderColor: connColor + '55' }]}>
-            <View style={[styles.headerBadgeDot, { backgroundColor: connColor }]} />
-            <Text style={[styles.headerBadgeText, { color: connColor }]}>
-              {connectionState.toUpperCase()}
-            </Text>
-          </View>
-        </View>
-
-        {/* ── HERO CARD: ROBOT STATUS ── */}
-        <View style={[styles.card, styles.heroCard]}>
-          <View style={[styles.cardAccent, { backgroundColor: getStatusColor(vehicleStatus.statusLevel) }]} />
-          <View style={styles.cardBody}>
-            {/* Card header row */}
-            <View style={styles.cardHeaderRow}>
-              <View style={styles.cardHeaderLeft}>
-                <View style={[styles.cardIconWrap, { borderColor: getStatusColor(vehicleStatus.statusLevel) + '40' }]}>
-                  <MaterialCommunityIcons name="robot-outline" size={18} color={getStatusColor(vehicleStatus.statusLevel)} />
-                </View>
-                <Text style={styles.cardLabel}>ROBOT STATUS</Text>
-              </View>
-              <View style={[styles.statusBadge, {
-                backgroundColor: getStatusColor(vehicleStatus.statusLevel) + '20',
-                borderColor: getStatusColor(vehicleStatus.statusLevel),
-              }]}>
-                <View style={[styles.statusBadgeDot, { backgroundColor: getStatusColor(vehicleStatus.statusLevel) }]} />
-                <Text style={[styles.statusBadgeText, { color: getStatusColor(vehicleStatus.statusLevel) }]}>
-                  {vehicleStatus.statusLevel.toUpperCase()}
-                </Text>
-              </View>
-            </View>
-
-            {/* Arm + Mode pills */}
-            <View style={styles.pillRow}>
-              <View style={[styles.pill, { backgroundColor: armColor + '20', borderColor: armColor + '55' }]}>
-                <View style={[styles.pillDot, { backgroundColor: armColor }]} />
-                <Text style={[styles.pillText, { color: armColor }]}>{vehicleStatus.armStatus}</Text>
-              </View>
-              <View style={[styles.pill, { backgroundColor: colors.accent + '20', borderColor: colors.accent + '55' }]}>
-                <Text style={[styles.pillText, { color: colors.accentLight }]}>MODE: {vehicleStatus.mode}</Text>
-              </View>
-            </View>
-
-            {/* Metrics */}
-            <View style={styles.heroMetrics}>
-              <View style={styles.metricBlock}>
-                <Text style={styles.metricLabel}>System State</Text>
-                <Text style={styles.metricValue}>{vehicleStatus.systemStatus}</Text>
-              </View>
-              <View style={[styles.metricDivider]} />
-              <View style={styles.metricBlock}>
-                <Text style={styles.metricLabel}>Ground Speed</Text>
-                <Text style={[styles.metricValue, { color: colors.accentLight }]}>
-                  {telemetry.global.vel.toFixed(1)}{' '}
-                  <Text style={styles.metricUnit}>m/s</Text>
-                </Text>
-              </View>
-            </View>
-          </View>
-        </View>
-
-        {/* ── QUICK TUNE CARD ── */}
-        <View style={styles.card}>
-          <View style={[styles.cardAccent, { backgroundColor: colors.warning }]} />
-          <TouchableOpacity
-            style={styles.cardBody}
-            onPress={() => setShowQuickTune(true)}
-            disabled={connectionState !== 'connected'}
+      {/* ── 2. MAIN 3-COLUMN LAYOUT SEAMS ── */}
+      <View style={styles.mainGrid}>
+        
+        {/* Left Column (25%) */}
+        <View style={styles.flex1}>
+          <GroundSpeedCard speed={telemetry.global.vel} />
+          <View style={styles.vGapSpace} />
+          <HeadingCard heading={telemetry.attitude?.yaw_deg || 0} />
+          <View style={styles.vGapSpace} />
+          <BottomActionBtn 
+            flex={1.2}
+            title="QUICK TUNE" 
+            status="AUTO" statusColor={colors.warning} 
+            onPress={() => setShowQuickTune(true)} disabled={!isConnected}
           >
-            <View style={styles.cardHeaderRow}>
-              <View style={styles.cardHeaderLeft}>
-                <View style={[styles.cardIconWrap, { borderColor: colors.warning + '40' }]}>
-                  <Ionicons name="settings-outline" size={18} color={colors.warning} />
-                </View>
-                <Text style={styles.cardLabel}>QUICK TUNE</Text>
-              </View>
-              <View style={[styles.statusBadge, { backgroundColor: colors.warning + '20', borderColor: colors.warning }]}>
-                <View style={[styles.statusBadgeDot, { backgroundColor: colors.warning }]} />
-                <Text style={[styles.statusBadgeText, { color: colors.warning }]}>
-                  AUTO
-                </Text>
-              </View>
+            <View style={styles.actionChipRow}>
+              <View style={styles.chip}><View style={[styles.dot, {backgroundColor: colors.textPrimary}]} /><Text style={styles.chipText}>STEERING PID</Text></View>
+              <View style={styles.chip}><View style={[styles.dot, {backgroundColor: colors.textPrimary}]} /><Text style={styles.chipText}>SPEED GAINS</Text></View>
             </View>
-            <Text style={styles.quickTuneDesc}>
-              Auto-tune steering and speed PID gains using Circle mode
-            </Text>
-            <View style={styles.quickTuneFooter}>
-              <View style={styles.quickTuneChip}>
-                <MaterialCommunityIcons name="steering" size={12} color={colors.accent} />
-                <Text style={styles.quickTuneChipText}>Steering PID</Text>
-              </View>
-              <View style={styles.quickTuneChip}>
-                <MaterialCommunityIcons name="speedometer" size={12} color={colors.success} />
-                <Text style={styles.quickTuneChipText}>Speed Gains</Text>
-              </View>
-              {connectionState !== 'connected' && (
-                <Text style={styles.disconnectedText}>Connect to configure</Text>
-              )}
-            </View>
-          </TouchableOpacity>
+          </BottomActionBtn>
         </View>
+        
+        <View style={styles.hGapSpace} />
 
-        {/* ── MISSION PROGRESS ── */}
-        {telemetry.mission.total_wp > 0 && (
-          <View style={styles.card}>
-            <View style={[styles.cardAccent, { backgroundColor: colors.accent }]} />
-            <View style={styles.cardBody}>
-              <View style={styles.cardHeaderRow}>
-                <View style={styles.cardHeaderLeft}>
-                  <View style={[styles.cardIconWrap, { borderColor: colors.accent + '40' }]}>
-                    <MaterialCommunityIcons name="map-marker-path" size={18} color={colors.accent} />
-                  </View>
-                  <Text style={styles.cardLabel}>MISSION PROGRESS</Text>
-                </View>
-                <View style={[styles.statusBadge, { backgroundColor: colors.accent + '20', borderColor: colors.accent }]}>
-                  <View style={[styles.statusBadgeDot, { backgroundColor: colors.accent }]} />
-                  <Text style={[styles.statusBadgeText, { color: colors.accentLight }]}>
-                    {telemetry.mission.status?.toUpperCase() || 'ACTIVE'}
-                  </Text>
-                </View>
+        {/* Center Column (50%) */}
+        <View style={styles.flex2}>
+          <HeroStateCard 
+            armStatus={vehicleStatus.armStatus} 
+            mode={vehicleStatus.mode} 
+            connectionState={connectionState}
+            sysStatus={vehicleStatus.sysStatus}
+            flex={3}
+          />
+          <View style={styles.vGapSpace} />
+          <MiniMissionProgress 
+            status={telemetry.mission.status?.toUpperCase()}
+            wp={telemetry.mission.current_wp} 
+            totalWp={telemetry.mission.total_wp} 
+            pct={telemetry.mission.progress_pct} 
+            flex={1}
+          />
+          <View style={styles.vGapSpace} />
+          <View style={[styles.rowGap, { flex: 1.2 }]}>
+            <BottomActionBtn title="POSITION" flex={1} disabled={!isConnected}>
+              <Text style={styles.posTextValue}>{roverPosition ? roverPosition.lat.toFixed(6) : 'awaiting position...'}</Text>
+              <Text style={styles.posTextValue}>{roverPosition ? roverPosition.lng.toFixed(6) : ''}</Text>
+            </BottomActionBtn>
+            <View style={styles.hGapSpace} />
+            <BottomActionBtn 
+              title="ROBOT SETTINGS" flex={1}
+              onPress={() => setShowRobotSettings(true)} disabled={!isConnected}
+            >
+               <View style={styles.actionChipRow}>
+                <View style={styles.chip}><Text style={styles.chipText}>22 PARAMS</Text></View>
+                <View style={styles.chip}><Text style={styles.chipText}>4 CAT.</Text></View>
               </View>
-
-              <View style={styles.missionRow}>
-                <View style={styles.missionStats}>
-                  <Text style={styles.metricLabel}>Current Waypoint</Text>
-                  <Text style={styles.metricValue}>
-                    {telemetry.mission.current_wp}
-                    <Text style={styles.metricUnit}> / {telemetry.mission.total_wp}</Text>
-                  </Text>
-                </View>
-                <View style={styles.progressRingOuter}>
-                  <View style={styles.progressRingInner}>
-                    <Text style={styles.progressPct}>{telemetry.mission.progress_pct.toFixed(0)}%</Text>
-                  </View>
-                </View>
-              </View>
-
-              <View style={styles.progressBarBg}>
-                <View style={[styles.progressBarFill, { width: `${telemetry.mission.progress_pct}%` as any }]} />
-              </View>
-            </View>
-          </View>
-        )}
-
-        {/* ── 2-COLUMN GRID ── */}
-        <View style={styles.grid}>
-
-          {/* COLUMN 1 */}
-          <View style={[styles.gridCol, { width: columnWidth, maxWidth: columnWidth }]}>
-
-            {/* Battery */}
-            <View style={styles.card}>
-              <View style={[styles.cardAccent, { backgroundColor: getStatusColor(batteryLevel) }]} />
-              <View style={styles.cardBody}>
-                <View style={styles.cardHeaderRow}>
-                  <Text style={styles.cardLabel}>BATTERY</Text>
-                  <View style={[styles.cardIconWrap, { borderColor: getStatusColor(batteryLevel) + '40' }]}>
-                    <MaterialCommunityIcons name="battery-charging" size={18} color={getStatusColor(batteryLevel)} />
-                  </View>
-                </View>
-                <Text style={[styles.giantValue, { color: getStatusColor(batteryLevel) }]}>
-                  {telemetry.battery.percentage.toFixed(0)}<Text style={styles.giantUnit}>%</Text>
-                </Text>
-                <View style={styles.tileFooter}>
-                  <Text style={styles.footerChip}>{telemetry.battery.voltage.toFixed(1)} V</Text>
-                  <Text style={styles.footerChip}>{telemetry.battery.current.toFixed(1)} A</Text>
-                </View>
-              </View>
-            </View>
-
-            {/* Network */}
-            {telemetry.network.connection_type !== 'none' && (
-              <View style={styles.card}>
-                <View style={[styles.cardAccent, { backgroundColor: getStatusColor(networkLevel) }]} />
-                <View style={styles.cardBody}>
-                  <View style={styles.cardHeaderRow}>
-                    <Text style={styles.cardLabel}>NETWORK</Text>
-                    <View style={[styles.cardIconWrap, { borderColor: getStatusColor(networkLevel) + '40' }]}>
-                      <MaterialCommunityIcons name="wifi" size={18} color={getStatusColor(networkLevel)} />
-                    </View>
-                  </View>
-                  <Text style={[styles.tileMainText, { color: getStatusColor(networkLevel) }]}>
-                    {telemetry.network.connection_type.toUpperCase()}
-                  </Text>
-                  {telemetry.network.wifi_connected && (
-                    <View style={styles.tileFooter}>
-                      <Text style={styles.footerChip}>{telemetry.network.wifi_rssi} dBm</Text>
-                      <Text style={styles.footerChip}>{telemetry.network.wifi_signal_strength}%</Text>
-                    </View>
-                  )}
-                </View>
-              </View>
-            )}
-          </View>
-
-          {/* COLUMN 2 */}
-          <View style={[styles.gridCol, { width: columnWidth, maxWidth: columnWidth }]}>
-
-            {/* RTK / GPS */}
-            <View style={styles.card}>
-              <View style={[styles.cardAccent, { backgroundColor: getStatusColor(rtkLevel) }]} />
-              <View style={styles.cardBody}>
-                <View style={styles.cardHeaderRow}>
-                  <Text style={styles.cardLabel}>RTK / GPS</Text>
-                  <View style={[styles.cardIconWrap, { borderColor: getStatusColor(rtkLevel) + '40' }]}>
-                    <Ionicons name="cellular" size={18} color={getStatusColor(rtkLevel)} />
-                  </View>
-                </View>
-                <Text style={[styles.tileMainText, { color: getStatusColor(rtkLevel) }]}>
-                  {vehicleStatus.fixTypeLabel}
-                </Text>
-                <View style={styles.tileFooter}>
-                  <Text style={styles.footerChip}>{telemetry.global.satellites_visible} Sats</Text>
-                  <View style={[styles.baseBadge, {
-                    backgroundColor: telemetry.rtk.base_linked ? colors.success + '20' : colors.danger + '20',
-                    borderColor: telemetry.rtk.base_linked ? colors.success + '55' : colors.danger + '55',
-                  }]}>
-                    <Text style={[styles.baseBadgeText, { color: telemetry.rtk.base_linked ? colors.success : colors.danger }]}>
-                      BASE {telemetry.rtk.base_linked ? 'LINKED' : 'LOST'}
-                    </Text>
-                  </View>
-                </View>
-              </View>
-            </View>
-
-            {/* Position */}
-            <View style={styles.card}>
-              <View style={[styles.cardAccent, { backgroundColor: colors.accent }]} />
-              <View style={styles.cardBody}>
-                <View style={styles.cardHeaderRow}>
-                  <Text style={styles.cardLabel}>POSITION</Text>
-                  <View style={[styles.cardIconWrap, { borderColor: colors.accent + '40' }]}>
-                    <Ionicons name="location-outline" size={18} color={colors.accent} />
-                  </View>
-                </View>
-                {roverPosition ? (
-                  <View style={styles.posGrid}>
-                    <View style={styles.posRow}>
-                      <Text style={styles.posLabel}>LAT</Text>
-                      <Text style={styles.posValue}>{roverPosition.lat.toFixed(7)}</Text>
-                    </View>
-                    <View style={[styles.divider]} />
-                    <View style={styles.posRow}>
-                      <Text style={styles.posLabel}>LNG</Text>
-                      <Text style={styles.posValue}>{roverPosition.lng.toFixed(7)}</Text>
-                    </View>
-                    <View style={[styles.divider]} />
-                    <View style={styles.posRow}>
-                      <Text style={styles.posLabel}>ALT</Text>
-                      <Text style={styles.posValue}>{telemetry.global.alt_rel.toFixed(2)} m</Text>
-                    </View>
-                  </View>
-                ) : (
-                  <Text style={styles.noData}>Awaiting Position...</Text>
-                )}
-              </View>
-            </View>
-
+            </BottomActionBtn>
           </View>
         </View>
 
-        {/* ── PARAMETER FILE CARD ── */}
-        <View style={styles.card}>
-          <View style={[styles.cardAccent, { backgroundColor: '#8B5CF6' }]} />
-          <View style={styles.cardBody}>
-            <View style={styles.cardHeaderRow}>
-              <View style={styles.cardHeaderLeft}>
-                <View style={[styles.cardIconWrap, { borderColor: 'rgba(139, 92, 246, 0.4)' }]}>
-                  <MaterialCommunityIcons name="file-cog-outline" size={18} color="#8B5CF6" />
-                </View>
-                <Text style={styles.cardLabel}>PARAMETER FILE</Text>
-              </View>
-              <View style={[styles.statusBadge, { backgroundColor: 'rgba(139, 92, 246, 0.2)', borderColor: '#8B5CF6' }]}>
-                <View style={[styles.statusBadgeDot, { backgroundColor: '#8B5CF6' }]} />
-                <Text style={[styles.statusBadgeText, { color: '#A78BFA' }]}>.PARAM</Text>
-              </View>
-            </View>
-            <Text style={styles.paramFileDesc}>
-              Save or load all vehicle parameters as Mission Planner .param file
-            </Text>
-            <View style={styles.paramFileBtnRow}>
-              <TouchableOpacity
-                style={[styles.paramFileBtn, styles.paramFileSaveBtn, (connectionState !== 'connected' || paramSaving) && styles.paramFileBtnDisabled]}
-                onPress={handleSaveParams}
-                disabled={connectionState !== 'connected' || paramSaving}
-              >
-                {paramSaving ? (
-                  <ActivityIndicator size={16} color="#4ade80" />
-                ) : (
-                  <Ionicons name="download-outline" size={16} color="#4ade80" />
-                )}
-                <Text style={[styles.paramFileBtnText, { color: '#4ade80' }]}>
-                  {paramSaving ? 'SAVING...' : 'SAVE TO FILE'}
-                </Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.paramFileBtn, styles.paramFileLoadBtn, (connectionState !== 'connected' || paramLoading) && styles.paramFileBtnDisabled]}
-                onPress={handleLoadParams}
-                disabled={connectionState !== 'connected' || paramLoading}
-              >
-                {paramLoading ? (
-                  <ActivityIndicator size={16} color="#60A5FA" />
-                ) : (
-                  <Ionicons name="push-outline" size={16} color="#60A5FA" />
-                )}
-                <Text style={[styles.paramFileBtnText, { color: '#60A5FA' }]}>
-                  {paramLoading ? 'LOADING...' : 'LOAD FROM FILE'}
-                </Text>
-              </TouchableOpacity>
-            </View>
-            {connectionState !== 'connected' && (
-              <Text style={styles.disconnectedText}>Connect to vehicle first</Text>
-            )}
-          </View>
+        <View style={styles.hGapSpace} />
+
+        {/* Right Column (25%) */}
+        <View style={styles.flex1}>
+          <DetailedBatteryCard 
+            pct={telemetry.battery.percentage} 
+            voltage={telemetry.battery.voltage} 
+            current={telemetry.battery.current} 
+          />
+          <View style={styles.vGapSpace} />
+          <DetailedRTKCard 
+            fixLevel={telemetry.rtk.fix_type} 
+            fixLabel={vehicleStatus.fixTypeLabel}
+            sats={telemetry.global.satellites_visible}
+            baseLink={telemetry.rtk.base_linked}
+            rtkBase={null}
+          />
+          <View style={styles.vGapSpace} />
+          <BottomParamFileCard 
+            flex={1.2}
+            onSave={handleSaveParams} 
+            onLoad={handleLoadParams} 
+            saving={paramSaving} 
+            loading={paramLoading} 
+            disabled={!isConnected} 
+          />
         </View>
 
-        {/* ── ROBOT SETTINGS CARD ── */}
-        <View style={styles.card}>
-          <View style={[styles.cardAccent, { backgroundColor: colors.accent }]} />
-          <TouchableOpacity
-            style={styles.cardBody}
-            onPress={() => setShowRobotSettings(true)}
-            disabled={connectionState !== 'connected'}
-          >
-            <View style={styles.cardHeaderRow}>
-              <View style={styles.cardHeaderLeft}>
-                <View style={[styles.cardIconWrap, { borderColor: colors.accent + '40' }]}>
-                  <Ionicons name="settings-outline" size={18} color={colors.accent} />
-                </View>
-                <Text style={styles.cardLabel}>ROBOT SETTINGS</Text>
-              </View>
-              <View style={[styles.statusBadge, { backgroundColor: colors.accent + '20', borderColor: colors.accent }]}>
-                <View style={[styles.statusBadgeDot, { backgroundColor: colors.accent }]} />
-                <Text style={[styles.statusBadgeText, { color: colors.accentLight }]}>
-                  CONFIG
-                </Text>
-              </View>
-            </View>
-            <Text style={styles.robotSettingsText}>
-              Configure GPS, Serial, Motor Drive, WP Navigation
-            </Text>
-            <View style={styles.robotSettingsFooter}>
-              <View style={styles.robotTypeChip}>
-                <Ionicons name="options-outline" size={12} color={colors.success} />
-                <Text style={styles.robotTypeChipText}>22 Parameters</Text>
-              </View>
-              <View style={styles.robotTypeChip}>
-                <Ionicons name="grid-outline" size={12} color={colors.accent} />
-                <Text style={styles.robotTypeChipText}>4 Categories</Text>
-              </View>
-              {connectionState !== 'connected' && (
-                <Text style={styles.disconnectedText}>Connect to configure</Text>
-              )}
-            </View>
-          </TouchableOpacity>
-        </View>
+      </View>
 
-        {/* ── FOOTER ── */}
-        {roverPosition && (
-          <View style={styles.footerRow}>
-            <MaterialCommunityIcons name="clock-outline" size={12} color={colors.textMuted} />
-            <Text style={styles.footerText}>
-              Last Update: {new Date(roverPosition.timestamp).toLocaleTimeString()}
-            </Text>
-          </View>
-        )}
-        <View style={{ height: 40 }} />
-      </ScrollView>
-
-      {/* Robot Settings Modal */}
-      <RobotSettingsModal
-        visible={showRobotSettings}
-        onClose={() => setShowRobotSettings(false)}
-      />
-
-      {/* QuickTune Modal */}
-      <QuickTuneScreen
-        visible={showQuickTune}
-        onClose={() => setShowQuickTune(false)}
-      />
+      {/* Modals */}
+      <RobotSettingsModal visible={showRobotSettings} onClose={() => setShowRobotSettings(false)} />
+      <QuickTuneScreen visible={showQuickTune} onClose={() => setShowQuickTune(false)} />
     </View>
   );
 }
 
+// ── RIGID TACTICAL STYLES ────────────────────────────────────────
+const BORDER_COLOR = colors.border;
+const TEXT_MUTED = colors.textMuted;
+const TEXT_BASE = colors.textPrimary;
+const BG_PLATE = colors.panelBg; 
+const BG_BASE = colors.primary;
+
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: colors.primary,
-  },
-  content: {
-    flex: 1,
-    padding: 12,
-  },
-
-  // ── HEADER ──
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 14,
-    paddingHorizontal: 2,
-  },
-  headerLeft: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-  },
-  headerIconWrap: {
-    width: 32,
-    height: 32,
-    borderRadius: 10,
-    backgroundColor: 'rgba(59, 130, 246, 0.15)',
-    borderWidth: 1,
-    borderColor: 'rgba(59, 130, 246, 0.3)',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  headerTitle: {
-    color: colors.accent,
-    fontSize: 14,
-    fontWeight: '700',
-    letterSpacing: 3,
-  },
-  headerBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
-    borderWidth: 1,
-    borderRadius: 6,
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-  },
-  headerBadgeDot: {
-    width: 5,
-    height: 5,
-    borderRadius: 3,
-  },
-  headerBadgeText: {
-    fontSize: 9,
-    fontWeight: '700',
-    letterSpacing: 1.5,
-  },
-
-  // ── CARD BASE ──
-  card: {
-    backgroundColor: colors.cardBg,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: colors.border,
-    marginBottom: 12,
-    overflow: 'hidden',
-    flexDirection: 'row',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 3 },
-    shadowOpacity: 0.2,
-    shadowRadius: 6,
-    elevation: 4,
-  },
-  heroCard: {
-    // no extra overrides needed
-  },
-  cardAccent: {
-    width: 3,
-    alignSelf: 'stretch',
-  },
-  cardBody: {
-    flex: 1,
-    padding: 14,
-    gap: 10,
-  },
-  cardHeaderRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  cardHeaderLeft: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    backgroundColor: BG_BASE,
+    padding: 8,
+    display: 'flex',
+    flexDirection: 'column',
     gap: 8,
   },
-  cardIconWrap: {
-    width: 30,
-    height: 30,
-    borderRadius: 15,
+  
+  flex1: { flex: 1 },
+  flex2: { flex: 2 },
+  flexHalf: { flex: 1 }, 
+  
+  vGapSpace: { height: 8 },
+  hGapSpace: { width: 8 },
+  hGapSpaceAction: { width: 6 },
+  flexSpacer: { flex: 1 },
+
+  centerOuter: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  centerOuterLevel2: { flex: 1, alignItems: 'center', justifyContent: 'flex-start', paddingTop: 8 },
+
+  // Gaps within grids
+  rowGap: { flexDirection: 'row', gap: 8 },
+
+  // Primary Block Styling
+  gridBlock: {
+    backgroundColor: BG_PLATE,
+    borderRadius: 16,
     borderWidth: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: 'rgba(255,255,255,0.04)',
+    borderColor: BORDER_COLOR,
+    padding: 10,
+    overflow: 'hidden',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 8,
   },
-  cardLabel: {
-    color: 'rgba(103, 232, 249, 0.8)',
+  
+  borderDanger: {
+    borderColor: colors.danger,
+    borderWidth: 1,
+  },
+  
+  blockLabel: {
+    fontFamily: 'monospace',
     fontSize: 10,
     fontWeight: '700',
+    color: TEXT_MUTED,
     letterSpacing: 2,
     textTransform: 'uppercase',
   },
 
-  // ── STATUS BADGE ──
-  statusBadge: {
+  // Utils
+  rowBetween: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 },
+  rowBetweenBase: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 4 },
+  
+  chip: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
     borderWidth: 1,
-    borderRadius: 5,
-    paddingHorizontal: 7,
-    paddingVertical: 3,
+    borderColor: BORDER_COLOR,
+    borderRadius: 12,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
   },
-  statusBadgeDot: {
-    width: 4,
-    height: 4,
-    borderRadius: 2,
-  },
-  statusBadgeText: {
+  chipText: {
     fontSize: 8,
+    fontFamily: 'monospace',
     fontWeight: '700',
+    color: TEXT_MUTED,
+  },
+  dot: { width: 4, height: 4, borderRadius: 2 },
+  
+  opacityLow: { opacity: 0.5 },
+
+  // -- ROW 1: TOP BAR --
+  topRow: {
+    flexDirection: 'row',
+    gap: 6,
+    height: 50,
+  },
+  topCard: {
+    backgroundColor: BG_PLATE,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: BORDER_COLOR,
+    paddingHorizontal: 8,
+    paddingVertical: 6,
+    flexDirection: 'column',
+    justifyContent: 'center',
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 8,
+  },
+  topValue: {
+    fontFamily: 'monospace',
+    fontSize: 14,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    marginTop: 2,
+    textAlign: 'center',
+  },
+
+  // -- ROW 2: MAIN MIDDLE GRID --
+  mainGrid: {
+    flex: 1,
+    flexDirection: 'row',
+  },
+  
+  // Big values
+  hugeValue: {
+    fontSize: 42,
+    fontWeight: '800',
+    fontFamily: 'monospace',
+    color: TEXT_BASE,
+    letterSpacing: -1,
+  },
+  hugeValue2: {
+    fontSize: 34,
+    fontWeight: '800',
+    fontFamily: 'monospace',
+    color: TEXT_BASE,
+    letterSpacing: -1,
+    marginTop: 8,
+  },
+  bigValue: {
+    fontFamily: 'monospace',
+    fontSize: 32,
+    fontWeight: '800',
+    color: TEXT_BASE,
+    letterSpacing: -1,
+  },
+  bigValueSub: {
+    fontFamily: 'monospace',
+    fontSize: 16,
+    fontWeight: '600',
+    color: TEXT_MUTED,
+    marginBottom: 4,
+    marginLeft: 2,
+  },
+  medValue: {
+    fontSize: 20,
+    fontWeight: '800',
+    fontFamily: 'monospace',
+    color: TEXT_BASE,
+    marginTop: 6,
+  },
+  medValueSub: { fontSize: 13, color: TEXT_MUTED },
+  microTextBase: { fontFamily: 'monospace', fontSize: 10, color: TEXT_MUTED },
+  microText: { fontFamily: 'monospace', fontSize: 10, color: TEXT_MUTED, marginTop: 4 },
+  microTextCentered: { fontFamily: 'monospace', fontSize: 10, color: TEXT_MUTED, marginTop: 4, textAlign: 'center' },
+
+  placeholderBox: {
+    flex: 1,
+    borderWidth: 1,
+    borderColor: 'rgba(148, 163, 184, 0.1)',
+    borderStyle: 'dashed',
+    borderRadius: 4,
+    marginTop: 8,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  placeholderText: {
+    fontFamily: 'monospace',
+    fontSize: 9,
+    color: 'rgba(148, 163, 184, 0.4)',
     letterSpacing: 1,
   },
 
-  // ── HERO CARD INTERNALS ──
-  pillRow: {
-    flexDirection: 'row',
-    gap: 8,
-    flexWrap: 'wrap',
-  },
-  pill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: 8,
-    borderWidth: 1,
-  },
-  pillDot: {
-    width: 5,
-    height: 5,
-    borderRadius: 3,
-  },
-  pillText: {
-    fontSize: 11,
-    fontWeight: '700',
-    letterSpacing: 0.5,
-  },
-  heroMetrics: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 0,
-    backgroundColor: colors.panelBg,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: colors.border,
-    overflow: 'hidden',
-  },
-  metricBlock: {
+  // Center Hero
+  heroContainer: {
     flex: 1,
-    padding: 10,
     alignItems: 'center',
-  },
-  metricDivider: {
-    width: 1,
-    alignSelf: 'stretch',
-    backgroundColor: colors.border,
-  },
-  metricLabel: {
-    color: colors.textMuted,
-    fontSize: 10,
-    fontWeight: '600',
-    letterSpacing: 0.5,
-    marginBottom: 4,
-    textTransform: 'uppercase',
-  },
-  metricValue: {
-    fontSize: 20,
-    fontWeight: '700',
-    color: colors.textPrimary,
-  },
-  metricUnit: {
-    fontSize: 13,
-    color: colors.textMuted,
-    fontWeight: '600',
-  },
-
-  // ── MISSION PROGRESS ──
-  missionRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  missionStats: {
-    flex: 1,
-    gap: 4,
-  },
-  progressRingOuter: {
-    width: 68,
-    height: 68,
-    borderRadius: 34,
-    borderWidth: 4,
-    borderColor: colors.accent + '40',
     justifyContent: 'center',
-    alignItems: 'center',
   },
-  progressRingInner: {
-    width: 58,
-    height: 58,
-    borderRadius: 29,
-    backgroundColor: colors.panelBg,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  progressPct: {
-    fontSize: 15,
-    fontWeight: '800',
-    color: colors.accent,
-  },
-  progressBarBg: {
-    height: 5,
-    backgroundColor: colors.accent + '20',
-    borderRadius: 3,
-    overflow: 'hidden',
-  },
-  progressBarFill: {
-    height: '100%',
-    backgroundColor: colors.accent,
-    borderRadius: 3,
-  },
-
-  // ── GRID ──
-  grid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 12,
-    justifyContent: 'space-between',
-  },
-  gridCol: {
-    flexDirection: 'column',
-  },
-
-  // ── TILE INTERNALS ──
-  giantValue: {
-    fontSize: 40,
-    fontWeight: '800',
-    textAlign: 'center',
-    paddingVertical: 4,
-  },
-  giantUnit: {
-    fontSize: 18,
-    fontWeight: '600',
-  },
-  tileMainText: {
-    fontSize: 22,
-    fontWeight: '700',
-    textAlign: 'center',
-    paddingVertical: 6,
-  },
-  tileFooter: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingTop: 6,
-    borderTopWidth: 1,
-    borderTopColor: colors.border,
-  },
-  footerChip: {
-    fontSize: 11,
-    color: colors.textMuted,
-    fontWeight: '600',
-  },
-  baseBadge: {
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 5,
-    borderWidth: 1,
-  },
-  baseBadgeText: {
-    fontSize: 9,
-    fontWeight: '700',
-    letterSpacing: 0.5,
-  },
-
-  // ── POSITION TILE ──
-  posGrid: {
-    gap: 2,
-  },
-  posRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingVertical: 5,
-  },
-  posLabel: {
-    fontSize: 10,
-    color: 'rgba(103, 232, 249, 0.8)',
-    fontWeight: '700',
-    letterSpacing: 1.5,
-  },
-  posValue: {
-    fontSize: 12,
-    color: colors.textPrimary,
+  heroSystemTitle: {
     fontFamily: 'monospace',
-    fontWeight: '600',
+    fontSize: 22,
+    color: TEXT_BASE,
+    fontWeight: '700',
+    letterSpacing: 2,
+    textAlign: 'center',
   },
-  divider: {
-    height: 1,
-    backgroundColor: colors.border,
-  },
-  noData: {
-    color: colors.textMuted,
-    fontSize: 13,
+  heroHugeText: {
+    fontFamily: 'monospace',
+    fontSize: 64, // Massive size
+    fontWeight: '800',
+    letterSpacing: 4,
+    marginTop: -8,
     fontStyle: 'italic',
     textAlign: 'center',
-    paddingVertical: 12,
+  },
+  heroPillRow: { flexDirection: 'row', gap: 12, marginTop: 8 },
+  heroPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    borderWidth: 1,
+    borderColor: BORDER_COLOR,
+    borderRadius: 16,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+  },
+  heroPillText: { fontFamily: 'monospace', fontSize: 10, fontWeight: '700', color: TEXT_BASE, textTransform: 'uppercase' },
+  heroBottomText: {
+    fontFamily: 'monospace',
+    fontSize: 10,
+    color: TEXT_MUTED,
+    marginTop: 16,
   },
 
-  // ── PARAMETER FILE CARD ──
-  paramFileDesc: {
-    color: colors.textSecondary,
-    fontSize: 13,
-    fontWeight: '500',
-    marginTop: 4,
-  },
-  paramFileBtnRow: {
-    flexDirection: 'row',
-    gap: 8,
+  missionStatBox: { flex: 1, paddingVertical: 8, justifyContent: 'center' },
+  progressBg: {
+    height: 4,
+    backgroundColor: '#334155',
+    borderRadius: 2,
+    overflow: 'hidden',
     marginTop: 8,
   },
-  paramFileBtn: {
+  progressFill: { height: '100%', backgroundColor: TEXT_BASE, borderRadius: 2 },
+
+  // Battery custom bar
+  batteryMainRow: { flexDirection: 'row', alignItems: 'flex-end' },
+  batteryBarContainer: { marginVertical: 8 },
+  batteryBarTrack: { height: 6, backgroundColor: '#334155', borderRadius: 3, overflow: 'hidden' },
+  batteryBarFill: { height: '100%', borderRadius: 3 },
+
+
+  // -- ROW 3: BOTTOM ACTIONS --
+  bottomRow: {
+    flexDirection: 'row',
+    height: 70,
+  },
+  actionContent: {
     flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    paddingVertical: 12,
-    paddingHorizontal: 14,
-    borderRadius: 10,
-    borderWidth: 2,
-    borderColor: colors.border,
+    justifyContent: 'flex-end',
+    paddingBottom: 2,
   },
-  paramFileSaveBtn: {
-    backgroundColor: 'rgba(74, 222, 128, 0.08)',
-    borderColor: 'rgba(74, 222, 128, 0.3)',
-  },
-  paramFileLoadBtn: {
-    backgroundColor: 'rgba(96, 165, 250, 0.08)',
-    borderColor: 'rgba(96, 165, 250, 0.3)',
-  },
-  paramFileBtnDisabled: {
-    backgroundColor: colors.cardBg,
-    opacity: 0.4,
-  },
-  paramFileBtnText: {
-    fontWeight: '700',
+  actionChipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 4 },
+  posTextValue: {
+    fontFamily: 'monospace',
     fontSize: 11,
-    letterSpacing: 0.5,
-  },
-
-  // ── ROBOT SETTINGS CARD ──
-  robotSettingsText: {
-    color: colors.textSecondary,
-    fontSize: 13,
-    fontWeight: '500',
-    marginTop: 4,
-  },
-  robotSettingsFooter: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 6,
-    marginTop: 8,
-    alignItems: 'center',
-  },
-  robotTypeChip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    backgroundColor: colors.panelBg,
-    borderRadius: 6,
-  },
-  robotTypeChipText: {
-    fontSize: 11,
-    color: colors.text,
-    fontWeight: '500',
-  },
-
-  // ── QUICK TUNE CARD ──
-  quickTuneDesc: {
-    color: colors.textSecondary,
-    fontSize: 13,
-    fontWeight: '500',
-    marginTop: 4,
-  },
-  quickTuneFooter: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 6,
-    marginTop: 8,
-    alignItems: 'center',
-  },
-  quickTuneChip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    backgroundColor: colors.panelBg,
-    borderRadius: 6,
-  },
-  quickTuneChipText: {
-    fontSize: 11,
-    color: colors.text,
-    fontWeight: '500',
-  },
-  disconnectedText: {
-    fontSize: 11,
-    color: colors.danger,
-    fontWeight: '500',
+    color: TEXT_MUTED,
     fontStyle: 'italic',
   },
 
-  // ── FOOTER ──
-  footerRow: {
+  fileButtonsRow: {
     flexDirection: 'row',
+    gap: 6,
+    flex: 1,
+    alignItems: 'flex-end',
+  },
+  smallBtn: {
+    flex: 1,
+    borderWidth: 1,
+    borderRadius: 4,
+    paddingVertical: 6,
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 5,
-    paddingVertical: 12,
-    borderTopWidth: 1,
-    borderTopColor: colors.border,
-    marginTop: 4,
+    height: 28,
   },
-  footerText: {
-    color: colors.textMuted,
-    fontSize: 11,
-    fontWeight: '500',
-  },
+  smallBtnText: {
+    fontFamily: 'monospace',
+    fontSize: 8,
+    fontWeight: '700',
+  }
 });

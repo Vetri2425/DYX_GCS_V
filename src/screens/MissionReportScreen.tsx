@@ -1335,22 +1335,26 @@ export default function MissionReportScreen({ isVisible = true }: MissionReportS
       // Match only the full "Mission: Spray suppressed" pattern to avoid duplicates
       if (event.message && typeof event.message === 'string' && event.message.includes('Mission: Spray suppressed')) {
         console.log('[MissionReportScreen] 🚫 Detected spray suppression message:', event.message);
-        // Mark the most recent waypoint as skipped
-        const currentWpIndex = Object.keys(statusMapRef.current).length;
-        if (currentWpIndex > 0 && currentWpIndex <= waypointsRef.current.length) {
-          const wpId = waypointsRef.current[currentWpIndex - 1]?.sn;
-          if (wpId && statusMapRef.current[wpId]) {
-            console.log(`[MissionReportScreen] ⏭️ Marking waypoint ${wpId} as SKIPPED (spray suppressed)`);
-            setStatusMap(prev => ({
-              ...prev,
-              [wpId]: {
-                ...prev[wpId],
-                status: 'skipped',
-                remark: 'Skipped - GPS accuracy too low',
-              },
-            }));
+        // Mark the most recent waypoint as skipped — read prev inside functional updater
+        setStatusMap(prev => {
+          const currentWpIndex = Object.keys(prev).length;
+          const allWps = waypointsRef.current;
+          if (currentWpIndex > 0 && currentWpIndex <= allWps.length) {
+            const wpId = allWps[currentWpIndex - 1]?.sn;
+            if (wpId && prev[wpId]) {
+              console.log(`[MissionReportScreen] ⏭️ Marking waypoint ${wpId} as SKIPPED (spray suppressed)`);
+              return {
+                ...prev,
+                [wpId]: {
+                  ...prev[wpId],
+                  status: 'skipped',
+                  remark: 'Skipped - GPS accuracy too low',
+                },
+              };
+            }
           }
-        }
+          return prev;
+        });
       }
 
       // Handle bulk skip events (backend emits event_type: 'bulk_skip')
@@ -1363,44 +1367,15 @@ export default function MissionReportScreen({ isVisible = true }: MissionReportS
 
           if (typeof skipFrom === 'number' && typeof skipTo === 'number' && skipTo >= skipFrom) {
             const timestamp = event.timestamp ? (typeof event.timestamp === 'string' ? event.timestamp : new Date(event.timestamp).toISOString()) : new Date().toISOString();
-            // Capture previous statuses for audit/undo
-            const prevStatuses: Record<number, WpStatus | null> = {};
-            waypointsRef.current.forEach(wp => {
-              if (wp.sn >= skipFrom && wp.sn <= skipTo) {
-                prevStatuses[wp.sn] = statusMapRef.current[wp.sn] ?? null;
-              }
-            });
 
-            const recordId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-            const auditRecord: any = {
-              id: recordId,
-              skipFrom,
-              skipTo,
-              timestamp,
-              previousStatuses: prevStatuses,
-            };
-
-            // Persist audit record (best-effort)
-            PersistentStorage.saveSkipAuditRecord(auditRecord).catch(err => console.warn('[MissionReportScreen] Failed to save skip audit', err));
-
-            // Store in local history for quick undo
-            setSkipHistory(prev => [auditRecord as any].concat(prev));
-
-            // Show undo prompt for a short window
-            if (undoTimerRef.current) {
-              clearTimeout(undoTimerRef.current);
-            }
-            setUndoPrompt({ visible: true, id: recordId });
-            undoTimerRef.current = setTimeout(() => {
-              setUndoPrompt({ visible: false, id: null });
-              undoTimerRef.current = null;
-            }, 8000);
-
-            // Mark each waypoint in the range as skipped (by sn)
+            // Capture previous statuses for audit/undo and mark as skipped —
+            // both read prev inside the functional updater to avoid stale refs
             setStatusMap(prev => {
               const copy = { ...prev };
+              const prevStatuses: Record<number, WpStatus | null> = {};
               waypointsRef.current.forEach(wp => {
                 if (wp.sn >= skipFrom && wp.sn <= skipTo) {
+                  prevStatuses[wp.sn] = prev[wp.sn] ?? null;
                   copy[wp.sn] = {
                     ...(copy[wp.sn] || {}),
                     status: 'skipped',
@@ -1409,6 +1384,25 @@ export default function MissionReportScreen({ isVisible = true }: MissionReportS
                   } as WpStatus;
                 }
               });
+
+              // Fire-and-forget: persist audit then update UI history
+              const recordId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+              const auditRecord: any = {
+                id: recordId,
+                skipFrom,
+                skipTo,
+                timestamp,
+                previousStatuses: prevStatuses,
+              };
+              PersistentStorage.saveSkipAuditRecord(auditRecord).catch(err => console.warn('[MissionReportScreen] Failed to save skip audit', err));
+              setSkipHistory(h => [auditRecord as any].concat(h));
+              setUndoPrompt({ visible: true, id: recordId });
+              if (undoTimerRef.current) clearTimeout(undoTimerRef.current);
+              undoTimerRef.current = setTimeout(() => {
+                setUndoPrompt({ visible: false, id: null });
+                undoTimerRef.current = null;
+              }, 8000);
+
               return copy;
             });
 
@@ -1462,8 +1456,6 @@ export default function MissionReportScreen({ isVisible = true }: MissionReportS
 
         // CONTINUOUS / DASH modes — simplified status, no accuracy tracking
         if (currentMode === 'CONTINUOUS' || currentMode === 'DASH') {
-          const prevEntry = statusMapRef.current[statusKey];
-
           let status: WpStatus['status'];
           let remark: string;
 
@@ -1489,30 +1481,30 @@ export default function MissionReportScreen({ isVisible = true }: MissionReportS
             }
           }
 
-          // GUARD: Don't downgrade
-          if (isStatusDowngrade(prevEntry?.status, status)) {
-            console.log(`[MissionReportScreen] 🛡️ Blocked status downgrade for WP ${statusKey}: ${prevEntry?.status} → ${status}`);
-            return;
-          }
+          // Move downgrade guard and nextEntry construction inside functional updater
+          // so they read fresh state from `prev` instead of stale `statusMapRef.current`
+          setStatusMap(prev => {
+            const prevEntry = prev[statusKey];
+            if (isStatusDowngrade(prevEntry?.status, status)) {
+              console.log(`[MissionReportScreen] 🛡️ Blocked status downgrade for WP ${statusKey}: ${prevEntry?.status} → ${status}`);
+              return prev;
+            }
+            const nextEntry = {
+              ...(prevEntry || {}),
+              reached: true,
+              status,
+              timestamp,
+              remark,
+              pile: event.pile ?? prevEntry?.pile,
+              rowNo: event.rowNo ?? event.row_no ?? prevEntry?.rowNo,
+            } as WpStatus;
 
-          const nextEntry = {
-            ...(prevEntry || {}),
-            reached: true,
-            status,
-            timestamp,
-            remark,
-            pile: event.pile ?? prevEntry?.pile,
-            rowNo: event.rowNo ?? event.row_no ?? prevEntry?.rowNo,
-          } as WpStatus;
-
-          if (!prevEntry || prevEntry.status !== nextEntry.status) {
-            setStatusMap(prev => ({
-              ...prev,
-              [statusKey]: nextEntry,
-            }));
-          }
-
-          console.log(`[MissionReportScreen] ✅ [${currentMode}] Waypoint ${statusKey} → ${status} at ${timestamp}`);
+            if (!prevEntry || prevEntry.status !== nextEntry.status) {
+              console.log(`[MissionReportScreen] ✅ [${currentMode}] Waypoint ${statusKey} → ${status} at ${timestamp}`);
+              return { ...prev, [statusKey]: nextEntry };
+            }
+            return prev;
+          });
         } else {
           // AUTO / MANUAL modes — existing logic with accuracy tracking
           const roverLat = event.position?.lat ?? telemetryRef.current.global?.lat;
@@ -1537,43 +1529,44 @@ export default function MissionReportScreen({ isVisible = true }: MissionReportS
             });
           }
 
-          const prevEntry = statusMapRef.current[statusKey];
+          // Move downgrade guard and nextEntry inside functional updater
+          // to read fresh state from `prev` instead of stale `statusMapRef.current`
+          setStatusMap(prev => {
+            const prevEntry = prev[statusKey];
 
-          // GUARD: Don't downgrade a completed/skipped waypoint back to reached
-          if (isStatusDowngrade(prevEntry?.status, 'reached')) {
-            console.log(`[MissionReportScreen] 🛡️ Blocked status downgrade for WP ${statusKey}: ${prevEntry?.status} → reached`);
-            return;
-          }
+            // GUARD: Don't downgrade a completed/skipped waypoint back to reached
+            if (isStatusDowngrade(prevEntry?.status, 'reached')) {
+              console.log(`[MissionReportScreen] 🛡️ Blocked status downgrade for WP ${statusKey}: ${prevEntry?.status} → reached`);
+              return prev;
+            }
 
-          const nextEntry = {
-            ...(prevEntry || {}),
-            reached: true,
-            status: 'reached',
-            timestamp,
-            pile: event.pile ?? prevEntry?.pile,
-            rowNo: event.rowNo ?? event.row_no ?? prevEntry?.rowNo,
-            hrms: hrms ?? prevEntry?.hrms,
-            vrms: vrms ?? prevEntry?.vrms,
-            lat_achieved: roverLat ?? prevEntry?.lat_achieved,
-            lon_achieved: roverLon ?? prevEntry?.lon_achieved,
-            ...accuracyData,
-          } as WpStatus;
+            const nextEntry = {
+              ...(prevEntry || {}),
+              reached: true,
+              status: 'reached',
+              timestamp,
+              pile: event.pile ?? prevEntry?.pile,
+              rowNo: event.rowNo ?? event.row_no ?? prevEntry?.rowNo,
+              hrms: hrms ?? prevEntry?.hrms,
+              vrms: vrms ?? prevEntry?.vrms,
+              lat_achieved: roverLat ?? prevEntry?.lat_achieved,
+              lon_achieved: roverLon ?? prevEntry?.lon_achieved,
+              ...accuracyData,
+            } as WpStatus;
 
-          const changed = !prevEntry ||
-            prevEntry.status !== nextEntry.status ||
-            prevEntry.reached !== nextEntry.reached ||
-            prevEntry.pile !== nextEntry.pile ||
-            prevEntry.rowNo !== nextEntry.rowNo ||
-            prevEntry.accuracy_level !== nextEntry.accuracy_level;
+            const changed = !prevEntry ||
+              prevEntry.status !== nextEntry.status ||
+              prevEntry.reached !== nextEntry.reached ||
+              prevEntry.pile !== nextEntry.pile ||
+              prevEntry.rowNo !== nextEntry.rowNo ||
+              prevEntry.accuracy_level !== nextEntry.accuracy_level;
 
-          if (changed) {
-            setStatusMap(prev => ({
-              ...prev,
-              [statusKey]: nextEntry,
-            }));
-          }
-
-          console.log(`[MissionReportScreen] ✅ Waypoint ${statusKey} reached at ${timestamp}`);
+            if (changed) {
+              console.log(`[MissionReportScreen] ✅ Waypoint ${statusKey} reached at ${timestamp}`);
+              return { ...prev, [statusKey]: nextEntry };
+            }
+            return prev;
+          });
         }
       }
 
@@ -1646,33 +1639,35 @@ export default function MissionReportScreen({ isVisible = true }: MissionReportS
           });
         }
         
-        const prevEntry = statusMapRef.current[statusKey];
-        const nextEntry = {
-          ...(prevEntry || {}),
-          marked: true,
-          status: markingStatus === 'skipped' ? 'skipped' : 'completed',
-          timestamp,
-          pile: event.pile ?? prevEntry?.pile,
-          rowNo: event.rowNo ?? event.row_no ?? prevEntry?.rowNo,
-          remark: event.remark ?? (markingStatus === 'skipped' ? 'Skipped' : prevEntry?.remark),
-          ...accuracyData, // Add accuracy data from backend
-        } as WpStatus;
+        // Move prevEntry read and changed check inside functional updater
+        // to read fresh state from `prev` instead of stale `statusMapRef.current`
+        setStatusMap(prev => {
+          const prevEntry = prev[statusKey];
+          const nextEntry = {
+            ...(prevEntry || {}),
+            marked: true,
+            status: markingStatus === 'skipped' ? 'skipped' : 'completed',
+            timestamp,
+            pile: event.pile ?? prevEntry?.pile,
+            rowNo: event.rowNo ?? event.row_no ?? prevEntry?.rowNo,
+            remark: event.remark ?? (markingStatus === 'skipped' ? 'Skipped' : prevEntry?.remark),
+            ...accuracyData,
+          } as WpStatus;
 
-        const changed = !prevEntry ||
-          prevEntry.status !== nextEntry.status ||
-          prevEntry.marked !== nextEntry.marked ||
-          prevEntry.pile !== nextEntry.pile ||
-          prevEntry.rowNo !== nextEntry.rowNo ||
-          prevEntry.remark !== nextEntry.remark ||
-          prevEntry.accuracy_level !== nextEntry.accuracy_level ||
-          prevEntry.position_error_cm !== nextEntry.position_error_cm;
+          const changed = !prevEntry ||
+            prevEntry.status !== nextEntry.status ||
+            prevEntry.marked !== nextEntry.marked ||
+            prevEntry.pile !== nextEntry.pile ||
+            prevEntry.rowNo !== nextEntry.rowNo ||
+            prevEntry.remark !== nextEntry.remark ||
+            prevEntry.accuracy_level !== nextEntry.accuracy_level ||
+            prevEntry.position_error_cm !== nextEntry.position_error_cm;
 
-        if (changed) {
-          setStatusMap(prev => ({
-            ...prev,
-            [statusKey]: nextEntry,
-          }));
-        }
+          if (changed) {
+            return { ...prev, [statusKey]: nextEntry };
+          }
+          return prev;
+        });
 
         const statusEmoji = markingStatus === 'skipped' ? '⏭️' : '✅';
         console.log(`[MissionReportScreen] ${statusEmoji} Waypoint ${statusKey} ${markingStatus} at ${timestamp}`);
@@ -1722,20 +1717,24 @@ export default function MissionReportScreen({ isVisible = true }: MissionReportS
         if (wpId > 0) {
           const targetWaypoint = waypointsRef.current.find(wp => wp.sn === wpId);
           const statusKey = targetWaypoint ? targetWaypoint.sn : wpId;
-          const prevEntry = statusMapRef.current[statusKey];
 
-          // Mark as completed — servo already ran (or was suppressed) before this event
-          if (!isStatusDowngrade(prevEntry?.status, 'completed')) {
-            setStatusMap(prev => ({
+          // Move downgrade guard inside functional updater for fresh state
+          setStatusMap(prev => {
+            const prevEntry = prev[statusKey];
+            if (isStatusDowngrade(prevEntry?.status, 'completed')) {
+              console.log(`[MissionReportScreen] 🛡️ Blocked status downgrade for WP ${statusKey}: ${prevEntry?.status} → completed`);
+              return prev;
+            }
+            return {
               ...prev,
               [statusKey]: {
-                ...(prev[statusKey] || {}),
+                ...(prevEntry || {}),
                 marked: true,
                 status: 'completed',
                 timestamp,
               } as WpStatus,
-            }));
-          }
+            };
+          });
         }
 
         // Signal UI that NEXT button needs to be pressed to continue
@@ -1861,19 +1860,22 @@ export default function MissionReportScreen({ isVisible = true }: MissionReportS
           const wpId = event.current_waypoint;
           const targetWaypoint = waypointsRef.current.find(wp => wp.sn === wpId);
           const statusKey = targetWaypoint ? targetWaypoint.sn : wpId;
-          
-          const incomingStatus = event.waypoint_status === 'completed' ? 'completed' : 
-                   event.waypoint_status === 'reached' ? 'reached' : 
-                   event.waypoint_status;
-          
-          console.log(`[MissionReportScreen] 📊 Mission status contains waypoint info: wpId=${wpId}, status=${incomingStatus}`);
-          
-          const prevEntry = statusMapRef.current[statusKey];
 
-          // GUARD: Don't downgrade a completed/skipped waypoint
-          if (isStatusDowngrade(prevEntry?.status, incomingStatus)) {
-            console.log(`[MissionReportScreen] 🛡️ Blocked status downgrade for WP ${statusKey}: ${prevEntry?.status} → ${incomingStatus}`);
-          } else {
+          const incomingStatus = event.waypoint_status === 'completed' ? 'completed' :
+                   event.waypoint_status === 'reached' ? 'reached' :
+                   event.waypoint_status;
+
+          console.log(`[MissionReportScreen] 📊 Mission status contains waypoint info: wpId=${wpId}, status=${incomingStatus}`);
+
+          // Move downgrade guard and nextEntry inside functional updater
+          setStatusMap(prev => {
+            const prevEntry = prev[statusKey];
+
+            if (isStatusDowngrade(prevEntry?.status, incomingStatus)) {
+              console.log(`[MissionReportScreen] 🛡️ Blocked status downgrade for WP ${statusKey}: ${prevEntry?.status} → ${incomingStatus}`);
+              return prev;
+            }
+
             const nextEntry = {
               ...(prevEntry || {}),
               status: incomingStatus,
@@ -1888,12 +1890,10 @@ export default function MissionReportScreen({ isVisible = true }: MissionReportS
               prevEntry.marked !== nextEntry.marked;
 
             if (changed) {
-              setStatusMap(prev => ({
-                ...prev,
-                [statusKey]: nextEntry,
-              }));
+              return { ...prev, [statusKey]: nextEntry };
             }
-          }
+            return prev;
+          });
           statusUpdated = true;
         }
         

@@ -100,14 +100,14 @@ const WaypointRow = React.memo(({ wp, index, wpStatus, isCurrentWaypoint }: RowP
         {formatTimestamp(wpStatus?.timestamp)}
       </Text>
       <View style={[styles.colRemark, styles.remarkCell]}>
-        <Text style={[styles.cell, isCurrentWaypoint && styles.currentWaypointText, isSkipped && styles.skippedText]}>
+        <Text numberOfLines={1} ellipsizeMode="tail" style={[styles.cell, isCurrentWaypoint && styles.currentWaypointText, isSkipped && styles.skippedText]}>
           {getRemarkText(s, wpStatus, statusDisplay)}
         </Text>
         {(() => {
           const { text: accuracyText, color: accuracyColor } = getAccuracyDisplay(wpStatus);
           const displayText = accuracyText || wpStatus?.remark || '';
           return displayText ? (
-            <Text style={[
+            <Text numberOfLines={1} ellipsizeMode="tail" style={[
               styles.cell,
               styles.remarkDetail,
               isCurrentWaypoint && styles.currentWaypointText,
@@ -151,10 +151,18 @@ interface Props {
   onReorder?: (fromIndex: number, direction: 'up' | 'down') => void;
 }
 
-const ROW_HEIGHT = 42;
+const ROW_HEIGHT = 46;
 
-export const WaypointsTable: React.FC<Props> = ({ waypoints, onExport, onExportComplete, onClear, statusMap, missionMode, currentIndex, pinnedCount = 4, onReorder }) => {
+export const WaypointsTable = React.memo<Props>(({ waypoints, onExport, onExportComplete, onClear, statusMap, missionMode, currentIndex, pinnedCount = 4, onReorder }) => {
   const currentWaypointNumber = currentIndex != null ? currentIndex + 1 : null;
+
+  // Force LegendList to re-render rows when status or active waypoint changes.
+  // Without extraData, recycled containers keep stale status values because
+  // renderItem closure changes alone don't trigger row re-computation.
+  const listExtraData = React.useMemo(
+    () => ({ statusMap, currentWaypointNumber }),
+    [statusMap, currentWaypointNumber],
+  );
 
   const renderItem = useCallback(
     (props: LegendListRenderItemProps<Waypoint>) => (
@@ -219,12 +227,13 @@ export const WaypointsTable: React.FC<Props> = ({ waypoints, onExport, onExportC
             getFixedItemSize={() => ROW_HEIGHT}
             style={styles.scrollableTableBody}
             showsVerticalScrollIndicator
+            extraData={listExtraData}
           />
         </View>
       </View>
     </View>
   );
-};
+});
 
 const styles = StyleSheet.create({
   container: {
@@ -339,7 +348,7 @@ const styles = StyleSheet.create({
   colAlt: { flex: 0.9 },
   colStatus: { flex: 1.0 },
   colTime: { flex: 1.2 },
-  colRemark: { flex: 1.3 },
+  colRemark: { flex: 1.6 },
   remarkCell: {
     flexDirection: 'column',
     justifyContent: 'center',
