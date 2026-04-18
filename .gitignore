@@ -46,7 +46,9 @@ yarn-error.*
 # Windows nul files (accidentally created)
 nul
 
-# Ignore backup APKs
+# Ignore backup APKs and build artifacts
+*.apk
+Backup_App/
 Backup Apks/
 
 # Project docs, summaries, temp, tasks
