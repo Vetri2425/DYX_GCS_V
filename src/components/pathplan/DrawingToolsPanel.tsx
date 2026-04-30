@@ -31,6 +31,11 @@ interface DrawingToolsPanelProps {
   onShowCADDrawing: () => void;
   onShowManualConnection: () => void;
   onShowReverseTool: () => void;
+  onShowCornerExtension: () => void;
+  canUndo?: boolean;
+  canRedo?: boolean;
+  onUndo?: () => void;
+  onRedo?: () => void;
   isCollapsed?: boolean;
   onToggleCollapse?: () => void;
   // Precise path props — when isPrecisePathActive=true, panel shows controls inline
@@ -51,6 +56,11 @@ export const DrawingToolsPanel: React.FC<DrawingToolsPanelProps> = ({
   onShowCADDrawing,
   onShowManualConnection,
   onShowReverseTool,
+  onShowCornerExtension,
+  canUndo = false,
+  canRedo = false,
+  onUndo,
+  onRedo,
   isCollapsed = false,
   onToggleCollapse,
   isPrecisePathActive = false,
@@ -155,6 +165,7 @@ export const DrawingToolsPanel: React.FC<DrawingToolsPanelProps> = ({
   const generatorTools: GeneratorTool[] = [
     { name: 'auto-circle', mdiIcon: 'circle-outline', title: 'Auto Circle', color: colors.accent, onPress: onShowCircleTool },
     { name: 'survey-grid', fontistoIcon: 'nav-icon-grid-a', title: 'Survey Grid', color: colors.greenBtn, onPress: onShowSurveyGridTool },
+    { name: 'corner-extension', mdiIcon: 'arrow-expand-all', title: 'Corner\nExtend', color: '#f59e0b', onPress: onShowCornerExtension },
   ];
 
   const handleToolPress = (toolName: string) => {
@@ -195,6 +206,30 @@ export const DrawingToolsPanel: React.FC<DrawingToolsPanelProps> = ({
           />
         </TouchableOpacity>
       </View>
+
+      {/* Undo/Redo actions */}
+      {!collapsed && (
+        <View style={styles.undoRedoRow}>
+          <TouchableOpacity
+            style={[styles.undoRedoBtn, !canUndo && styles.undoRedoBtnDisabled]}
+            onPress={onUndo}
+            disabled={!canUndo}
+            activeOpacity={0.7}
+          >
+            <MaterialCommunityIcons name="undo" size={18} color={canUndo ? colors.text : colors.textMuted} />
+            <Text style={[styles.undoRedoText, !canUndo && styles.undoRedoTextDisabled]}>Undo</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.undoRedoBtn, !canRedo && styles.undoRedoBtnDisabled]}
+            onPress={onRedo}
+            disabled={!canRedo}
+            activeOpacity={0.7}
+          >
+            <MaterialCommunityIcons name="redo" size={18} color={canRedo ? colors.text : colors.textMuted} />
+            <Text style={[styles.undoRedoText, !canRedo && styles.undoRedoTextDisabled]}>Redo</Text>
+          </TouchableOpacity>
+        </View>
+      )}
 
       {!collapsed && (
         isPrecisePathActive ? (
@@ -633,5 +668,35 @@ const styles = StyleSheet.create({
     color: '#ffffff',
     fontSize: 11,
     fontWeight: '700',
+  },
+
+  // ── UNDO/REDO ──
+  undoRedoRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginBottom: 10,
+  },
+  undoRedoBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 4,
+    paddingVertical: 8,
+    backgroundColor: colors.cardBg,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  undoRedoBtnDisabled: {
+    opacity: 0.35,
+  },
+  undoRedoText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: colors.text,
+  },
+  undoRedoTextDisabled: {
+    color: colors.textMuted,
   },
 });

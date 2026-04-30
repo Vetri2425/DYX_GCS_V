@@ -36,6 +36,10 @@ const MissionMapBase: React.FC<Props> = ({
   const [mapReady, setMapReady] = useState(false);
   const mapInitializedRef = useRef(false);
 
+  // Ref so waypoints injection reads latest active index without re-triggering a full reload
+  const activeWaypointIndexRef = useRef(activeWaypointIndex);
+  useEffect(() => { activeWaypointIndexRef.current = activeWaypointIndex; }, [activeWaypointIndex]);
+
   // Store initial rover data for one-time HTML generation
   const initialRoverData = useRef({
     lat: roverLat,
@@ -656,7 +660,7 @@ const MissionMapBase: React.FC<Props> = ({
       block: wp.block,
       row: wp.row,
       pile: wp.pile,
-      isActive: idx === activeWaypointIndex,
+      isActive: idx === activeWaypointIndexRef.current,
       isStart: idx === 0,
       isEnd: idx === waypoints.length - 1,
     }));
@@ -672,7 +676,7 @@ const MissionMapBase: React.FC<Props> = ({
       true;
     `);
     console.log(`[MissionMap] Injected ${waypoints.length} waypoints`);
-  }, [mapReady, waypoints, activeWaypointIndex]); // Re-inject when waypoints or active index change
+  }, [mapReady, waypoints]); // activeWaypointIndex handled by the dedicated setActiveWaypoint effect below
 
   // Pause/resume Leaflet rendering when visibility changes
   // This stops tile loading, marker animation, and continuous redraws when hidden

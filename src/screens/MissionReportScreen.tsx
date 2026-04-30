@@ -1444,7 +1444,7 @@ export default function MissionReportScreen({ isVisible = true }: MissionReportS
       // Handle waypoint reached events (multiple possible event formats)
       if (eventType === 'waypoint_reached' || event.event_type === 'waypoint_reached' ||
           (event.data && event.data.event_type === 'waypoint_reached')) {
-        const wpId = event.waypoint_id ?? event.id ?? event.data?.waypoint_id ?? event.data?.id ?? 0;
+        const wpId = event.waypoint_id ?? event.waypointId ?? event.id ?? event.data?.waypoint_id ?? event.data?.waypointId ?? event.data?.id ?? 0;
         const timestamp = event.timestamp ? (typeof event.timestamp === 'string' ? event.timestamp : new Date(event.timestamp).toISOString()) : new Date().toISOString();
 
         console.log(`[MissionReportScreen] 🎯 Processing waypoint_reached: wpId=${wpId}, mode=${modeRef.current}, waypoints.length=${waypointsRef.current.length}`);
@@ -1574,8 +1574,8 @@ export default function MissionReportScreen({ isVisible = true }: MissionReportS
       if (eventType === 'waypoint_marked' || eventType === 'waypoint_completed' ||
           event.event_type === 'waypoint_marked' || event.event_type === 'waypoint_completed' ||
           (event.data && (event.data.event_type === 'waypoint_marked' || event.data.event_type === 'waypoint_completed'))) {
-        const wpId = event.waypoint_id ?? event.id ?? event.data?.waypoint_id ?? event.data?.id ?? 0;
-        const timestamp = event.timestamp 
+        const wpId = event.waypoint_id ?? event.waypointId ?? event.id ?? event.data?.waypoint_id ?? event.data?.waypointId ?? event.data?.id ?? 0;
+        const timestamp = event.timestamp
           ? (typeof event.timestamp === 'string' ? event.timestamp : new Date(event.timestamp).toISOString())
           : new Date().toISOString();
         const markingStatus = event.marking_status ?? event.markingStatus ?? event.status ?? event.data?.marking_status ?? 'completed';
@@ -1676,7 +1676,7 @@ export default function MissionReportScreen({ isVisible = true }: MissionReportS
       // waypoint_hold_complete — hold period done, servo sequence about to run (AUTO + MANUAL)
       // No statusMap update needed here — waypoint_marked/waypoint_skipped follows immediately
       if (eventType === 'waypoint_hold_complete' || event.event_type === 'waypoint_hold_complete') {
-        const wpId = event.waypoint_id ?? event.current_waypoint ?? 0;
+        const wpId = event.waypoint_id ?? event.waypointId ?? event.current_waypoint ?? 0;
         console.log(`[MissionReportScreen] ⏱️ Hold complete for WP ${wpId}, should_mark=${event.should_mark}`);
         // Intentionally no statusMap change — waypoint_marked or waypoint_skipped fires next
       }
@@ -1707,7 +1707,7 @@ export default function MissionReportScreen({ isVisible = true }: MissionReportS
 
       // MANUAL MODE ONLY: waypoint_completed_manual — WP is done, mission paused waiting for user NEXT
       if (eventType === 'waypoint_completed_manual' || event.event_type === 'waypoint_completed_manual') {
-        const wpId = event.waypoint_id ?? event.current_waypoint ?? 0;
+        const wpId = event.waypoint_id ?? event.waypointId ?? event.current_waypoint ?? 0;
         const timestamp = event.timestamp
           ? (typeof event.timestamp === 'string' ? event.timestamp : new Date(event.timestamp).toISOString())
           : new Date().toISOString();
@@ -1819,27 +1819,40 @@ export default function MissionReportScreen({ isVisible = true }: MissionReportS
           const newIndex = event.current_waypoint - 1; // Convert from 1-based to 0-based
           const currentWaypointNumber = event.current_waypoint;
           setCurrentIndex(prev => {
-            if (prev !== newIndex) {
-              console.log(`[MissionReportScreen] ✦ Current waypoint changed: index ${prev} -> ${newIndex} (waypoint #${currentWaypointNumber})`);
-              console.log(`[MissionReportScreen] ✦ Looking for waypoint with sn=${currentWaypointNumber} in ${waypointsRef.current.length} waypoints`);
-              
-              // Find and log the target waypoint
-              const targetWaypoint = waypointsRef.current.find(wp => wp.sn === currentWaypointNumber);
-              if (targetWaypoint) {
-                console.log(`[MissionReportScreen] ✦ Found target waypoint:`, {
-                  sn: targetWaypoint.sn,
-                  block: targetWaypoint.block,
-                  row: targetWaypoint.row,
-                  pile: targetWaypoint.pile
-                });
-              } else {
-                console.log(`[MissionReportScreen] ⚠️ Target waypoint sn=${currentWaypointNumber} not found in waypoints array`);
+            if (prev === newIndex) return prev;
+
+            // Guard: only advance forward when the waypoint being left is terminal.
+            // Backend can send current_waypoint:N before waypoint_marked for N-1 arrives,
+            // which would jump the indicator ahead. Auto-derive corrects it once the
+            // waypoint_marked event arrives and statusMap updates.
+            if (newIndex > (prev ?? -1)) {
+              const leavingWp = prev !== null ? waypointsRef.current[prev] : null;
+              if (leavingWp) {
+                const leavingStatus = statusMapRef.current[leavingWp.sn];
+                if (!leavingStatus || (leavingStatus.status !== 'completed' && leavingStatus.status !== 'skipped')) {
+                  console.log(`[MissionReportScreen] ⏸ Holding indicator at index ${prev} — WP${leavingWp.sn} not yet terminal (${leavingStatus?.status ?? 'no status'})`);
+                  return prev;
+                }
               }
-              
-              statusUpdated = true;
-              return newIndex;
             }
-            return prev;
+
+            console.log(`[MissionReportScreen] ✦ Current waypoint changed: index ${prev} -> ${newIndex} (waypoint #${currentWaypointNumber})`);
+            console.log(`[MissionReportScreen] ✦ Looking for waypoint with sn=${currentWaypointNumber} in ${waypointsRef.current.length} waypoints`);
+
+            const targetWaypoint = waypointsRef.current.find(wp => wp.sn === currentWaypointNumber);
+            if (targetWaypoint) {
+              console.log(`[MissionReportScreen] ✦ Found target waypoint:`, {
+                sn: targetWaypoint.sn,
+                block: targetWaypoint.block,
+                row: targetWaypoint.row,
+                pile: targetWaypoint.pile
+              });
+            } else {
+              console.log(`[MissionReportScreen] ⚠️ Target waypoint sn=${currentWaypointNumber} not found in waypoints array`);
+            }
+
+            statusUpdated = true;
+            return newIndex;
           });
         }
         
@@ -1882,12 +1895,22 @@ export default function MissionReportScreen({ isVisible = true }: MissionReportS
               timestamp: event.timestamp ? (typeof event.timestamp === 'string' ? event.timestamp : new Date(event.timestamp).toISOString()) : new Date().toISOString(),
               reached: event.waypoint_status === 'reached' || event.waypoint_status === 'completed',
               marked: event.waypoint_status === 'completed',
+              pile: event.pile ?? prevEntry?.pile,
+              rowNo: event.rowNo ?? event.row_no ?? prevEntry?.rowNo,
+              remark: event.remark ?? prevEntry?.remark,
+              accuracy_level: event.accuracy_level ?? prevEntry?.accuracy_level,
+              position_error_cm: event.position_error_cm ?? prevEntry?.position_error_cm,
             } as WpStatus;
 
             const changed = !prevEntry ||
               prevEntry.status !== nextEntry.status ||
               prevEntry.reached !== nextEntry.reached ||
-              prevEntry.marked !== nextEntry.marked;
+              prevEntry.marked !== nextEntry.marked ||
+              prevEntry.pile !== nextEntry.pile ||
+              prevEntry.rowNo !== nextEntry.rowNo ||
+              prevEntry.remark !== nextEntry.remark ||
+              prevEntry.accuracy_level !== nextEntry.accuracy_level ||
+              prevEntry.position_error_cm !== nextEntry.position_error_cm;
 
             if (changed) {
               return { ...prev, [statusKey]: nextEntry };
@@ -1968,23 +1991,27 @@ export default function MissionReportScreen({ isVisible = true }: MissionReportS
         });
         
         // Try to extract waypoint status updates from any unhandled events
-        const wpId = event.waypoint_id ?? event.id ?? event.current_waypoint ?? 0;
+        const wpId = event.waypoint_id ?? event.waypointId ?? event.id ?? event.current_waypoint ?? 0;
         if (wpId > 0 && waypointsRef.current.length > 0) {
           const targetWaypoint = waypointsRef.current.find(wp => wp.sn === wpId);
           const statusKey = targetWaypoint ? targetWaypoint.sn : wpId;
           
           // Check for any status indicators in the event
-          if (event.status === 'completed' || event.status === 'reached' || 
+          if (event.status === 'completed' || event.status === 'reached' ||
               event.status === 'marked' || event.status === 'skipped') {
-            
-            const prevEntry = statusMapRef.current[statusKey];
 
-            // GUARD: Don't downgrade a completed/skipped waypoint
-            if (isStatusDowngrade(prevEntry?.status, event.status)) {
-              console.log(`[MissionReportScreen] 🛡️ Blocked status downgrade for WP ${statusKey}: ${prevEntry?.status} → ${event.status}`);
-            } else {
+            // Move all reads inside functional updater to avoid stale statusMapRef
+            setStatusMap(prev => {
+              const prevEntry = prev[statusKey];
+
+              // GUARD: Don't downgrade a completed/skipped waypoint
+              if (isStatusDowngrade(prevEntry?.status, event.status)) {
+                console.log(`[MissionReportScreen] 🛡️ Blocked status downgrade for WP ${statusKey}: ${prevEntry?.status} → ${event.status}`);
+                return prev;
+              }
+
               console.log(`[MissionReportScreen] 📝 Extracting status from unhandled event: wpId=${wpId}, status=${event.status}`);
-              
+
               const nextEntry = {
                 ...(prevEntry || {}),
                 status: event.status,
@@ -2001,12 +2028,10 @@ export default function MissionReportScreen({ isVisible = true }: MissionReportS
                 prevEntry.remark !== nextEntry.remark;
 
               if (changed) {
-                setStatusMap(prev => ({
-                  ...prev,
-                  [statusKey]: nextEntry,
-                }));
+                return { ...prev, [statusKey]: nextEntry };
               }
-            }
+              return prev;
+            });
           }
         }
       }

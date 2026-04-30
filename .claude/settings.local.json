@@ -72,7 +72,15 @@
       "Bash(wc -l \"D:/Final/DYX-GCS-Mobile/Issues/PathPlan/\"*.md \"D:/Final/DYX-GCS-Mobile/Issues/MissionReport/\"*.md \"D:/Final/DYX-GCS-Mobile/Issues/Dashboard/\"*.md \"D:/Final/DYX-GCS-Mobile/Issues/VerificationReport.md\")",
       "Bash(grep -oE \"import \\\\{ [A-Za-z, ]+ \\\\} from\")",
       "Bash(adb pull *)",
-      "Bash(awk '/12:51:51.78[0-9]/{found=1} found{print; count++} count>100{exit}')"
+      "Bash(awk '/12:51:51.78[0-9]/{found=1} found{print; count++} count>100{exit}')",
+      "Bash(coderabbit --version)",
+      "Bash(coderabbit auth *)",
+      "Bash(python -c \"import ezdxf; print\\('ezdxf available'\\)\")",
+      "Bash(python -c \"pip install ezdxf 2>/dev/null && import ezdxf; print\\('ezdxf installed'\\)\")",
+      "Bash(python *)",
+      "Bash(pip list *)",
+      "mcp__claude_ai_Excalidraw__read_me",
+      "mcp__claude_ai_Excalidraw__create_view"
     ],
     "deny": [],
     "ask": []

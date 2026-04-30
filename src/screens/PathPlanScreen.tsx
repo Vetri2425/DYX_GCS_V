@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback, memo } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo, memo } from 'react';
 import { View, StyleSheet, SafeAreaView, StatusBar, Alert, Modal, ScrollView, TouchableOpacity, Text } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { LegendList } from '@legendapp/list';
@@ -16,6 +16,8 @@ import { TextAnnotationDialog } from '../components/pathplan/TextAnnotationDialo
 import { CADDrawingCanvas } from '../components/pathplan/CADDrawingCanvas';
 import { ManualPathConnectionCanvas } from '../components/pathplan/ManualPathConnectionCanvas';
 import { ReverseWaypointsDialog } from '../components/pathplan/ReverseWaypointsDialog';
+import { CornerExtensionDialog } from '../components/pathplan/CornerExtensionDialog';
+import { detectCorners, generateCornerExtensionWaypoints, DEFAULT_EXTENSION_OPTIONS, CornerExtensionOptions } from '../utils/cornerExtension';
 import { ManualMapConnection } from '../components/pathplan/ManualMapConnection';
 import { ManualConnectionChoice } from '../components/pathplan/ManualConnectionChoice';
 import { ManualControlPanel } from '../components/pathplan/ManualControlPanel';
@@ -43,6 +45,9 @@ import { CADAlignmentCanvas } from '../components/pathplan/CADAlignmentCanvas';
 import { useCADAlignment } from '../application/hooks/useCADAlignment';
 import { GeoPoint, Point2D } from '../core/geometry/types';
 import { parseCSVChunked } from '../utils/chunkedParser';
+import { parseKML as coreParseKML } from '../core/parsers/kmlParser';
+import { convertToPathPlanWaypoints } from '../core/parsers/adapter';
+import { useWaypointHistory } from '../hooks/pathplan/useWaypointHistory';
 
 // ─── Virtualized preview row (memoized for LegendList recycling) ────────────
 const PreviewRow = memo(({ item }: { item: PathPlanWaypoint }) => (
@@ -237,6 +242,10 @@ export default function PathPlanScreen({ isVisible = true }: PathPlanScreenProps
       }))
     );
   }, [setMissionWaypoints]);
+
+  // Undo/Redo history — wraps updateWaypoints for all user-initiated changes
+  const { undo, redo, canUndo, canRedo, recordAndApply } = useWaypointHistory(waypoints, updateWaypoints);
+
   const [selectedWaypoint, setSelectedWaypoint] = useState<number | null>(null);
 
   // GPS Failsafe state
@@ -278,7 +287,7 @@ export default function PathPlanScreen({ isVisible = true }: PathPlanScreenProps
   }, []);
 
   const handlePrecisePathApply = React.useCallback((optimized: PathPlanWaypoint[]) => {
-    updateWaypoints(optimized);
+    recordAndApply(optimized);
     setPrecisePathPreview(null);
     setShowPrecisePathDialog(false);
   }, [updateWaypoints]);
@@ -303,6 +312,7 @@ export default function PathPlanScreen({ isVisible = true }: PathPlanScreenProps
   const [gpsInputA, setGpsInputA] = useState<{ lat: string; lon: string }>({ lat: '', lon: '' });
   const [gpsInputB, setGpsInputB] = useState<{ lat: string; lon: string }>({ lat: '', lon: '' });
   const [showReverseDialog, setShowReverseDialog] = useState(false);
+  const [showCornerExtensionDialog, setShowCornerExtensionDialog] = useState(false);
   const [isDrawingMode, setIsDrawingMode] = useState(false);
   const [homePosition, setHomePosition] = useState<{ lat: number; lng: number } | null>(null);
 
@@ -591,7 +601,7 @@ export default function PathPlanScreen({ isVisible = true }: PathPlanScreenProps
       mark: undefined,
     };
 
-    updateWaypoints([...waypoints, newWp]);
+    recordAndApply([...waypoints, newWp]);
   };
 
   const handleWaypointClick = (id: number) => {
@@ -647,11 +657,11 @@ export default function PathPlanScreen({ isVisible = true }: PathPlanScreenProps
       return wp;
     });
 
-    updateWaypoints(updatedWaypoints);
+    recordAndApply(updatedWaypoints);
   };
 
   const handleDeleteWaypoint = (id: number) => {
-    updateWaypoints(waypoints.filter(wp => wp.id !== id));
+    recordAndApply(waypoints.filter(wp => wp.id !== id));
   };
 
   const handleToggleMark = React.useCallback((id: number, newMarkValue: boolean) => {
@@ -698,7 +708,7 @@ export default function PathPlanScreen({ isVisible = true }: PathPlanScreenProps
     });
 
     if (DEBUG_LOG) console.log('[PathPlan] Adding', newWaypoints.length, 'waypoints from drawing tool');
-    updateWaypoints([...waypoints, ...newWaypoints]);
+    recordAndApply([...waypoints, ...newWaypoints]);
     setActiveDrawingTool(null); // Clear active tool after adding waypoints
 
     Alert.alert('Marking Points Added', `✓ ${newWaypoints.length} marking points added to mission`);
@@ -759,7 +769,7 @@ export default function PathPlanScreen({ isVisible = true }: PathPlanScreenProps
       lastValidWp = { lat: coord.latitude, lon: coord.longitude };
     }
 
-    updateWaypoints([...waypoints, ...newWaypoints]);
+    recordAndApply([...waypoints, ...newWaypoints]);
     Alert.alert('Text Path Created', `${newWaypoints.length} marking points generated for "${text}"`);
   };
 
@@ -816,7 +826,7 @@ export default function PathPlanScreen({ isVisible = true }: PathPlanScreenProps
 
     if (newWaypoints.length > 0) {
       if (DEBUG_LOG) console.log('[PathPlan] Adding', newWaypoints.length, 'waypoints from drawing');
-      updateWaypoints([...waypoints, ...newWaypoints]);
+      recordAndApply([...waypoints, ...newWaypoints]);
       Alert.alert('Drawing Complete', `✓ ${newWaypoints.length} marking points created from your drawing`);
     } else {
       Alert.alert('No Marking Points', 'Drawing did not generate any marking points. Try drawing a longer path.');
@@ -835,7 +845,7 @@ export default function PathPlanScreen({ isVisible = true }: PathPlanScreenProps
   };
 
   const handleUpdateWaypoints = (updatedWaypoints: PathPlanWaypoint[]) => {
-    updateWaypoints(updatedWaypoints);
+    recordAndApply(updatedWaypoints);
   };
 
   // Map visualization toggle handler
@@ -861,8 +871,38 @@ export default function PathPlanScreen({ isVisible = true }: PathPlanScreenProps
 
   const handleReverseAllWaypoints = useCallback(() => {
     const reversed = reverseWaypointOrder(waypoints);
-    updateWaypoints(reversed);
+    recordAndApply(reversed);
   }, [reverseWaypointOrder, waypoints, updateWaypoints]);
+
+  // Corner extension preview
+  const [cornerExtensionOptions, setCornerExtensionOptions] = useState<CornerExtensionOptions>(DEFAULT_EXTENSION_OPTIONS);
+
+  const cornerDetectionResult = useMemo(() => {
+    if (waypoints.length < 3) return { count: 0, shortWarnings: 0 };
+    const corners = detectCorners(waypoints, cornerExtensionOptions.turnAngleThreshold, cornerExtensionOptions.extensionDistance);
+    return {
+      count: corners.length,
+      shortWarnings: corners.filter(c => c.shortSegment).length,
+    };
+  }, [waypoints, cornerExtensionOptions.turnAngleThreshold, cornerExtensionOptions.extensionDistance]);
+
+  const handleApplyCornerExtension = useCallback((options: CornerExtensionOptions) => {
+    if (waypoints.length < 3) {
+      Alert.alert('Not Enough Waypoints', 'At least 3 waypoints are required for corner extension.');
+      return;
+    }
+    const extended = generateCornerExtensionWaypoints(waypoints, options);
+    if (extended.length === waypoints.length) {
+      Alert.alert('No Corners Detected', 'No corners above the threshold were found. No extension points added.');
+      return;
+    }
+    recordAndApply(extended);
+    setShowCornerExtensionDialog(false);
+    Alert.alert(
+      'Corner Extension Applied',
+      `${extended.length - waypoints.length} extension point(s) added. Total: ${extended.length} waypoints.`
+    );
+  }, [waypoints, updateWaypoints]);
 
   // File type validation
   const ACCEPTED_EXTENSIONS = ['waypoint', 'waypoints', 'csv', 'dxf', 'json', 'kml'];
@@ -1034,44 +1074,26 @@ export default function PathPlanScreen({ isVisible = true }: PathPlanScreenProps
   };
 
   const parseKML = (content: string): PathPlanWaypoint[] => {
-    // Basic KML parsing for <coordinates> tags
-    const coordsRegex = /<coordinates>([\s\S]*?)<\/coordinates>/g;
-    const matches = [...content.matchAll(coordsRegex)];
+    // Delegate to the core KML parser (fast-xml-parser based).
+    // It handles namespaces, extracts only Point geometry (skips
+    // LineString/Polygon/etc.), validates XML, and preserves
+    // Placemark names as pile labels.
+    const result = coreParseKML(content, 'upload.kml');
 
-    if (matches.length === 0) {
-      throw new Error('No <coordinates> tags found in KML file.');
+    if (result.warnings.length > 0 && DEBUG_LOG) {
+      result.warnings.forEach(w => console.log('[PathPlan] KML warning:', w));
     }
 
-    const waypoints: PathPlanWaypoint[] = [];
-    let wpId = 1;
+    if (result.valid_points === 0) {
+      const detail = result.warnings.length > 0
+        ? result.warnings[0]
+        : 'No valid Point placemarks found';
+      throw new Error(`KML import failed: ${detail}`);
+    }
 
-    matches.forEach((match) => {
-      const coordsText = match[1].trim();
-      const coordLines = coordsText.split(/\s+/).filter(Boolean);
+    const waypoints = convertToPathPlanWaypoints(result.coordinates);
 
-      coordLines.forEach((coordStr, idx) => {
-        const [lonStr, latStr, altStr] = coordStr.split(',');
-        const lon = parseFloat(lonStr);
-        const lat = parseFloat(latStr);
-        const alt = altStr ? parseFloat(altStr) : 0;
-
-        const wp = { lat, lon, alt: isNaN(alt) ? 0 : alt };
-        validateWaypoint(wp, wpId - 1);
-
-        waypoints.push({
-          id: wpId++,
-          lat,
-          lon,
-          alt: wp.alt,
-          distance: 0,
-          block: '',
-          row: '',
-          pile: String(wpId - 1),
-        });
-      });
-    });
-
-    if (DEBUG_LOG) console.log('[PathPlan] parseKML -> parsed', waypoints.length, waypoints.slice(0, 6));
+    if (DEBUG_LOG) console.log('[PathPlan] parseKML -> parsed', waypoints.length, 'from', result.total_rows, 'placemarks (skipped:', result.skipped_rows, ')');
 
     return waypoints;
   };
@@ -1349,7 +1371,7 @@ export default function PathPlanScreen({ isVisible = true }: PathPlanScreenProps
       }
 
       const withDistances = calculateDistances(mapped);
-      updateWaypoints(withDistances);
+      recordAndApply(withDistances);
 
       const warningMsg = errors.length > 0 ? `\n\nWarning: ${errors.length} waypoints had errors and were skipped.` : '';
       Alert.alert(
@@ -1754,15 +1776,6 @@ export default function PathPlanScreen({ isVisible = true }: PathPlanScreenProps
     }
   };
 
-  // Commented out - too noisy on every render
-  // if (DEBUG_LOG) {
-  //   try { console.log('[PathPlan] handleRequestUpload ready (component render)'); } catch (e) {}
-  // }
-
-  // ============================================================
-  // CAD Mode UI Rendering
-  // ============================================================
-
   const handleGPSSubmit = () => {
     const latA = parseFloat(gpsInputA.lat);
     const lonA = parseFloat(gpsInputA.lon);
@@ -1793,7 +1806,7 @@ export default function PathPlanScreen({ isVisible = true }: PathPlanScreenProps
     }
 
     if (pathAssignmentMode === 'manual') {
-      updateWaypoints(waypoints);
+      recordAndApply(waypoints);
       setManualPathConnections([]);
       setShowConnectionChoice(true);
       Alert.alert(
@@ -1802,7 +1815,7 @@ export default function PathPlanScreen({ isVisible = true }: PathPlanScreenProps
         [{ text: 'Choose Method' }]
       );
     } else {
-      updateWaypoints(waypoints);
+      recordAndApply(waypoints);
       Alert.alert('✓ CAD Import Complete', `Successfully georeferenced ${waypoints.length} marking points.`);
     }
 
@@ -2014,6 +2027,11 @@ export default function PathPlanScreen({ isVisible = true }: PathPlanScreenProps
                     setShowManualConnectionCanvas(true);
                   }}
                   onShowReverseTool={() => setShowReverseDialog(true)}
+                  onShowCornerExtension={() => setShowCornerExtensionDialog(true)}
+                  canUndo={canUndo}
+                  canRedo={canRedo}
+                  onUndo={undo}
+                  onRedo={redo}
                   isCollapsed={isDrawingToolsCollapsed}
                   onToggleCollapse={() => setIsDrawingToolsCollapsed(!isDrawingToolsCollapsed)}
                   isPrecisePathActive={showPrecisePathDialog}
@@ -2123,7 +2141,7 @@ export default function PathPlanScreen({ isVisible = true }: PathPlanScreenProps
                 });
 
                 // Update waypoints to ONLY show connected ones with recalculated distances
-                updateWaypoints(waypointsWithDistances);
+                recordAndApply(waypointsWithDistances);
                 setShowManualConnectionCanvas(false);
                 Alert.alert('✓ Path Created', `Path created with ${uniqueConnectedIds.length} marking points. Unconnected marking points removed.`);
               }}
@@ -2133,7 +2151,7 @@ export default function PathPlanScreen({ isVisible = true }: PathPlanScreenProps
               }}
               onDeleteWaypoints={(deletedIds) => {
                 const remaining = waypoints.filter(wp => !deletedIds.includes(wp.id));
-                updateWaypoints(remaining);
+                recordAndApply(remaining);
               }}
             />
 
@@ -2171,7 +2189,7 @@ export default function PathPlanScreen({ isVisible = true }: PathPlanScreenProps
                   });
 
                   // Update waypoints to ONLY show connected ones with recalculated distances
-                  updateWaypoints(waypointsWithDistances);
+                  recordAndApply(waypointsWithDistances);
                   setIsConnectingPath(false);
                   Alert.alert('✓ Path Created', `Path created with ${uniqueConnectedIds.length} marking points. Unconnected marking points removed.`);
                 }}
@@ -2181,7 +2199,7 @@ export default function PathPlanScreen({ isVisible = true }: PathPlanScreenProps
                 }}
                 onDeleteWaypoints={(deletedIds) => {
                   const remaining = waypoints.filter(wp => !deletedIds.includes(wp.id));
-                  updateWaypoints(remaining);
+                  recordAndApply(remaining);
                 }}
               />
             )}
@@ -2220,7 +2238,7 @@ export default function PathPlanScreen({ isVisible = true }: PathPlanScreenProps
                   });
 
                   // Update waypoints to ONLY show connected ones with recalculated distances
-                  updateWaypoints(waypointsWithDistances);
+                  recordAndApply(waypointsWithDistances);
                   setIsConnectingPath(false);
                   setUseMapForConnection(false);
                   Alert.alert('✓ Path Created', `Path created with ${uniqueConnectedIds.length} marking points. Unconnected marking points removed.`);
@@ -2428,7 +2446,7 @@ export default function PathPlanScreen({ isVisible = true }: PathPlanScreenProps
                             const sanitized = sanitizeWaypointsForUpload(uploadPreviewWaypoints);
 
                             // Close modal first for instant visual response, then apply waypoints.
-                            // Without this order swap, updateWaypoints (394+ object transforms +
+                            // Without this order swap, recordAndApply (394+ object transforms +
                             // context re-render) blocks the modal close for seconds.
                             setShowUploadPreview(false);
 
@@ -2437,7 +2455,7 @@ export default function PathPlanScreen({ isVisible = true }: PathPlanScreenProps
                               if (DEBUG_LOG) console.log('[PathPlan] Importing waypoints in MANUAL mode (with warnings):', sanitized.length);
                               // Defer heavy waypoint update to next frame so modal close renders first
                               requestAnimationFrame(() => {
-                                updateWaypoints(sanitized);
+                                recordAndApply(sanitized);
                                 setManualPathConnections([]);
                                 setShowConnectionChoice(true);
                               });
@@ -2450,7 +2468,7 @@ export default function PathPlanScreen({ isVisible = true }: PathPlanScreenProps
                               // Auto mode: Sequential import as usual
                               if (DEBUG_LOG) console.log('[PathPlan] Applying imported waypoints (Proceed with warnings):', sanitized.length, sanitized.slice(0, 3));
                               requestAnimationFrame(() => {
-                                updateWaypoints(sanitized);
+                                recordAndApply(sanitized);
                               });
                               Alert.alert('✓ Import Complete', `Successfully imported ${sanitized.length} marking points.`);
                             }
@@ -2468,7 +2486,7 @@ export default function PathPlanScreen({ isVisible = true }: PathPlanScreenProps
                       const sanitized = sanitizeWaypointsForUpload(uploadPreviewWaypoints);
                       if (DEBUG_LOG) console.log('[PathPlan] Importing waypoints in MANUAL mode:', sanitized.length);
                       requestAnimationFrame(() => {
-                        updateWaypoints(sanitized);
+                        recordAndApply(sanitized);
                         setManualPathConnections([]);
                         setShowConnectionChoice(true);
                       });
@@ -2482,7 +2500,7 @@ export default function PathPlanScreen({ isVisible = true }: PathPlanScreenProps
                       const sanitized = sanitizeWaypointsForUpload(uploadPreviewWaypoints);
                       if (DEBUG_LOG) console.log('[PathPlan] Applying imported waypoints (Proceed clean):', sanitized.length, sanitized.slice(0, 3));
                       requestAnimationFrame(() => {
-                        updateWaypoints(sanitized);
+                        recordAndApply(sanitized);
                       });
                       Alert.alert('✓ Import Complete', `Successfully imported ${sanitized.length} marking points.`);
                     }
@@ -2572,7 +2590,7 @@ export default function PathPlanScreen({ isVisible = true }: PathPlanScreenProps
             row: '',
             pile: String(index + 1),
           }));
-          updateWaypoints([...waypoints, ...newWaypoints]);
+          recordAndApply([...waypoints, ...newWaypoints]);
         }}
         currentPosition={roverPosition || { lat: 13.0827, lng: 80.2707 }}
       />
@@ -2583,6 +2601,16 @@ export default function PathPlanScreen({ isVisible = true }: PathPlanScreenProps
         waypointCount={waypoints.length}
         onReverse={handleReverseAllWaypoints}
         onClose={() => setShowReverseDialog(false)}
+      />
+
+      {/* Corner Extension Dialog */}
+      <CornerExtensionDialog
+        visible={showCornerExtensionDialog}
+        onClose={() => setShowCornerExtensionDialog(false)}
+        onApply={handleApplyCornerExtension}
+        waypointCount={waypoints.length}
+        cornersDetected={cornerDetectionResult.count}
+        shortSegmentWarnings={cornerDetectionResult.shortWarnings}
       />
 
       {/* Manual Control Modal */}

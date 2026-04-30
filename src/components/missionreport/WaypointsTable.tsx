@@ -293,6 +293,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     borderTopWidth: 1,
     borderTopColor: 'rgba(34, 211, 238, 0.3)',
+    minHeight: ROW_HEIGHT,
+    alignItems: 'center',
   },
   tableRowAlt: {
     backgroundColor: 'transparent',
