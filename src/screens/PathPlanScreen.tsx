@@ -17,6 +17,8 @@ import { CADDrawingCanvas } from '../components/pathplan/CADDrawingCanvas';
 import { ManualPathConnectionCanvas } from '../components/pathplan/ManualPathConnectionCanvas';
 import { ReverseWaypointsDialog } from '../components/pathplan/ReverseWaypointsDialog';
 import { CornerExtensionDialog } from '../components/pathplan/CornerExtensionDialog';
+import { SolarTableDialog } from '../components/pathplan/SolarTableDialog';
+import { TemplateManagerDialog } from '../components/pathplan/TemplateManagerDialog';
 import { detectCorners, generateCornerExtensionWaypoints, DEFAULT_EXTENSION_OPTIONS, CornerExtensionOptions } from '../utils/cornerExtension';
 import { ManualMapConnection } from '../components/pathplan/ManualMapConnection';
 import { ManualConnectionChoice } from '../components/pathplan/ManualConnectionChoice';
@@ -313,6 +315,8 @@ export default function PathPlanScreen({ isVisible = true }: PathPlanScreenProps
   const [gpsInputB, setGpsInputB] = useState<{ lat: string; lon: string }>({ lat: '', lon: '' });
   const [showReverseDialog, setShowReverseDialog] = useState(false);
   const [showCornerExtensionDialog, setShowCornerExtensionDialog] = useState(false);
+  const [showSolarTableDialog, setShowSolarTableDialog] = useState(false);
+  const [showTemplateManager, setShowTemplateManager] = useState(false);
   const [isDrawingMode, setIsDrawingMode] = useState(false);
   const [homePosition, setHomePosition] = useState<{ lat: number; lng: number } | null>(null);
 
@@ -2028,6 +2032,8 @@ export default function PathPlanScreen({ isVisible = true }: PathPlanScreenProps
                   }}
                   onShowReverseTool={() => setShowReverseDialog(true)}
                   onShowCornerExtension={() => setShowCornerExtensionDialog(true)}
+                  onShowSolarTableTool={() => setShowSolarTableDialog(true)}
+                  onShowTemplateManager={() => setShowTemplateManager(true)}
                   canUndo={canUndo}
                   canRedo={canRedo}
                   onUndo={undo}
@@ -2558,6 +2564,30 @@ export default function PathPlanScreen({ isVisible = true }: PathPlanScreenProps
         defaultCenter={
           roverPosition
             ? { lat: roverPosition.lat, lng: roverPosition.lng, alt: telemetry.global?.alt_rel ?? 30 }
+            : undefined
+        }
+      />
+
+      {/* Solar Table Generator Dialog */}
+      <SolarTableDialog
+        visible={showSolarTableDialog}
+        onClose={() => setShowSolarTableDialog(false)}
+        onGenerate={handleAddWaypoints}
+        defaultCenter={
+          roverPosition
+            ? { lat: roverPosition.lat, lng: roverPosition.lng }
+            : undefined
+        }
+      />
+
+      {/* Template Manager Dialog */}
+      <TemplateManagerDialog
+        visible={showTemplateManager}
+        onClose={() => setShowTemplateManager(false)}
+        onGenerate={handleAddWaypoints}
+        defaultCenter={
+          roverPosition
+            ? { lat: roverPosition.lat, lng: roverPosition.lng }
             : undefined
         }
       />

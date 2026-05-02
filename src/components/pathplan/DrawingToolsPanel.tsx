@@ -32,6 +32,8 @@ interface DrawingToolsPanelProps {
   onShowManualConnection: () => void;
   onShowReverseTool: () => void;
   onShowCornerExtension: () => void;
+  onShowSolarTableTool: () => void;
+  onShowTemplateManager: () => void;
   canUndo?: boolean;
   canRedo?: boolean;
   onUndo?: () => void;
@@ -57,6 +59,8 @@ export const DrawingToolsPanel: React.FC<DrawingToolsPanelProps> = ({
   onShowManualConnection,
   onShowReverseTool,
   onShowCornerExtension,
+  onShowSolarTableTool,
+  onShowTemplateManager,
   canUndo = false,
   canRedo = false,
   onUndo,
@@ -166,6 +170,8 @@ export const DrawingToolsPanel: React.FC<DrawingToolsPanelProps> = ({
     { name: 'auto-circle', mdiIcon: 'circle-outline', title: 'Auto Circle', color: colors.accent, onPress: onShowCircleTool },
     { name: 'survey-grid', fontistoIcon: 'nav-icon-grid-a', title: 'Survey Grid', color: colors.greenBtn, onPress: onShowSurveyGridTool },
     { name: 'corner-extension', mdiIcon: 'arrow-expand-all', title: 'Corner\nExtend', color: '#f59e0b', onPress: onShowCornerExtension },
+    { name: 'solar-table', mdiIcon: 'solar-panel', title: 'Solar\nTable', color: colors.accent, onPress: onShowSolarTableTool },
+    { name: 'templates', mdiIcon: 'file-document-outline', title: 'Templates', color: colors.greenBtn, onPress: onShowTemplateManager },
   ];
 
   const handleToolPress = (toolName: string) => {

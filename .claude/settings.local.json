@@ -80,7 +80,15 @@
       "Bash(python *)",
       "Bash(pip list *)",
       "mcp__claude_ai_Excalidraw__read_me",
-      "mcp__claude_ai_Excalidraw__create_view"
+      "mcp__claude_ai_Excalidraw__create_view",
+      "Bash(awk 'prev==\"0\" {print} {prev=$0}' soccer_pitch_fifa_edited.dxf)",
+      "Bash(awk '{gsub\\(/^[ \\\\t]+/, \"\"\\); print}' soccer_pitch_fifa_edited.dxf)",
+      "Bash(awk 'prev==\"0\" {print} {prev=$0}')",
+      "Bash(awk '{gsub\\(/^[ \\\\t]+/, \"\"\\); if\\($0==\"0\"\\) {getline; gsub\\(/^[ \\\\t]+/, \"\"\\); print}}')",
+      "Bash(awk '{gsub\\(/^[ \\\\t]+/, \"\"\\); if\\($0==\"8\"\\) {getline; gsub\\(/^[ \\\\t]+/, \"\"\\); print}}')",
+      "Bash(awk '{gsub\\(/^[ \\\\t]+/, \"\"\\); print}')",
+      "Bash(awk 'BEGIN {prev=\"\"} {if\\(prev==\"10\"\\) x_vals[$1]=1; if\\(prev==\"20\"\\) y_vals[$1]=1; prev=$0} END {print \"=== X values \\(group 10\\) ===\"; for\\(v in x_vals\\) print v; print \"=== Y values \\(group 20\\) ===\"; for\\(v in y_vals\\) print v}')",
+      "Bash(awk 'BEGIN {prev=\"\"} {if\\(prev==\"10\"\\) {print \"X:\" $1}; if\\(prev==\"20\"\\) {print \"Y:\" $1}; if\\(prev==\"40\"\\) {print \"R:\" $1}; if\\(prev==\"50\"\\) {print \"S:\" $1}; if\\(prev==\"51\"\\) {print \"E:\" $1}; if\\(prev==\"90\"\\) {print \"V:\" $1}; prev=$0}')"
     ],
     "deny": [],
     "ask": []
