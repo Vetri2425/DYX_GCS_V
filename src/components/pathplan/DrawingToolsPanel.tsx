@@ -26,7 +26,6 @@ interface DrawingToolsPanelProps {
   activeDrawingTool: string | null;
   onToolSelect: (tool: string | null) => void;
   onShowCircleTool: () => void;
-  onShowSurveyGridTool: () => void;
   onShowTextTool: () => void;
   onShowCADDrawing: () => void;
   onShowManualConnection: () => void;
@@ -53,7 +52,6 @@ export const DrawingToolsPanel: React.FC<DrawingToolsPanelProps> = ({
   activeDrawingTool,
   onToolSelect,
   onShowCircleTool,
-  onShowSurveyGridTool,
   onShowTextTool,
   onShowCADDrawing,
   onShowManualConnection,
@@ -168,7 +166,6 @@ export const DrawingToolsPanel: React.FC<DrawingToolsPanelProps> = ({
 
   const generatorTools: GeneratorTool[] = [
     { name: 'auto-circle', mdiIcon: 'circle-outline', title: 'Auto Circle', color: colors.accent, onPress: onShowCircleTool },
-    { name: 'survey-grid', fontistoIcon: 'nav-icon-grid-a', title: 'Survey Grid', color: colors.greenBtn, onPress: onShowSurveyGridTool },
     { name: 'corner-extension', mdiIcon: 'arrow-expand-all', title: 'Corner\nExtend', color: '#f59e0b', onPress: onShowCornerExtension },
     { name: 'solar-table', mdiIcon: 'solar-panel', title: 'Solar\nTable', color: colors.accent, onPress: onShowSolarTableTool },
     { name: 'templates', mdiIcon: 'file-document-outline', title: 'Templates', color: colors.greenBtn, onPress: onShowTemplateManager },

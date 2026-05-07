@@ -304,9 +304,9 @@ export default function PathPlanScreen({ isVisible = true }: PathPlanScreenProps
   const [showGPSInput, setShowGPSInput] = useState(false);
 
   const cadAlignment = useCADAlignment({
-    includeLines: false,
+    includeLines: true,
     includePolylines: true,
-    includeArcCenters: false,
+    includeArcCenters: true,
     includePoints: true,
     defaultAlt: 0,
   });
@@ -1589,7 +1589,15 @@ export default function PathPlanScreen({ isVisible = true }: PathPlanScreenProps
 
       const res = await DocumentPicker.getDocumentAsync({
         copyToCacheDirectory: true,
-        type: '*/*' as any
+        type: [
+          'text/csv',                                      // .csv
+          'application/json',                              // .json
+          'application/vnd.google-earth.kml+xml',          // .kml
+          'text/plain',                                    // .waypoint, .waypoints
+          'application/dxf',                               // .dxf (if registered)
+          'application/octet-stream',                      // fallback: .dxf, .waypoints, unknown
+          '*/*',                                           // broad fallback
+        ],
       });
 
       if (DEBUG_LOG) console.log('[PathPlan] DocumentPicker response full:', res);
@@ -1890,6 +1898,24 @@ export default function PathPlanScreen({ isVisible = true }: PathPlanScreenProps
               />
             )}
 
+            {/* Quick Align — auto-place using rover position + North */}
+            {state === 'cad_loaded' && cadModel && (
+              <View style={{ flexDirection: 'row', justifyContent: 'center', marginTop: 8 }}>
+                <TouchableOpacity
+                  style={[cadStyles.gpsComputeButton, { flexDirection: 'row', alignItems: 'center', gap: 6 }]}
+                  onPress={() => {
+                    const roverLat = telemetry?.global?.lat ?? 0;
+                    const roverLon = telemetry?.global?.lon ?? 0;
+                    cadAlignment.autoAlign({ lat: roverLat, lon: roverLon });
+                    setShowGPSInput(false);
+                  }}
+                >
+                  <MaterialCommunityIcons name="crosshairs-gps" size={18} color={colors.text} />
+                  <Text style={cadStyles.gpsComputeText}>Quick Align (Rover Position)</Text>
+                </TouchableOpacity>
+              </View>
+            )}
+
             {/* GPS Input Dialog */}
             {showGPSInput && (
               <View style={cadStyles.gpsInputContainer}>
@@ -2023,7 +2049,6 @@ export default function PathPlanScreen({ isVisible = true }: PathPlanScreenProps
                   activeDrawingTool={activeDrawingTool}
                   onToolSelect={setActiveDrawingTool}
                   onShowCircleTool={() => setShowCircleDialog(true)}
-                  onShowSurveyGridTool={() => setShowSurveyGridDialog(true)}
                   onShowTextTool={() => setShowTextDialog(true)}
                   onShowCADDrawing={() => setShowCADCanvas(true)}
                   onShowManualConnection={() => {
@@ -2623,6 +2648,7 @@ export default function PathPlanScreen({ isVisible = true }: PathPlanScreenProps
           recordAndApply([...waypoints, ...newWaypoints]);
         }}
         currentPosition={roverPosition || { lat: 13.0827, lng: 80.2707 }}
+        onShowSurveyGrid={() => setShowSurveyGridDialog(true)}
       />
 
       {/* Reverse Waypoints Dialog */}

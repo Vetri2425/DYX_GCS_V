@@ -556,6 +556,18 @@ export default function MissionReportScreen({ isVisible = true }: MissionReportS
     // Only update if the derived index is different from current
     setCurrentIndex(prev => {
       if (prev !== derivedIndex) {
+        // Forward-guard: do not advance past a non-terminal waypoint
+        // This mirrors the guard in the socket event handler (lines 1828-1837)
+        if (derivedIndex !== null && prev !== null && derivedIndex > prev) {
+          const leavingWp = waypoints[prev];
+          if (leavingWp) {
+            const leavingStatus = statusMap[leavingWp.sn];
+            if (!leavingStatus || (leavingStatus.status !== 'completed' && leavingStatus.status !== 'skipped')) {
+              // The waypoint we're leaving is not yet terminal — hold position
+              return prev;
+            }
+          }
+        }
         missionLog(`[MissionReportScreen] 🔄 Auto-derived currentIndex from statusMap: ${prev} -> ${derivedIndex} (waypoint #${derivedIndex !== null ? derivedIndex + 1 : 'null'})`);
         return derivedIndex;
       }
@@ -2063,6 +2075,7 @@ export default function MissionReportScreen({ isVisible = true }: MissionReportS
               roverLon={mapProps.roverLon}
               heading={mapProps.heading}
               activeWaypointIndex={currentIndex}
+              statusMap={displayData.statusMap}
               armed={mapProps.armed}
               rtkFixType={mapProps.rtkFixType}
               onToggleFullscreen={toggleMapFullscreen}

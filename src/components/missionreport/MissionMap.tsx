@@ -17,6 +17,8 @@ interface Props {
   rtkFixType?: number;    // For dynamic color: RTK (5,6) = blue
   onToggleFullscreen?: () => void;
   isVisible?: boolean;     // When false, pauses Leaflet rendering to save GPU/CPU
+  // Status map keyed by waypoint.sn → drives completion color on markers
+  statusMap?: Record<number, { status?: string } & Record<string, any>>;
 }
 
 const MissionMapBase: React.FC<Props> = ({
@@ -31,6 +33,7 @@ const MissionMapBase: React.FC<Props> = ({
   rtkFixType = 0,
   onToggleFullscreen,
   isVisible = true,
+  statusMap,
 }) => {
   const webViewRef = useRef<WebView | null>(null);
   const [mapReady, setMapReady] = useState(false);
@@ -292,10 +295,10 @@ const MissionMapBase: React.FC<Props> = ({
       let fill = '#f97316';
       if (wp.isStart) fill = '#16a34a';
       if (wp.isEnd) fill = '#dc2626';
-      if (wp.isActive) fill = '#22c55e';
-      
-      const size = wp.isActive ? 48 : 36;
-      
+      if (wp.isCompleted) fill = '#22c55e';
+
+      const size = 36; // constant size — active waypoints no longer enlarge
+
       // PERFORMANCE: Minimal SVG, no filters, no animations
       const svgIcon = \`
         <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="\${size}" height="\${size}" fill="\${fill}">
@@ -512,22 +515,24 @@ const MissionMapBase: React.FC<Props> = ({
     if (currentActiveIndex === -1) currentActiveIndex = -1;
 
     // READ-ONLY OPTIMIZATION: Fast active waypoint update via direct DOM manipulation
-    // Instead of recreating icons with setIcon(), we directly update the SVG fill color and size
+    // Size stays constant at 36; color respects start/end/completed state.
+    // Completion state is authoritative — active waypoints do not override completion color.
     window.setActiveWaypoint = function(index) {
       if (index === currentActiveIndex) return;
 
       // Deactivate previous marker - direct DOM update
       if (currentActiveIndex >= 0 && currentActiveIndex < waypointMarkers.length) {
+        const prevWp = waypoints[currentActiveIndex];
         const prevMarker = waypointMarkers[currentActiveIndex];
         const prevEl = prevMarker.getElement();
         if (prevEl) {
           const svg = prevEl.querySelector('svg');
           const path = prevEl.querySelector('path');
           if (svg && path) {
-            // Reset to normal size and color
             const isStart = currentActiveIndex === 0;
             const isEnd = currentActiveIndex === waypoints.length - 1;
-            const fill = isStart ? '#16a34a' : (isEnd ? '#dc2626' : '#f97316');
+            let fill = isStart ? '#16a34a' : (isEnd ? '#dc2626' : '#f97316');
+            if (prevWp && prevWp.isCompleted) fill = '#22c55e';
             svg.setAttribute('width', '36');
             svg.setAttribute('height', '36');
             path.setAttribute('fill', fill);
@@ -537,21 +542,48 @@ const MissionMapBase: React.FC<Props> = ({
 
       // Activate new marker - direct DOM update
       if (index >= 0 && index < waypointMarkers.length) {
+        const newWp = waypoints[index];
         const newMarker = waypointMarkers[index];
         const newEl = newMarker.getElement();
         if (newEl) {
           const svg = newEl.querySelector('svg');
           const path = newEl.querySelector('path');
           if (svg && path) {
-            // Set to active size and color
-            svg.setAttribute('width', '48');
-            svg.setAttribute('height', '48');
-            path.setAttribute('fill', '#22c55e');
+            const isStart = index === 0;
+            const isEnd = index === waypoints.length - 1;
+            let fill = isStart ? '#16a34a' : (isEnd ? '#dc2626' : '#f97316');
+            if (newWp && newWp.isCompleted) fill = '#22c55e';
+            svg.setAttribute('width', '36');
+            svg.setAttribute('height', '36');
+            path.setAttribute('fill', fill);
           }
         }
       }
 
       currentActiveIndex = index;
+    };
+
+    // Patch marker colors from completion flags without recreating markers.
+    // Accepts a boolean array aligned to the global waypoints array.
+    window.updateWaypointStatuses = function(flags) {
+      if (!Array.isArray(flags)) return;
+      const n = Math.min(flags.length, waypointMarkers.length);
+      for (let i = 0; i < n; i++) {
+        if (waypoints[i]) waypoints[i].isCompleted = !!flags[i];
+        const marker = waypointMarkers[i];
+        const el = marker && marker.getElement ? marker.getElement() : null;
+        if (!el) continue;
+        const svg = el.querySelector('svg');
+        const path = el.querySelector('path');
+        if (!svg || !path) continue;
+        const isStart = i === 0;
+        const isEnd = i === waypoints.length - 1;
+        let fill = isStart ? '#16a34a' : (isEnd ? '#dc2626' : '#f97316');
+        if (flags[i]) fill = '#22c55e';
+        path.setAttribute('fill', fill);
+        svg.setAttribute('width', '36');
+        svg.setAttribute('height', '36');
+      }
     };
 
     // Clear all waypoint markers and polyline from the map
@@ -652,18 +684,24 @@ const MissionMapBase: React.FC<Props> = ({
       return;
     }
 
-    const waypointsArray = waypoints.map((wp, idx) => ({
-      id: wp.sn,
-      uniqueId: `wp-${idx}-${wp.sn}`,
-      lat: wp.lat,
-      lon: wp.lon,
-      block: wp.block,
-      row: wp.row,
-      pile: wp.pile,
-      isActive: idx === activeWaypointIndexRef.current,
-      isStart: idx === 0,
-      isEnd: idx === waypoints.length - 1,
-    }));
+    const waypointsArray = waypoints.map((wp, idx) => {
+      const wpStatus = statusMap?.[wp.sn];
+      const isCompleted =
+        wpStatus?.status === 'completed' || wpStatus?.status === 'skipped';
+      return {
+        id: wp.sn,
+        uniqueId: `wp-${idx}-${wp.sn}`,
+        lat: wp.lat,
+        lon: wp.lon,
+        block: wp.block,
+        row: wp.row,
+        pile: wp.pile,
+        isActive: idx === activeWaypointIndexRef.current,
+        isStart: idx === 0,
+        isEnd: idx === waypoints.length - 1,
+        isCompleted,
+      };
+    });
 
     webViewRef.current.injectJavaScript(`
       (function() {
@@ -836,6 +874,23 @@ const MissionMapBase: React.FC<Props> = ({
       `(function() { if (window.setActiveWaypoint) window.setActiveWaypoint(${activeWaypointIndex}); })(); true;`
     );
   }, [activeWaypointIndex, mapReady]);
+
+  // Lightweight bridge: sync completion flags into the WebView without recreating markers.
+  // Sends a boolean array aligned to the current waypoints order whenever statusMap changes.
+  useEffect(() => {
+    if (!mapReady || !webViewRef.current) return;
+    if (!waypoints || waypoints.length === 0) return;
+    const completedFlags = waypoints.map(
+      (wp) =>
+        statusMap?.[wp.sn]?.status === 'completed' ||
+        statusMap?.[wp.sn]?.status === 'skipped'
+    );
+    webViewRef.current.injectJavaScript(
+      `(function() { if (window.updateWaypointStatuses) window.updateWaypointStatuses(${JSON.stringify(
+        completedFlags
+      )}); })(); true;`
+    );
+  }, [statusMap, mapReady, waypoints]);
 
   // Update rover position, heading, and trail via JavaScript injection
   // Skip updates when not visible to save JS thread and GPU

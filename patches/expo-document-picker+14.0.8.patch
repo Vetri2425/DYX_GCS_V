@@ -1,0 +1,22 @@
+diff --git a/node_modules/expo-document-picker/android/src/main/java/expo/modules/documentpicker/DocumentPickerModule.kt b/node_modules/expo-document-picker/android/src/main/java/expo/modules/documentpicker/DocumentPickerModule.kt
+index 472a5ab..3e437a8 100644
+--- a/node_modules/expo-document-picker/android/src/main/java/expo/modules/documentpicker/DocumentPickerModule.kt
++++ b/node_modules/expo-document-picker/android/src/main/java/expo/modules/documentpicker/DocumentPickerModule.kt
+@@ -34,15 +34,10 @@ class DocumentPickerModule : Module() {
+       }
+       pendingPromise = promise
+       copyToCacheDirectory = options.copyToCacheDirectory
+-      val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
++      val intent = Intent(Intent.ACTION_GET_CONTENT).apply {
+         addCategory(Intent.CATEGORY_OPENABLE)
+         putExtra(Intent.EXTRA_ALLOW_MULTIPLE, options.multiple)
+-        type = if (options.type.size > 1) {
+-          putExtra(Intent.EXTRA_MIME_TYPES, options.type.toTypedArray())
+-          "*/*"
+-        } else {
+-          options.type[0]
+-        }
++        type = "*/*"
+       }
+       appContext.throwingActivity.startActivityForResult(intent, OPEN_DOCUMENT_CODE)
+     }

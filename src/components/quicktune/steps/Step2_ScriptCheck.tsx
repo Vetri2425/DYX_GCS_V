@@ -114,7 +114,7 @@ export default function Step2_ScriptCheck({ onNext, onBack }: Props) {
     try {
       const res = await DocumentPicker.getDocumentAsync({
         copyToCacheDirectory: true,
-        type: '*/*',
+        type: ['text/plain', 'application/octet-stream', '*/*'],
       });
 
       // Modern API: res.canceled is a boolean, res.assets is null when canceled

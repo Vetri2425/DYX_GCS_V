@@ -159,11 +159,12 @@ function arcToPathD(
   endAngle: number,
   t: ViewTransform
 ): string {
-  const steps = Math.max(36, Math.ceil(Math.abs(endAngle - startAngle) / (Math.PI / 36)));
+  const sweep = endAngle - startAngle;
+  const steps = Math.max(36, Math.ceil(Math.abs(sweep) / (Math.PI / 36)));
   let d = '';
 
   for (let i = 0; i <= steps; i++) {
-    const angle = startAngle + (endAngle - startAngle) * (i / steps);
+    const angle = startAngle + sweep * (i / steps);
     const cx = center.x + radius * Math.cos(angle);
     const cy = center.y + radius * Math.sin(angle);
     const sp = toScreen({ x: cx, y: cy }, t);
@@ -277,9 +278,9 @@ export const CADAlignmentCanvas: React.FC<CADAlignmentCanvasProps> = ({
           if (seg.segmentType === 'Arc') {
             const centerScreen = toScreen(seg.center, transform);
             const r = seg.radius * transform.scale;
-            // Use large-arc and sweep flags based on bulge direction
-            const sweepFlag = seg.radius > 0 ? 1 : 0;
-            const largeArc = Math.abs(seg.endAngle - seg.startAngle) > Math.PI ? 1 : 0;
+            const sweep = seg.endAngle - seg.startAngle;
+            const sweepFlag = sweep > 0 ? 1 : 0;
+            const largeArc = Math.abs(sweep) > Math.PI ? 1 : 0;
             d += ` A ${r} ${r} 0 ${largeArc} ${sweepFlag} ${toPt.x} ${toPt.y}`;
           } else {
             d += ` L ${toPt.x} ${toPt.y}`;

@@ -77,8 +77,19 @@ export type Arc = {
   layer?: string;
 };
 
+/** Text entity — from TEXT, MTEXT, or DIMENSION measurement text */
+export type TextEntity = {
+  id: string;
+  type: 'Text';
+  position: Point2D;
+  text: string;
+  height: number;   // text height in drawing units (scaled by unitScale)
+  rotation: number;  // radians, CCW from +X
+  layer?: string;
+};
+
 /** Union of all CAD entity types */
-export type Entity = Line | PointEntity | Polyline | Arc;
+export type Entity = Line | PointEntity | Polyline | Arc | TextEntity;
 
 // ============================================================
 // CAD Model
@@ -161,8 +172,20 @@ export type GeoArc = {
   layer?: string;
 };
 
+/** Georeferenced text */
+export type GeoTextEntity = {
+  id: string;
+  type: 'Text';
+  localPosition: Vec2D;
+  geoPosition: GeoPoint;
+  text: string;
+  height: number;      // meters
+  rotation: number;     // radians
+  layer?: string;
+};
+
 /** Union of all georeferenced entity types */
-export type GeoEntity = GeoLine | GeoPointEntity | GeoPolyline | GeoArc;
+export type GeoEntity = GeoLine | GeoPointEntity | GeoPolyline | GeoArc | GeoTextEntity;
 
 // ============================================================
 // Pipeline Result

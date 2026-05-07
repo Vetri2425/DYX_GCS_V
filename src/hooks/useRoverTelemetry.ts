@@ -859,7 +859,9 @@ export function useRoverTelemetry(): UseRoverTelemetryResult {
     mutableRef.current.telemetry = defaultTelemetry;
     mutableRef.current.lastEnvelopeTs = null;
     setTelemetrySnapshot(defaultTelemetry);
-    console.log('[useRoverTelemetry] Telemetry reset to default');
+    if (!isOfflineMode()) {
+      console.log('[useRoverTelemetry] Telemetry reset to default');
+    }
   }, []);
 
   // Apply telemetry envelope
@@ -1259,26 +1261,27 @@ export function useRoverTelemetry(): UseRoverTelemetryResult {
         });
 
         socket.on('connect_error', (error: any) => {
-          const backendUrl = getHttpBase();
-          const log = isOfflineMode() ? console.warn : console.error;
-          log('[SOCKET] Connection error:', error.message || error);
-          log('[SOCKET] Backend URL:', backendUrl);
-          log('[SOCKET] Error details:', {
-            code: error.code,
-            type: error.type,
-            data: error.data,
-            description: error.description,
-          });
+          if (!isOfflineMode()) {
+            const backendUrl = getHttpBase();
+            console.error('[SOCKET] Connection error:', error.message || error);
+            console.error('[SOCKET] Backend URL:', backendUrl);
+            console.error('[SOCKET] Error details:', {
+              code: error.code,
+              type: error.type,
+              data: error.data,
+              description: error.description,
+            });
 
-          // Provide user-friendly error messages
-          if (error.code === 'ECONNREFUSED') {
-            log('[SOCKET] ❌ Backend server is not running or not accessible');
-          } else if (error.code === 'ETIMEDOUT') {
-            log('[SOCKET] ❌ Connection timed out - backend may be overloaded or network issues');
-          } else if (error.code === 'ENOTFOUND') {
-            log('[SOCKET] ❌ DNS resolution failed - check IP address');
-          } else {
-            log('[SOCKET] ❌ Unknown connection error');
+            // Provide user-friendly error messages
+            if (error.code === 'ECONNREFUSED') {
+              console.error('[SOCKET] ❌ Backend server is not running or not accessible');
+            } else if (error.code === 'ETIMEDOUT') {
+              console.error('[SOCKET] ❌ Connection timed out - backend may be overloaded or network issues');
+            } else if (error.code === 'ENOTFOUND') {
+              console.error('[SOCKET] ❌ DNS resolution failed - check IP address');
+            } else {
+              console.error('[SOCKET] ❌ Unknown connection error');
+            }
           }
 
           resetTelemetry();
@@ -1287,7 +1290,9 @@ export function useRoverTelemetry(): UseRoverTelemetryResult {
         });
 
         socket.on('disconnect', (reason: any) => {
-          console.warn('[SOCKET] Disconnected:', reason);
+          if (!isOfflineMode()) {
+            console.warn('[SOCKET] Disconnected:', reason);
+          }
           if (manualDisconnectRef.current) {
             manualDisconnectRef.current = false;
             return;
@@ -1314,7 +1319,9 @@ export function useRoverTelemetry(): UseRoverTelemetryResult {
         });
 
         socket.io.on('reconnect_attempt', () => {
-          console.log('[SOCKET] Reconnecting...');
+          if (!isOfflineMode()) {
+            console.log('[SOCKET] Reconnecting...');
+          }
           setConnectionState('connecting');
         });
 

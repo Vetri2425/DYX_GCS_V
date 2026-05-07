@@ -284,6 +284,16 @@ export function geoEntitiesToScreen(geoEntities: GeoEntity[], viewport: Viewport
           endAngle: geo.endAngle,
           layer: geo.layer,
         };
+      case 'Text':
+        return {
+          id: geo.id,
+          type: 'Text',
+          position: { x: geo.geoPosition.lon, y: geo.geoPosition.lat },
+          text: geo.text,
+          height: geo.height,
+          rotation: geo.rotation,
+          layer: geo.layer,
+        };
     }
   });
 

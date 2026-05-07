@@ -10,6 +10,7 @@
 //   - Point
 //   - Polyline (with Line and Arc segments from bulge)
 //   - Arc (standalone)
+//   - Text (from TEXT, MTEXT, and DIMENSION entities)
 //
 // The service is pure functional: no state, no side effects.
 // Every call is independent and idempotent.
@@ -23,6 +24,7 @@ import {
   GeoPolyline,
   GeoPolylineSegment,
   GeoArc,
+  GeoTextEntity,
   GeoPoint,
   Point2D,
   Vec2D,
@@ -72,6 +74,11 @@ function findCADOrigin(entities: Entity[]): Point2D {
       case 'Arc': {
         minX = Math.min(minX, entity.center.x - entity.radius);
         minY = Math.min(minY, entity.center.y - entity.radius);
+        break;
+      }
+      case 'Text': {
+        minX = Math.min(minX, entity.position.x);
+        minY = Math.min(minY, entity.position.y);
         break;
       }
     }
@@ -137,6 +144,12 @@ function normalizeEntities(entities: Entity[], origin: Point2D): Entity[] {
         return {
           ...entity,
           center: { x: entity.center.x - origin.x, y: entity.center.y - origin.y },
+        };
+
+      case 'Text':
+        return {
+          ...entity,
+          position: { x: entity.position.x - origin.x, y: entity.position.y - origin.y },
         };
     }
   });
@@ -244,6 +257,26 @@ function transformArc(entity: Entity, matrix: TransformMatrix, geoOrigin: GeoPoi
   };
 }
 
+/** Transform a Text entity to ENU meters and then to lat/lon */
+function transformText(entity: Entity, matrix: TransformMatrix, geoOrigin: GeoPoint): GeoTextEntity {
+  if (entity.type !== 'Text') throw new Error('Expected Text entity');
+
+  const localPos = applyTransform(entity.position, matrix);
+  const geoHeight = entity.height * matrix.scale;
+  const geoRotation = entity.rotation + matrix.rotation;
+
+  return {
+    id: entity.id,
+    type: 'Text',
+    localPosition: localPos,
+    geoPosition: enuToLatLon(geoOrigin, localPos),
+    text: entity.text,
+    height: geoHeight,
+    rotation: geoRotation,
+    layer: entity.layer,
+  };
+}
+
 // ============================================================
 // Main pipeline
 // ============================================================
@@ -345,6 +378,18 @@ export function georeferenceCAD(
           ...entity,
           center: { x: geo.localCenter.x, y: geo.localCenter.y },
           radius: geo.radius,
+        });
+        break;
+      }
+
+      case 'Text': {
+        const geo = transformText(entity, matrix, geoA);
+        geoEntities.push(geo);
+        localEntities.push({
+          ...entity,
+          position: { x: geo.localPosition.x, y: geo.localPosition.y },
+          height: geo.height,
+          rotation: geo.rotation,
         });
         break;
       }
