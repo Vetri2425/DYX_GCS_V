@@ -838,6 +838,28 @@ const MissionMapBase: React.FC<Props> = ({
     // Calculate rover status based on armed state and RTK fix type
     const status = armed ? 'armed' : (rtkFixType >= 5 ? 'rtk' : 'disarmed');
 
+    const headingLineUpdate = heading !== null ? `
+          const distance = 8;
+          const earthRadius = 6371000;
+          const headingRad = (${heading || 0} * Math.PI) / 180;
+          const latRad = (${roverLat} * Math.PI) / 180;
+          const lonRad = (${roverLon} * Math.PI) / 180;
+          const newLatRad = Math.asin(
+            Math.sin(latRad) * Math.cos(distance / earthRadius) +
+            Math.cos(latRad) * Math.sin(distance / earthRadius) * Math.cos(headingRad)
+          );
+          const newLonRad = lonRad + Math.atan2(
+            Math.sin(headingRad) * Math.sin(distance / earthRadius) * Math.cos(latRad),
+            Math.cos(distance / earthRadius) - Math.sin(latRad) * Math.sin(newLatRad)
+          );
+          const endLat = (newLatRad * 180) / Math.PI;
+          const endLon = (newLonRad * 180) / Math.PI;
+          map.getSource('heading-line')?.setData({
+            type: 'Feature',
+            geometry: { type: 'LineString', coordinates: [[${roverLon}, ${roverLat}], [endLon, endLat]] }
+          });
+        ` : '';
+
     const updateScript = `
       (function() {
         try {
@@ -861,31 +883,7 @@ const MissionMapBase: React.FC<Props> = ({
           }
 
           // Update heading line
-          ${heading !== null ? \`
-          const distance = 8; // Short heading indicator
-          const earthRadius = 6371000;
-          const headingRad = (\${heading || 0} * Math.PI) / 180;
-          const latRad = (\${roverLat} * Math.PI) / 180;
-          const lonRad = (\${roverLon} * Math.PI) / 180;
-
-          const newLatRad = Math.asin(
-            Math.sin(latRad) * Math.cos(distance / earthRadius) +
-            Math.cos(latRad) * Math.sin(distance / earthRadius) * Math.cos(headingRad)
-          );
-
-          const newLonRad = lonRad + Math.atan2(
-            Math.sin(headingRad) * Math.sin(distance / earthRadius) * Math.cos(latRad),
-            Math.cos(distance / earthRadius) - Math.sin(latRad) * Math.sin(newLatRad)
-          );
-
-          const endLat = (newLatRad * 180) / Math.PI;
-          const endLon = (newLonRad * 180) / Math.PI;
-
-          map.getSource('heading-line')?.setData({
-            type: 'Feature',
-            geometry: { type: 'LineString', coordinates: [[\${roverLon}, \${roverLat}], [endLon, endLat]] }
-          });
-          \` : ''}
+          ${headingLineUpdate}
         } catch (e) {
           console.error('Map update error:', e);
         }

@@ -8,8 +8,11 @@ import { useRover } from '../context/RoverContext';
 import { PathSequenceSidebar } from '../components/pathplan/PathSequenceSidebar';
 import MissionOpsPanel from '../components/pathplan/MissionOpsPanel';
 import { MissionStatistics } from '../components/pathplan/MissionStatistics';
+import { RobotPositionPanel } from '../components/pathplan/RobotPositionPanel';
 import { PathPlanMap } from '../components/pathplan/PathPlanMap';
 import { DrawingToolsPanel } from '../components/pathplan/DrawingToolsPanel';
+import { LayerControlsPanel } from '../components/pathplan/LayerControlsPanel';
+import { EditWaypointDialog } from '../components/pathplan/EditWaypointDialog';
 import { CircleGeneratorDialog } from '../components/pathplan/CircleGeneratorDialog';
 import { SurveyGridDialog } from '../components/pathplan/SurveyGridDialog';
 import { TextAnnotationDialog } from '../components/pathplan/TextAnnotationDialog';
@@ -22,6 +25,8 @@ import { TemplateManagerDialog } from '../components/pathplan/TemplateManagerDia
 import { detectCorners, generateCornerExtensionWaypoints, DEFAULT_EXTENSION_OPTIONS, CornerExtensionOptions } from '../utils/cornerExtension';
 import { ManualMapConnection } from '../components/pathplan/ManualMapConnection';
 import { ManualConnectionChoice } from '../components/pathplan/ManualConnectionChoice';
+import { DraggableCard } from '../components/shared/DraggableCard';
+import { GestureDetector } from 'react-native-gesture-handler';
 import { ManualControlPanel } from '../components/pathplan/ManualControlPanel';
 import { FailsafeModeSelector } from '../components/pathplan/FailsafeModeSelector';
 import { FailsafeStrictPopup } from '../components/pathplan/FailsafeStrictPopup';
@@ -67,14 +72,84 @@ const PreviewRow = memo(({ item }: { item: PathPlanWaypoint }) => (
   </View>
 ));
 
+// ─── Waypoints table header — also doubles as the DraggableCard drag handle ──
+const BottomTableHeader = memo(({
+  totalPoints,
+  totalDistance,
+  isExpanded,
+  onToggleExpand,
+  onClose,
+  dragGesture,
+  isDraggingActive,
+}: {
+  totalPoints: number;
+  totalDistance: number;
+  isExpanded: boolean;
+  onToggleExpand: () => void;
+  onClose?: () => void;
+  dragGesture?: any;
+  isDraggingActive?: boolean;
+}) => (
+  <GestureDetector gesture={dragGesture}>
+    <View style={styles.bottomTableHeaderWrapper}>
+      <TouchableOpacity
+        style={styles.bottomTableHeader}
+        activeOpacity={0.8}
+        onPress={onToggleExpand}
+      >
+        <View style={styles.bottomHeaderLeft}>
+          <MaterialCommunityIcons name="vector-polyline" size={16} color="#67E8F9" />
+          <Text style={styles.bottomHeaderTitle}>MISSION POINTS ({totalPoints})</Text>
+          <View style={styles.ptsBadge}>
+            <Text style={styles.ptsBadgeText}>{totalPoints} PTS</Text>
+          </View>
+        </View>
+        <View style={styles.bottomHeaderRight}>
+          <Text style={styles.bottomHeaderDistanceLabel}>TOTAL DISTANCE</Text>
+          <Text style={styles.bottomHeaderDistanceValue}>{totalDistance.toFixed(2)} m</Text>
+          <MaterialCommunityIcons
+            name={isExpanded ? 'chevron-down' : 'chevron-up'}
+            size={20}
+            color="#94A3B8"
+            style={{ marginLeft: 8 }}
+          />
+          {onClose && (
+            <TouchableOpacity style={styles.bottomTableCloseBtn} onPress={onClose} activeOpacity={0.7}>
+              <MaterialCommunityIcons name="close" size={14} color="#94A3B8" />
+            </TouchableOpacity>
+          )}
+        </View>
+      </TouchableOpacity>
+    </View>
+  </GestureDetector>
+));
+
 // Toggle debug logging for this screen
 const DEBUG_LOG = true;
 
 interface PathPlanScreenProps {
   isVisible?: boolean;
+  isDrawingToolsVisible?: boolean;
+  setIsDrawingToolsVisible?: (val: boolean) => void;
+  isMissionOpsVisible?: boolean;
+  setIsMissionOpsVisible?: (val: boolean) => void;
+  isStatisticsVisible?: boolean;
+  setIsStatisticsVisible?: (val: boolean) => void;
+  isBottomTableVisible?: boolean;
+  setIsBottomTableVisible?: (val: boolean) => void;
 }
 
-export default function PathPlanScreen({ isVisible = true }: PathPlanScreenProps) {
+export default function PathPlanScreen({
+  isVisible = true,
+  isDrawingToolsVisible: propIsDrawingToolsVisible,
+  setIsDrawingToolsVisible: propSetIsDrawingToolsVisible,
+  isMissionOpsVisible: propIsMissionOpsVisible,
+  setIsMissionOpsVisible: propSetIsMissionOpsVisible,
+  isStatisticsVisible: propIsStatisticsVisible,
+  setIsStatisticsVisible: propSetIsStatisticsVisible,
+  isBottomTableVisible: propIsBottomTableVisible,
+  setIsBottomTableVisible: propSetIsBottomTableVisible,
+}: PathPlanScreenProps) {
   const {
     telemetry,
     roverPosition,
@@ -255,6 +330,39 @@ export default function PathPlanScreen({ isVisible = true }: PathPlanScreenProps
   const { undo, redo, canUndo, canRedo, recordAndApply } = useWaypointHistory(waypoints, updateWaypoints);
 
   const [selectedWaypoint, setSelectedWaypoint] = useState<number | null>(null);
+  const [editingWaypoint, setEditingWaypoint] = useState<PathPlanWaypoint | null>(null);
+  const [showEditDialog, setShowEditDialog] = useState(false);
+  const [isBottomTableExpanded, setIsBottomTableExpanded] = useState(false);
+  const [mapZoomTrigger, setMapZoomTrigger] = useState<{ type: 'in' | 'out'; timestamp: number } | null>(null);
+  type ActivePanel = 'settings' | 'widget' | null;
+  const [activePanel, setActivePanel] = useState<ActivePanel>(null);
+  const isVisMenuOpen    = activePanel === 'settings';
+  const isWidgetMenuOpen = activePanel === 'widget';
+  // Setters kept for compatibility with PathPlanMap which receives them as props
+  const setIsVisMenuOpen    = (v: boolean) => setActivePanel(v ? 'settings' : null);
+  const setIsWidgetMenuOpen = (v: boolean) => setActivePanel(v ? 'widget'   : null);
+  // Measured (not guessed) heights of the Mission Ops, Mission Statistics, and Robot Position cards, so
+  // the cards stacked below each can be positioned without a hardcoded gap going stale.
+  const [opsPanelHeight, setOpsPanelHeight] = useState(0);
+  const [statsPanelHeight, setStatsPanelHeight] = useState(0);
+  const [robotPanelHeight, setRobotPanelHeight] = useState(0);
+  const [localIsDrawingToolsVisible, setLocalIsDrawingToolsVisible] = useState(true);
+  const isDrawingToolsVisible = propIsDrawingToolsVisible !== undefined ? propIsDrawingToolsVisible : localIsDrawingToolsVisible;
+  const setIsDrawingToolsVisible = propSetIsDrawingToolsVisible || setLocalIsDrawingToolsVisible;
+
+  const [localIsMissionOpsVisible, setLocalIsMissionOpsVisible] = useState(true);
+  const isMissionOpsVisible = propIsMissionOpsVisible !== undefined ? propIsMissionOpsVisible : localIsMissionOpsVisible;
+  const setIsMissionOpsVisible = propSetIsMissionOpsVisible || setLocalIsMissionOpsVisible;
+
+  const [localIsStatisticsVisible, setLocalIsStatisticsVisible] = useState(true);
+  const isStatisticsVisible = propIsStatisticsVisible !== undefined ? propIsStatisticsVisible : localIsStatisticsVisible;
+  const setIsStatisticsVisible = propSetIsStatisticsVisible || setLocalIsStatisticsVisible;
+
+  const [localIsBottomTableVisible, setLocalIsBottomTableVisible] = useState(true);
+  const isBottomTableVisible = propIsBottomTableVisible !== undefined ? propIsBottomTableVisible : localIsBottomTableVisible;
+  const setIsBottomTableVisible = propSetIsBottomTableVisible || setLocalIsBottomTableVisible;
+
+  const [isRobotPositionVisible, setIsRobotPositionVisible] = useState(true);
 
   // GPS Failsafe state
   const [showFailsafeModeSelector, setShowFailsafeModeSelector] = useState(false);
@@ -381,10 +489,9 @@ export default function PathPlanScreen({ isVisible = true }: PathPlanScreenProps
   useEffect(() => {
     const loadPersistedState = async () => {
       try {
-        const [savedHomePosition, savedDrawingMode, savedActiveTool, savedUIState, savedMapVisualization] = await Promise.all([
+        const [savedHomePosition, savedDrawingMode, savedUIState, savedMapVisualization] = await Promise.all([
           PersistentStorage.loadHomePosition(),
           PersistentStorage.loadDrawingMode(),
-          PersistentStorage.loadActiveTool(),
           PersistentStorage.loadPathPlanUIState(),
           PersistentStorage.loadMapVisualization(),
         ]);
@@ -397,11 +504,6 @@ export default function PathPlanScreen({ isVisible = true }: PathPlanScreenProps
         if (savedDrawingMode) {
           setIsDrawingMode(savedDrawingMode);
           console.log('[PathPlanScreen] 📂 Restored drawing mode');
-        }
-
-        if (savedActiveTool) {
-          setActiveDrawingTool(savedActiveTool);
-          console.log('[PathPlanScreen] 📂 Restored active tool');
         }
 
         // Restore UI state
@@ -1964,6 +2066,115 @@ export default function PathPlanScreen({ isVisible = true }: PathPlanScreenProps
     );
   };
 
+  const renderBottomWaypointTable = () => {
+    const totalDistance = waypoints.reduce((sum, wp) => sum + (wp.distance || 0), 0);
+    const totalPoints = waypoints.length;
+
+    return (
+      <DraggableCard
+        style={styles.floatingBottomTableContainer}
+        handleType="custom"
+      >
+        <BottomTableHeader
+          totalPoints={totalPoints}
+          totalDistance={totalDistance}
+          isExpanded={isBottomTableExpanded}
+          onToggleExpand={() => setIsBottomTableExpanded(!isBottomTableExpanded)}
+          onClose={() => setIsBottomTableVisible(false)}
+        />
+
+        {/* Table Content (only shown if expanded) */}
+        {isBottomTableExpanded && (
+          <View style={styles.bottomTableContent}>
+            {/* Columns Headers */}
+            <View style={styles.bottomTableColHeaderRow}>
+              <Text style={[styles.colHeaderCell, { width: 50 }]}>SEQ</Text>
+              <Text style={[styles.colHeaderCell, { width: 100 }]}>TYPE</Text>
+              <Text style={[styles.colHeaderCell, { flex: 1.5 }]}>LATITUDE</Text>
+              <Text style={[styles.colHeaderCell, { flex: 1.5 }]}>LONGITUDE</Text>
+              <Text style={[styles.colHeaderCell, { width: 120 }]}>ALTITUDE (m)</Text>
+              <Text style={[styles.colHeaderCell, { width: 120 }]}>DISTANCE (m)</Text>
+              <Text style={[styles.colHeaderCell, { width: 100, textAlign: 'center' }]}>ACTION</Text>
+            </View>
+
+            {/* Rows List */}
+            <ScrollView style={styles.bottomTableRowsScroll} contentContainerStyle={{ paddingBottom: 8 }}>
+              {waypoints.length === 0 ? (
+                <View style={styles.emptyTableState}>
+                  <Text style={styles.emptyTableText}>No points plotted. Use drawing tools on the map to add points.</Text>
+                </View>
+              ) : (
+                waypoints.map((wp, index) => {
+                  let badgeColor = '#EF4444'; // Red
+                  if (index === 0) badgeColor = '#10B981'; // Green
+                  else if (index === 1 || index === 2) badgeColor = '#F59E0B'; // Orange
+
+                  const distanceText = index === 0 ? '—' : (wp.distance ? wp.distance.toFixed(2) : '0.00');
+
+                  return (
+                    <View key={`wp-row-${wp.id}-${index}`} style={styles.bottomTableRow}>
+                      {/* SEQ badge */}
+                      <View style={{ width: 50 }}>
+                        <View style={[styles.seqBadge, { backgroundColor: badgeColor }]}>
+                          <Text style={styles.seqBadgeText}>{index + 1}</Text>
+                        </View>
+                      </View>
+
+                      {/* TYPE */}
+                      <View style={{ width: 100, flexDirection: 'row', alignItems: 'center' }}>
+                        <View style={styles.typeIndicatorDot} />
+                        <Text style={styles.typeLabel}>Point</Text>
+                      </View>
+
+                      {/* LATITUDE */}
+                      <Text style={[styles.rowCellText, { flex: 1.5, fontFamily: 'monospace', fontSize: 11 }]}>
+                        {wp.lat.toFixed(8)}
+                      </Text>
+
+                      {/* LONGITUDE */}
+                      <Text style={[styles.rowCellText, { flex: 1.5, fontFamily: 'monospace', fontSize: 11 }]}>
+                        {wp.lon.toFixed(8)}
+                      </Text>
+
+                      {/* ALTITUDE */}
+                      <Text style={[styles.rowCellText, { width: 120, fontSize: 11 }]}>
+                        {(wp.alt || 50.0).toFixed(2)}
+                      </Text>
+
+                      {/* DISTANCE */}
+                      <Text style={[styles.rowCellText, { width: 120, fontSize: 11 }]}>
+                        {distanceText}
+                      </Text>
+
+                      {/* ACTIONS */}
+                      <View style={{ width: 100, flexDirection: 'row', justifyContent: 'center', gap: 16 }}>
+                        <TouchableOpacity
+                          onPress={() => {
+                            setEditingWaypoint(wp);
+                            setShowEditDialog(true);
+                          }}
+                          activeOpacity={0.7}
+                        >
+                          <MaterialCommunityIcons name="pencil" size={16} color="#3B82F6" />
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          onPress={() => handleDeleteWaypoint(wp.id)}
+                          activeOpacity={0.7}
+                        >
+                          <MaterialCommunityIcons name="trash-can" size={16} color="#EF4444" />
+                        </TouchableOpacity>
+                      </View>
+                    </View>
+                  );
+                })
+              )}
+            </ScrollView>
+          </View>
+        )}
+      </DraggableCard>
+    );
+  };
+
   return (
     <SafeAreaView style={styles.container}>
       <StatusBar backgroundColor={colors.headerBlue} barStyle="light-content" />
@@ -1984,7 +2195,16 @@ export default function PathPlanScreen({ isVisible = true }: PathPlanScreenProps
               activeDrawingTool={showPrecisePathDialog ? null : activeDrawingTool}
               onDrawingComplete={showPrecisePathDialog ? undefined : handleDrawingComplete}
               isDrawingMode={false}
-              onToggleFullscreen={toggleMapFullscreen}
+              isDrawingToolsVisible={isDrawingToolsVisible}
+              setIsDrawingToolsVisible={setIsDrawingToolsVisible}
+              isMissionOpsVisible={isMissionOpsVisible}
+              setIsMissionOpsVisible={setIsMissionOpsVisible}
+              isStatisticsVisible={isStatisticsVisible}
+              setIsStatisticsVisible={setIsStatisticsVisible}
+              isBottomTableVisible={isBottomTableVisible}
+              setIsBottomTableVisible={setIsBottomTableVisible}
+              isRobotPositionVisible={isRobotPositionVisible}
+              setIsRobotPositionVisible={setIsRobotPositionVisible}
               isManualConnectionMode={isConnectingPath}
               manualConnections={manualPathConnections}
               visualization={mapVisualization}
@@ -1994,13 +2214,74 @@ export default function PathPlanScreen({ isVisible = true }: PathPlanScreenProps
               onMeasureClear={() => { setMeasurePoints([]); setMeasureResult(null); }}
               onMeasureWaypointSelect={handleMeasureWaypointSelect}
               isVisible={isVisible}
+              zoomTrigger={mapZoomTrigger}
+              isVisMenuOpen={isVisMenuOpen}
+              setIsVisMenuOpen={setIsVisMenuOpen}
+              isWidgetMenuOpen={isWidgetMenuOpen}
+              setIsWidgetMenuOpen={setIsWidgetMenuOpen}
+              onDismissPanel={() => setActivePanel(null)}
             />
           </View>
         ) : (
           <>
-            {/* Left Sidebar - 25% width */}
-            <View style={styles.leftPanel}>
-              <View style={{ marginBottom: 12 }}>
+            {/* Absolute Map Background */}
+            <View style={styles.absoluteMapContainer}>
+              <PathPlanMap
+                waypoints={displayedWaypoints}
+                onMapPress={showPrecisePathDialog ? undefined : handleMapPress}
+                onWaypointDrag={showPrecisePathDialog ? undefined : handleWaypointDrag}
+                onWaypointClick={showPrecisePathDialog ? undefined : handleWaypointClick}
+                onAddWaypoints={showPrecisePathDialog ? undefined : handleAddWaypoints}
+                roverPosition={roverPosition ? { lat: roverPosition.lat, lon: roverPosition.lng } : { lat: 0, lon: 0 }}
+                heading={telemetry.attitude?.yaw_deg ?? null}
+                activeDrawingTool={activeDrawingTool}
+                onDrawingComplete={handleDrawingComplete}
+                isDrawingMode={false}
+                isDrawingToolsVisible={isDrawingToolsVisible}
+                setIsDrawingToolsVisible={setIsDrawingToolsVisible}
+                isMissionOpsVisible={isMissionOpsVisible}
+                setIsMissionOpsVisible={setIsMissionOpsVisible}
+                isStatisticsVisible={isStatisticsVisible}
+                setIsStatisticsVisible={setIsStatisticsVisible}
+                isBottomTableVisible={isBottomTableVisible}
+                setIsBottomTableVisible={setIsBottomTableVisible}
+                isRobotPositionVisible={isRobotPositionVisible}
+                setIsRobotPositionVisible={setIsRobotPositionVisible}
+                isManualConnectionMode={isConnectingPath}
+                manualConnections={manualPathConnections}
+                visualization={mapVisualization}
+                onVisualizationToggle={handleMapVisualizationToggle}
+                measurePoints={measurePoints}
+                measureResult={measureResult}
+                onMeasureClear={() => { setMeasurePoints([]); setMeasureResult(null); }}
+                onMeasureWaypointSelect={handleMeasureWaypointSelect}
+                isVisible={isVisible}
+                zoomTrigger={mapZoomTrigger}
+                isVisMenuOpen={isVisMenuOpen}
+                setIsVisMenuOpen={setIsVisMenuOpen}
+                isWidgetMenuOpen={isWidgetMenuOpen}
+                setIsWidgetMenuOpen={setIsWidgetMenuOpen}
+                onDismissPanel={() => setActivePanel(null)}
+              />
+            </View>
+
+            {/* Layer Settings / Widget Controller — standalone, always visible so it can re-enable Drawing Tools */}
+            <View style={styles.floatingLayerControlsWrapper}>
+              <LayerControlsPanel
+                onToggleSettings={() =>
+                  setActivePanel(prev => (prev === 'settings' ? null : 'settings'))
+                }
+                onToggleWidget={() =>
+                  setActivePanel(prev => (prev === 'widget' ? null : 'widget'))
+                }
+                isSettingsOpen={isVisMenuOpen}
+                isWidgetOpen={isWidgetMenuOpen}
+              />
+            </View>
+
+            {/* Left Capsule Toolbar */}
+            {isDrawingToolsVisible && (
+              <DraggableCard style={styles.floatingDrawingToolsWrapper} handleType="custom">
                 <DrawingToolsPanel
                   activeDrawingTool={activeDrawingTool}
                   onToolSelect={setActiveDrawingTool}
@@ -2008,7 +2289,7 @@ export default function PathPlanScreen({ isVisible = true }: PathPlanScreenProps
                   onShowTextTool={() => setShowTextDialog(true)}
                   onShowCADDrawing={() => setShowCADCanvas(true)}
                   onShowManualConnection={() => {
-                    setActiveDrawingTool(null); // Clear drawing tool to prevent map from creating new waypoints
+                    setActiveDrawingTool(null);
                     setShowManualConnectionCanvas(true);
                   }}
                   onShowReverseTool={() => setShowReverseDialog(true)}
@@ -2019,6 +2300,16 @@ export default function PathPlanScreen({ isVisible = true }: PathPlanScreenProps
                   canRedo={canRedo}
                   onUndo={undo}
                   onRedo={redo}
+                  onClearAll={() => {
+                    Alert.alert(
+                      'Clear All Marking Points',
+                      `Are you sure you want to delete all ${waypoints.length} marking points?`,
+                      [
+                        { text: 'Cancel', style: 'cancel' },
+                        { text: 'Clear All', style: 'destructive', onPress: () => updateWaypoints([]) }
+                      ]
+                    );
+                  }}
                   isCollapsed={isDrawingToolsCollapsed}
                   onToggleCollapse={() => setIsDrawingToolsCollapsed(!isDrawingToolsCollapsed)}
                   isPrecisePathActive={showPrecisePathDialog}
@@ -2027,242 +2318,72 @@ export default function PathPlanScreen({ isVisible = true }: PathPlanScreenProps
                   onPrecisePathApply={handlePrecisePathApply}
                   onPrecisePathClose={handlePrecisePathClose}
                   onPrecisePathActivate={() => setShowPrecisePathDialog(true)}
+                  onClose={() => setIsDrawingToolsVisible(false)}
                 />
-              </View>
-              {/* PathSequenceSidebar - Always shown; collapses the DrawingToolsPanel to free up vertical space */}
-              <PathSequenceSidebar
-                waypoints={isConnectingPath && manualPathConnections.length > 0
-                  ? [...new Set(manualPathConnections)].map(id => waypoints.find(wp => wp.id === id)).filter(Boolean) as PathPlanWaypoint[]
-                  : waypoints
-                }
-                selectedWaypoint={selectedWaypoint}
-                onSelectWaypoint={setSelectedWaypoint}
-                onDeleteWaypoint={handleDeleteWaypoint}
-                onUpdateWaypoints={handleUpdateWaypoints}
-                onToggleMark={handleToggleMark}
-                globalServoEnabled={globalServoEnabled}
-                missionName={missionName}
-                onMissionNameChange={setMissionName}
-                missionMode={missionMode}
-                roverPosition={roverPosition ? { lat: roverPosition.lat, lon: roverPosition.lng } : null}
-              />
-            </View>
-
-            {/* Center Map - flex: 1 */}
-            <View style={styles.centerPanel}>
-              <View style={styles.mapWrapper}>
-                <PathPlanMap
-                  waypoints={displayedWaypoints}
-                  onMapPress={showPrecisePathDialog ? undefined : handleMapPress}
-                  onWaypointDrag={showPrecisePathDialog ? undefined : handleWaypointDrag}
-                  onWaypointClick={showPrecisePathDialog ? undefined : handleWaypointClick}
-                  onAddWaypoints={showPrecisePathDialog ? undefined : handleAddWaypoints}
-                  roverPosition={roverPosition ? { lat: roverPosition.lat, lon: roverPosition.lng } : { lat: 0, lon: 0 }}
-                  heading={telemetry.attitude?.yaw_deg ?? null}
-                  activeDrawingTool={activeDrawingTool}
-                  onDrawingComplete={handleDrawingComplete}
-                  isDrawingMode={false}
-                  onToggleFullscreen={toggleMapFullscreen}
-                  isManualConnectionMode={isConnectingPath}
-                  manualConnections={manualPathConnections}
-                  visualization={mapVisualization}
-                  onVisualizationToggle={handleMapVisualizationToggle}
-                  measurePoints={measurePoints}
-                  measureResult={measureResult}
-                  onMeasureClear={() => { setMeasurePoints([]); setMeasureResult(null); }}
-                  onMeasureWaypointSelect={handleMeasureWaypointSelect}
-                  isVisible={isVisible}
-                />
-              </View>
-            </View>
-
-            {/* Manual Connection Choice Dialog */}
-            <ManualConnectionChoice
-              visible={showConnectionChoice}
-              onSelectCanvas={() => {
-                setShowConnectionChoice(false);
-                setIsConnectingPath(true);
-                setUseMapForConnection(false);
-              }}
-              onSelectMap={() => {
-                setShowConnectionChoice(false);
-                setIsConnectingPath(true);
-                setUseMapForConnection(true);
-              }}
-              onCancel={() => {
-                setShowConnectionChoice(false);
-                setManualPathConnections([]);
-              }}
-            />
-
-            {/* Manual Connection Canvas from Drawing Tools Button */}
-            <ManualPathConnectionCanvas
-              visible={showManualConnectionCanvas}
-              waypoints={waypoints}
-              roverPosition={telemetry.global?.lat ? {
-                lat: telemetry.global.lat,
-                lng: telemetry.global.lon,
-                heading: telemetry.attitude?.yaw_deg
-              } : null}
-              onConnectionsComplete={(connectedIds) => {
-                // Remove duplicates to prevent React key errors
-                const uniqueConnectedIds = [...new Set(connectedIds)];
-                setManualPathConnections(uniqueConnectedIds);
-
-                // ONLY keep connected waypoints in order (remove unconnected ones)
-                const connectedWaypoints = uniqueConnectedIds.map(id =>
-                  waypoints.find(wp => wp.id === id)
-                ).filter(Boolean) as PathPlanWaypoint[];
-
-                // Recalculate distances between connected waypoints
-                const waypointsWithDistances = connectedWaypoints.map((wp, idx) => {
-                  if (idx === 0) {
-                    return { ...wp, distance: 0 };
-                  }
-                  const prevWp = connectedWaypoints[idx - 1];
-                  const dist = vincentyDistance(
-                    { lat: prevWp.lat, lon: prevWp.lon },
-                    { lat: wp.lat, lon: wp.lon }
-                  );
-                  return { ...wp, distance: dist };
-                });
-
-                // Update waypoints to ONLY show connected ones with recalculated distances
-                recordAndApply(waypointsWithDistances);
-                setShowManualConnectionCanvas(false);
-                Alert.alert('✓ Path Created', `Path created with ${uniqueConnectedIds.length} marking points. Unconnected marking points removed.`);
-              }}
-              onCancel={() => {
-                setShowManualConnectionCanvas(false);
-                setActiveDrawingTool(null);
-              }}
-              onDeleteWaypoints={(deletedIds) => {
-                const remaining = waypoints.filter(wp => !deletedIds.includes(wp.id));
-                recordAndApply(remaining);
-              }}
-            />
-
-            {/* Manual Path Connection Drawing Canvas */}
-            {isConnectingPath && !useMapForConnection && (
-              <ManualPathConnectionCanvas
-                visible={isConnectingPath}
-                waypoints={waypoints}
-                roverPosition={telemetry.global?.lat ? {
-                  lat: telemetry.global.lat,
-                  lng: telemetry.global.lon,
-                  heading: telemetry.attitude?.yaw_deg
-                } : null}
-                onConnectionsComplete={(connectedIds) => {
-                  // Remove duplicates to prevent React key errors
-                  const uniqueConnectedIds = [...new Set(connectedIds)];
-                  setManualPathConnections(uniqueConnectedIds);
-
-                  // ONLY keep connected waypoints in order (remove unconnected ones)
-                  const connectedWaypoints = uniqueConnectedIds.map(id =>
-                    waypoints.find(wp => wp.id === id)
-                  ).filter(Boolean) as PathPlanWaypoint[];
-
-                  // Recalculate distances between connected waypoints
-                  const waypointsWithDistances = connectedWaypoints.map((wp, idx) => {
-                    if (idx === 0) {
-                      return { ...wp, distance: 0 };
-                    }
-                    const prevWp = connectedWaypoints[idx - 1];
-                    const dist = vincentyDistance(
-                      { lat: prevWp.lat, lon: prevWp.lon },
-                      { lat: wp.lat, lon: wp.lon }
-                    );
-                    return { ...wp, distance: dist };
-                  });
-
-                  // Update waypoints to ONLY show connected ones with recalculated distances
-                  recordAndApply(waypointsWithDistances);
-                  setIsConnectingPath(false);
-                  Alert.alert('✓ Path Created', `Path created with ${uniqueConnectedIds.length} marking points. Unconnected marking points removed.`);
-                }}
-                onCancel={() => {
-                  setIsConnectingPath(false);
-                  setManualPathConnections([]);
-                }}
-                onDeleteWaypoints={(deletedIds) => {
-                  const remaining = waypoints.filter(wp => !deletedIds.includes(wp.id));
-                  recordAndApply(remaining);
-                }}
-              />
+              </DraggableCard>
             )}
 
-            {/* Manual Map Connection */}
-            {isConnectingPath && useMapForConnection && (
-              <ManualMapConnection
-                visible={true}
-                waypoints={waypoints}
-                roverPosition={telemetry.global?.lat ? {
-                  lat: telemetry.global.lat,
-                  lng: telemetry.global.lon,
-                  heading: telemetry.attitude?.yaw_deg
-                } : null}
-                onConnectionsComplete={(connectedIds) => {
-                  // Remove duplicates to prevent React key errors
-                  const uniqueConnectedIds = [...new Set(connectedIds)];
-                  setManualPathConnections(uniqueConnectedIds);
-
-                  // ONLY keep connected waypoints in order (remove unconnected ones)
-                  const connectedWaypoints = uniqueConnectedIds.map(id =>
-                    waypoints.find(wp => wp.id === id)
-                  ).filter(Boolean) as PathPlanWaypoint[];
-
-                  // Recalculate distances between connected waypoints
-                  const waypointsWithDistances = connectedWaypoints.map((wp, idx) => {
-                    if (idx === 0) {
-                      return { ...wp, distance: 0 };
-                    }
-                    const prev = connectedWaypoints[idx - 1];
-                    const dist = vincentyDistance(
-                      { lat: prev.lat, lon: prev.lon },
-                      { lat: wp.lat, lon: wp.lon }
-                    );
-                    return { ...wp, distance: dist };
-                  });
-
-                  // Update waypoints to ONLY show connected ones with recalculated distances
-                  recordAndApply(waypointsWithDistances);
-                  setIsConnectingPath(false);
-                  setUseMapForConnection(false);
-                  Alert.alert('✓ Path Created', `Path created with ${uniqueConnectedIds.length} marking points. Unconnected marking points removed.`);
-                }}
-                onCancel={() => {
-                  setIsConnectingPath(false);
-                  setUseMapForConnection(false);
-                  setManualPathConnections([]);
-                }}
-              />
-            )}
-
-            {/* Right Sidebar - 25% width, split into ops (top) and stats (bottom) */}
-            <View style={styles.rightPanel}>
-              <View style={styles.opsPanel}>
+            {/* Floating Mission Control Panel */}
+            {isMissionOpsVisible && (
+              <DraggableCard
+                style={styles.floatingOpsPanel}
+                handleType="custom"
+                onLayout={(e: any) => setOpsPanelHeight(e.nativeEvent.layout.height)}
+              >
                 <MissionOpsPanel
                   waypoints={waypoints}
                   roverPosition={roverPosition ? { lat: roverPosition.lat, lon: roverPosition.lng, alt: telemetry.global?.alt_rel ?? 0 } : { lat: 0, lon: 0, alt: 0 }}
-                  onRequestUpload={() => {
-                    // console.log('[PathPlan] onRequestUpload wrapper called');
-                    handleRequestUpload();
-                  }}
+                  onRequestUpload={handleRequestUpload}
                   onLoadMission={handleLoadMissionToController}
                   onManualControlOpen={handleOpenManualControl}
                   onExportMission={handleExportMission}
+                  onClose={() => setIsMissionOpsVisible(false)}
                 />
-              </View>
-              <View style={styles.statsPanel}>
+              </DraggableCard>
+            )}
+
+            {/* Floating Mission Stats Panel — stacked directly below Mission Ops */}
+            {isStatisticsVisible && (
+              <DraggableCard
+                style={[
+                  styles.floatingStatsPanel,
+                  opsPanelHeight > 0 && { top: 76 + opsPanelHeight + 20 },
+                ]}
+                handleType="custom"
+                onLayout={(e: any) => setStatsPanelHeight(e.nativeEvent.layout.height)}
+              >
                 <MissionStatistics
                   waypoints={isConnectingPath && manualPathConnections.length > 0
                     ? manualPathConnections.map(id => waypoints.find(wp => wp.id === id)).filter(Boolean) as PathPlanWaypoint[]
                     : waypoints
                   }
                   roverPosition={roverPosition ? { lat: roverPosition.lat, lon: roverPosition.lng } : null}
+                  onClose={() => setIsStatisticsVisible(false)}
                 />
-              </View>
-            </View>
+              </DraggableCard>
+            )}
+
+            {/* Floating Robot Position Panel — stacked below Mission Stats, same column/width */}
+            {isRobotPositionVisible && (
+              <DraggableCard
+                style={[
+                  styles.floatingRobotPanel,
+                  opsPanelHeight > 0 && { top: 76 + opsPanelHeight + 20 + (isStatisticsVisible && statsPanelHeight > 0 ? statsPanelHeight + 20 : 0) },
+                ]}
+                handleType="custom"
+                onLayout={(e: any) => setRobotPanelHeight(e.nativeEvent.layout.height)}
+              >
+                <RobotPositionPanel
+                  roverPosition={roverPosition ? { lat: roverPosition.lat, lon: roverPosition.lng, alt: telemetry.global?.alt_rel ?? 0 } : null}
+                  heading={telemetry.attitude?.yaw_deg ?? null}
+                  onClose={() => setIsRobotPositionVisible(false)}
+                />
+              </DraggableCard>
+            )}
+
+            {/* Floating Bottom Table */}
+            {isBottomTableVisible && renderBottomWaypointTable()}
+
           </>
         )}
       </View>
@@ -2713,6 +2834,19 @@ export default function PathPlanScreen({ isVisible = true }: PathPlanScreenProps
       {/* ── CAD Georeferencing Mode Overlay ─────────────────── */}
       {isCADMode && renderCADModeUI()}
 
+      {/* Edit Waypoint Dialog */}
+      <EditWaypointDialog
+        visible={showEditDialog}
+        waypoint={editingWaypoint}
+        onClose={() => {
+          setShowEditDialog(false);
+          setEditingWaypoint(null);
+        }}
+        onSave={(updatedWp) => {
+          const updatedList = waypoints.map(wp => wp.id === updatedWp.id ? updatedWp : wp);
+          recordAndApply(updatedList);
+        }}
+      />
     </SafeAreaView>
   );
 
@@ -2723,51 +2857,200 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: colors.primary,
   },
+  floatingLayerControlsWrapper: {
+    position: 'absolute',
+    left: 16,
+    top: 76,
+    zIndex: 1000,
+    elevation: 5,
+  },
+  floatingDrawingToolsWrapper: {
+    position: 'absolute',
+    left: 16,
+    top: 221,
+    zIndex: 1000,
+    elevation: 5,
+  },
+  floatingBottomTableContainer: {
+    position: 'absolute',
+    bottom: 16,
+    // left clears the compass overlay (left:16, width:60 → right edge at 76) with a 16px gap
+    left: 92,
+    // right clears the bottom map-controls bar (right:16, width:320 → left edge at right:336) with a 16px gap
+    right: 352,
+    zIndex: 1000,
+    backgroundColor: '#07111be6',
+    borderWidth: 1,
+    borderColor: 'rgba(103, 232, 249, 0.15)',
+    borderRadius: 12,
+    overflow: 'hidden',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.35,
+    shadowRadius: 8,
+    elevation: 6,
+  },
+  bottomTableHeaderWrapper: {
+    borderTopLeftRadius: 11,
+    borderTopRightRadius: 11,
+    overflow: 'hidden',
+  },
+  bottomTableHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    backgroundColor: '#08101a',
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(103, 232, 249, 0.1)',
+    height: 60,
+  },
+  bottomTableCloseBtn: {
+    width: 20,
+    height: 20,
+    borderRadius: 4,
+    backgroundColor: 'rgba(255,255,255,0.03)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginLeft: 8,
+  },
+  bottomHeaderLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  bottomHeaderTitle: {
+    color: '#E5F1FF',
+    fontSize: 12,
+    fontWeight: '700',
+    letterSpacing: 0.5,
+  },
+  ptsBadge: {
+    backgroundColor: 'rgba(103, 232, 249, 0.15)',
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 10,
+  },
+  ptsBadgeText: {
+    color: '#67E8F9',
+    fontSize: 9,
+    fontWeight: '700',
+  },
+  bottomHeaderRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  bottomHeaderDistanceLabel: {
+    color: '#94A3B8',
+    fontSize: 9,
+    fontWeight: '600',
+    marginRight: 6,
+  },
+  bottomHeaderDistanceValue: {
+    color: '#10B981',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  bottomTableContent: {
+    height: 180,
+  },
+  bottomTableColHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(255, 255, 255, 0.05)',
+    backgroundColor: 'rgba(0, 0, 0, 0.15)',
+  },
+  colHeaderCell: {
+    color: '#94A3B8',
+    fontSize: 9,
+    fontWeight: '700',
+    letterSpacing: 0.5,
+  },
+  bottomTableRowsScroll: {
+    flex: 1,
+  },
+  bottomTableRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(255, 255, 255, 0.03)',
+  },
+  seqBadge: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  seqBadgeText: {
+    color: '#FFFFFF',
+    fontSize: 10,
+    fontWeight: '700',
+  },
+  typeIndicatorDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: '#3B82F6',
+    marginRight: 6,
+  },
+  typeLabel: {
+    color: '#E5F1FF',
+    fontSize: 11,
+  },
+  rowCellText: {
+    color: '#E5F1FF',
+    fontSize: 11,
+  },
+  emptyTableState: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 32,
+  },
+  emptyTableText: {
+    color: '#94A3B8',
+    fontSize: 11,
+  },
   mainContent: {
     flex: 1,
-    flexDirection: 'row',
     backgroundColor: colors.primary,
-    paddingTop: 12,
-    gap: 12,
-    paddingHorizontal: 12,
+    position: 'relative',
   },
-  leftPanel: {
-    flex: 0.5,
-    width: '25%',
-    height: '98%',
-    backgroundColor: colors.primary,
+  absoluteMapContainer: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    width: '100%',
+    height: '100%',
   },
-  centerPanel: {
-    flex: 1,
-    height: '98%',
-    backgroundColor: colors.primary,
+  floatingOpsPanel: {
+    position: 'absolute',
+    top: 76,
+    right: 16,
+    width: 320,
+    zIndex: 1000,
   },
-  mapWrapper: {
-    flex: 1,
-    backgroundColor: colors.panelBg,
-    borderRadius: 16,
-    overflow: 'hidden',
-    borderWidth: 1,
-    borderColor: 'rgba(59, 130, 246, 0.25)',
-    shadowColor: '#3B82F6',
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.15,
-    shadowRadius: 12,
-    elevation: 4,
+  floatingRobotPanel: {
+    position: 'absolute',
+    top: 600, // fallback before first measurement; overridden once opsPanelHeight and statsPanelHeight are measured
+    right: 16,
+    width: 320,
+    zIndex: 1000,
   },
-  rightPanel: {
-    width: '25%',
-    height: '99%',
-    backgroundColor: colors.primary,
-  },
-  opsPanel: {
-    flex: 0.46,
-    backgroundColor: colors.primary,
-  },
-  statsPanel: {
-    flex: 0.53,
-    backgroundColor: colors.primary,
-    marginTop: 8,
+  floatingStatsPanel: {
+    position: 'absolute',
+    top: 360,
+    right: 16,
+    width: 320,
+    zIndex: 1000,
   },
   bottomBar: {
     flex: 0.30,

@@ -84,6 +84,11 @@ export default function TabNavigator() {
     };
   }, []);
 
+  const [isDrawingToolsVisible, setIsDrawingToolsVisible] = useState(true);
+  const [isMissionOpsVisible, setIsMissionOpsVisible] = useState(true);
+  const [isStatisticsVisible, setIsStatisticsVisible] = useState(true);
+  const [isBottomTableVisible, setIsBottomTableVisible] = useState(true);
+
   const isMarkingPlanVisible = activeTab === 'Marking Plan';
   const isMissionProgressVisible = activeTab === 'Mission Progress';
 
@@ -106,7 +111,17 @@ export default function TabNavigator() {
       {mountedTabs.has('Marking Plan') && (
         <View style={{ flex: 1, display: isMarkingPlanVisible ? 'flex' : 'none' }}>
           <ErrorBoundary componentName="Marking Plan Screen">
-            <PathPlanScreen isVisible={isMarkingPlanVisible} />
+            <PathPlanScreen 
+              isVisible={isMarkingPlanVisible} 
+              isDrawingToolsVisible={isDrawingToolsVisible}
+              setIsDrawingToolsVisible={setIsDrawingToolsVisible}
+              isMissionOpsVisible={isMissionOpsVisible}
+              setIsMissionOpsVisible={setIsMissionOpsVisible}
+              isStatisticsVisible={isStatisticsVisible}
+              setIsStatisticsVisible={setIsStatisticsVisible}
+              isBottomTableVisible={isBottomTableVisible}
+              setIsBottomTableVisible={setIsBottomTableVisible}
+            />
           </ErrorBoundary>
         </View>
       )}

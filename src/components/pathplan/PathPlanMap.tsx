@@ -1,12 +1,11 @@
 import React, { useState, useRef, useMemo, useEffect } from 'react';
-import { View, StyleSheet, TouchableOpacity, Text, Alert, PanResponder, Animated } from 'react-native';
+import { View, StyleSheet, TouchableOpacity, Text, Alert, PanResponder, Animated, TouchableWithoutFeedback } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { WebView } from 'react-native-webview';
-import { Fontisto } from '@expo/vector-icons';
+import { Fontisto, MaterialCommunityIcons } from '@expo/vector-icons';
 import { colors } from '../../theme/colors';
 import { PathPlanWaypoint, DrawingMode } from '../../types/pathplan';
-import { MapVisualizationControls, MapVisualization } from './MapVisualizationControls';
-import { MAPBOX_JS_URL, MAPBOX_CSS_URL, MAPBOX_ACCESS_TOKEN, MAPBOX_STYLE_SATELLITE } from '../../config/mapboxConfig';
+import { MAPBOX_JS_URL, MAPBOX_CSS_URL, MAPBOX_ACCESS_TOKEN, MAPBOX_STYLE_SATELLITE, MAPBOX_STYLE_DARK } from '../../config/mapboxConfig';
 
 interface Props {
   waypoints: PathPlanWaypoint[];
@@ -29,7 +28,16 @@ interface Props {
     drawingHeight: number;
     waypointSpacing?: number;
   } | null;
-  onToggleFullscreen?: () => void;
+  isDrawingToolsVisible?: boolean;
+  setIsDrawingToolsVisible?: (val: boolean) => void;
+  isMissionOpsVisible?: boolean;
+  setIsMissionOpsVisible?: (val: boolean) => void;
+  isStatisticsVisible?: boolean;
+  setIsStatisticsVisible?: (val: boolean) => void;
+  isBottomTableVisible?: boolean;
+  setIsBottomTableVisible?: (val: boolean) => void;
+  isRobotPositionVisible?: boolean;
+  setIsRobotPositionVisible?: (val: boolean) => void;
   isManualConnectionMode?: boolean;
   manualConnections?: number[];
   manualConnectionMode?: 'tap' | 'drag' | 'pan';
@@ -52,6 +60,12 @@ interface Props {
   onMeasureClear?: () => void;
   onMeasureWaypointSelect?: (id: number) => void;
   isVisible?: boolean;
+  zoomTrigger?: { type: 'in' | 'out'; timestamp: number } | null;
+  isVisMenuOpen?: boolean;
+  setIsVisMenuOpen?: (val: boolean) => void;
+  isWidgetMenuOpen?: boolean;
+  setIsWidgetMenuOpen?: (val: boolean) => void;
+  onDismissPanel?: () => void;
 }
 
 export const PathPlanMap: React.FC<Props> = ({
@@ -70,7 +84,16 @@ export const PathPlanMap: React.FC<Props> = ({
   onDrawingComplete,
   isDrawingMode = false,
   drawSettings = null,
-  onToggleFullscreen,
+  isDrawingToolsVisible = true,
+  setIsDrawingToolsVisible = () => {},
+  isMissionOpsVisible = true,
+  setIsMissionOpsVisible = () => {},
+  isStatisticsVisible = true,
+  setIsStatisticsVisible = () => {},
+  isBottomTableVisible = true,
+  setIsBottomTableVisible = () => {},
+  isRobotPositionVisible = false,
+  setIsRobotPositionVisible = () => {},
   isManualConnectionMode = false,
   manualConnections = [],
   manualConnectionMode = 'tap',
@@ -87,9 +110,16 @@ export const PathPlanMap: React.FC<Props> = ({
   onMeasureClear,
   onMeasureWaypointSelect,
   isVisible = true,
+  zoomTrigger = null,
+  isVisMenuOpen = false,
+  setIsVisMenuOpen = () => {},
+  isWidgetMenuOpen = false,
+  setIsWidgetMenuOpen = () => {},
+  onDismissPanel,
 }) => {
   const webViewRef = useRef<WebView | null>(null);
   const [mapReady, setMapReady] = useState(false);
+  const [mapStyle, setMapStyle] = useState<'satellite' | 'dark'>('satellite');
   const lastUpdateRef = useRef<number>(0);
   const UPDATE_THROTTLE_MS = 100;
 
@@ -107,6 +137,17 @@ export const PathPlanMap: React.FC<Props> = ({
 
   const measureOverlayPosRef = useRef(measureOverlayPos);
   measureOverlayPosRef.current = measureOverlayPos;
+
+  useEffect(() => {
+    if (!zoomTrigger || !webViewRef.current) return;
+    const action = zoomTrigger.type === 'in' ? 'zoomIn' : 'zoomOut';
+    webViewRef.current.injectJavaScript(`
+      if (window.map) {
+        window.map.${action}();
+      }
+      true;
+    `);
+  }, [zoomTrigger]);
 
   useEffect(() => {
     measurePanResponderRef.current = PanResponder.create({
@@ -145,113 +186,6 @@ export const PathPlanMap: React.FC<Props> = ({
     html, body, #map { width: 100%; height: 100%; }
     .mapboxgl-ctrl-attrib, .mapboxgl-ctrl-logo { display: none !important; }
 
-    /* Control Buttons (top-right) */
-    .custom-controls {
-      position: absolute;
-      top: 12px;
-      right: 12px;
-      z-index: 1000;
-      display: flex;
-      flex-direction: column;
-      gap: 8px;
-    }
-
-    .control-btn {
-      width: 40px;
-      height: 40px;
-      background: rgba(13, 42, 75, 0.92);
-      border: 1px solid rgba(59, 130, 246, 0.35);
-      border-radius: 10px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      cursor: pointer;
-      color: rgba(103, 232, 249, 0.9);
-      transition: background 0.15s, border-color 0.15s, box-shadow 0.15s;
-      box-shadow: 0 2px 8px rgba(0,0,0,0.3);
-      padding: 0;
-    }
-    .control-btn:active {
-      background: rgba(59, 130, 246, 0.25);
-      border-color: rgba(59, 130, 246, 0.7);
-      box-shadow: 0 0 12px rgba(59, 130, 246, 0.3);
-    }
-    .control-btn svg { width: 20px; height: 20px; }
-
-    /* Zoom Controls (top-left) */
-    .zoom-controls {
-      position: absolute;
-      top: 12px;
-      left: 12px;
-      z-index: 1000;
-      display: flex;
-      flex-direction: column;
-      gap: 0;
-      border-radius: 10px;
-      overflow: hidden;
-      box-shadow: 0 2px 8px rgba(0,0,0,0.3);
-      border: 1px solid rgba(59, 130, 246, 0.35);
-    }
-
-    .zoom-btn {
-      width: 38px;
-      height: 38px;
-      background: rgba(13, 42, 75, 0.92);
-      border: none;
-      border-bottom: 1px solid rgba(59, 130, 246, 0.2);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      cursor: pointer;
-      font-size: 20px;
-      font-weight: 600;
-      color: rgba(103, 232, 249, 0.9);
-      transition: background 0.15s;
-    }
-    .zoom-btn:last-child { border-bottom: none; }
-    .zoom-btn:active {
-      background: rgba(59, 130, 246, 0.25);
-    }
-
-    /* Position Overlay (bottom-right) */
-    .position-overlay {
-      position: absolute;
-      bottom: 12px;
-      right: 12px;
-      z-index: 1000;
-      background: rgba(13, 42, 75, 0.94);
-      padding: 0;
-      border-radius: 10px;
-      border: 1px solid rgba(59, 130, 246, 0.3);
-      min-width: 160px;
-      font-family: monospace;
-      font-size: 10px;
-      color: white;
-      box-shadow: 0 4px 16px rgba(0,0,0,0.35);
-      overflow: hidden;
-    }
-    .position-accent {
-      height: 3px;
-      background: linear-gradient(90deg, #3B82F6, rgba(103,232,249,0.6));
-      border-radius: 10px 10px 0 0;
-    }
-    .position-inner {
-      padding: 8px 12px 10px;
-    }
-    .position-title {
-      font-size: 9px;
-      font-weight: 700;
-      letter-spacing: 1.2px;
-      margin-bottom: 6px;
-      color: rgba(103, 232, 249, 0.85);
-      text-transform: uppercase;
-    }
-    .position-coord {
-      color: rgba(229, 241, 255, 0.85);
-      font-size: 11px;
-      line-height: 1.5;
-    }
-
     /* Waypoint pulse animation */
     @keyframes wp-pulse {
       0% { transform: scale(1); opacity: 1; }
@@ -285,32 +219,6 @@ export const PathPlanMap: React.FC<Props> = ({
 <body>
   <div id="map"></div>
 
-  <div class="custom-controls">
-    <button class="control-btn" onclick="centerOnRover()" title="Center on Rover">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><line x1="12" y1="2" x2="12" y2="6"/><line x1="12" y1="18" x2="12" y2="22"/><line x1="2" y1="12" x2="6" y2="12"/><line x1="18" y1="12" x2="22" y2="12"/></svg>
-    </button>
-    <button class="control-btn" onclick="fitToMission()" title="Fit Mission">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="5" cy="18" r="2"/><circle cx="12" cy="5" r="2"/><circle cx="19" cy="18" r="2"/><line x1="6.5" y1="16.5" x2="10.5" y2="6.5"/><line x1="13.5" y1="6.5" x2="17.5" y2="16.5"/><line x1="7" y1="18" x2="17" y2="18"/></svg>
-    </button>
-    <button class="control-btn" onclick="toggleFullscreen()" title="Fullscreen">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 3 21 3 21 9"/><polyline points="9 21 3 21 3 15"/><polyline points="21 15 21 21 15 21"/><polyline points="3 9 3 3 9 3"/></svg>
-    </button>
-  </div>
-
-  <div class="zoom-controls">
-    <button class="zoom-btn" onclick="map.zoomIn()">+</button>
-    <button class="zoom-btn" onclick="map.zoomOut()">−</button>
-  </div>
-
-  <div class="position-overlay">
-    <div class="position-accent"></div>
-    <div class="position-inner">
-      <div class="position-title">Robot Position</div>
-      <div class="position-coord" id="rover-lat">Lat: ${roverPosition.lat.toFixed(7)}</div>
-      <div class="position-coord" id="rover-lon">Lon: ${roverPosition.lon.toFixed(7)}</div>
-    </div>
-  </div>
-
   <script>
     mapboxgl.accessToken = '${MAPBOX_ACCESS_TOKEN}';
 
@@ -330,6 +238,7 @@ export const PathPlanMap: React.FC<Props> = ({
       dragRotate: false,
       pitchWithRotate: false,
     });
+    window.map = map;
 
     let roverMarker = null;
     const waypointMarkers = [];
@@ -651,10 +560,12 @@ export const PathPlanMap: React.FC<Props> = ({
         map.flyTo({ center: [roverData.lon, roverData.lat], zoom: 18 });
       }
     }
+    window.centerOnRover = centerOnRover;
 
     function toggleFullscreen() {
       window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'TOGGLE_FULLSCREEN' }));
     }
+    window.toggleFullscreen = toggleFullscreen;
 
     function fitToMission() {
       if (!window.currentWaypoints?.length) return;
@@ -662,6 +573,13 @@ export const PathPlanMap: React.FC<Props> = ({
       window.currentWaypoints.forEach(wp => b.extend([wp.lon, wp.lat]));
       map.fitBounds(b, { padding: 50, animate: true });
     }
+    window.fitToMission = fitToMission;
+
+    function setMapStyle(styleName) {
+      const styleUrl = styleName === 'dark' ? '${MAPBOX_STYLE_DARK}' : '${MAPBOX_STYLE_SATELLITE}';
+      map.setStyle(styleUrl);
+    }
+    window.setMapStyle = setMapStyle;
 
     let isDrawingModeActive = false;
     let drawingPoints = [];
@@ -906,6 +824,43 @@ export const PathPlanMap: React.FC<Props> = ({
       setTimeout(() => {
         window.ReactNativeWebView?.postMessage(JSON.stringify({ type: 'mapReady' }));
       }, 500);
+    });
+
+    map.on('style.load', function() {
+      if (!map.getSource('mission-path')) {
+        map.addSource('mission-path', { type:'geojson', data:emptyLine() });
+        map.addLayer({ id:'mission-glow', type:'line', source:'mission-path',
+          paint:{'line-color':'#f97316','line-width':6,'line-opacity':0.2},
+          layout:{'line-cap':'round','line-join':'round'} });
+        map.addLayer({ id:'mission-line', type:'line', source:'mission-path',
+          paint:{'line-color':'#f97316','line-width':2.5,'line-opacity':0.9},
+          layout:{'line-cap':'round','line-join':'round'} });
+
+        map.addSource('ortho-guide', { type:'geojson', data:emptyLine() });
+        map.addLayer({ id:'ortho-guide-line', type:'line', source:'ortho-guide',
+          paint:{'line-color':'#10b981','line-width':3,'line-opacity':0.9,'line-dasharray':[8,4]} });
+
+        map.addSource('drag-prev', { type:'geojson', data:emptyLine() });
+        map.addLayer({ id:'drag-prev-line', type:'line', source:'drag-prev',
+          paint:{'line-color':'#3B82F6','line-width':3,'line-opacity':0.9,'line-dasharray':[6,4]} });
+        map.addSource('drag-next', { type:'geojson', data:emptyLine() });
+        map.addLayer({ id:'drag-next-line', type:'line', source:'drag-next',
+          paint:{'line-color':'#3B82F6','line-width':3,'line-opacity':0.9,'line-dasharray':[6,4]} });
+
+        map.addSource('drag-conn', { type:'geojson', data:emptyLine() });
+        map.addLayer({ id:'drag-conn-line', type:'line', source:'drag-conn',
+          paint:{'line-color':'#60A5FA','line-width':4,'line-opacity':0.8,'line-dasharray':[8,4]} });
+
+        map.addSource('drawing-path', { type:'geojson', data:emptyLine() });
+        map.addLayer({ id:'drawing-line', type:'line', source:'drawing-path',
+          paint:{'line-color':'#22c55e','line-width':3,'line-opacity':0.8} });
+
+        map.addSource('measure-line', { type:'geojson', data:emptyLine() });
+        map.addLayer({ id:'measure-line-layer', type:'line', source:'measure-line',
+          paint:{'line-color':'#f59e0b','line-width':2,'line-opacity':0.9,'line-dasharray':[6,4]} });
+      }
+
+      window.ReactNativeWebView?.postMessage(JSON.stringify({ type: 'mapStyleChanged' }));
     });
   </script>
 </body>
@@ -1297,8 +1252,6 @@ export const PathPlanMap: React.FC<Props> = ({
     const updateScript = `
       if (roverMarker && roverData.hasPosition) {
         roverMarker.setLngLat([${roverPosition.lon}, ${roverPosition.lat}]);
-        document.getElementById('rover-lat').textContent = 'Lat: ${roverPosition.lat.toFixed(7)}';
-        document.getElementById('rover-lon').textContent = 'Lon: ${roverPosition.lon.toFixed(7)}';
         const markerEl = roverMarker.getElement();
         if (markerEl && ${heading !== null}) {
           const svg = markerEl.querySelector('svg');
@@ -1505,11 +1458,12 @@ export const PathPlanMap: React.FC<Props> = ({
   };
 
   return (
+    <TouchableWithoutFeedback onPress={onDismissPanel}>
     <View style={styles.container}>
       <WebView
         ref={webViewRef}
         source={{ html: mapHTML }}
-        style={{ flex: 1, backgroundColor: '#0D2A4B' }}
+        style={{ flex: 1, backgroundColor: '#050a12' }}
         androidLayerType="hardware"
         onMessage={(event) => {
           try {
@@ -1546,8 +1500,9 @@ export const PathPlanMap: React.FC<Props> = ({
                 .filter((p: any) => !isNaN(p.lat) && !isNaN(p.lng))
                 .map((p: any) => ({ latitude: p.lat, longitude: p.lng }));
               if (coords.length > 0) onDrawingComplete?.(coords);
-            } else if (message.type === 'TOGGLE_FULLSCREEN') {
-              onToggleFullscreen?.();
+            } else if (message.type === 'mapStyleChanged') {
+              lastWaypointsRef.current = '';
+              setMapReady(true);
             }
           } catch (error) {
             console.error('WebView message error:', error);
@@ -1559,13 +1514,196 @@ export const PathPlanMap: React.FC<Props> = ({
         scalesPageToFit={false}
       />
 
+      {/* Bottom Horizontal Controls Capsule Bar */}
+      <View style={styles.bottomControlsBar}>
+        {/* Toggle Map Style */}
+        <TouchableOpacity 
+          style={styles.bottomControlBtn} 
+          onPress={() => {
+            const newStyle = mapStyle === 'satellite' ? 'dark' : 'satellite';
+            setMapStyle(newStyle);
+            webViewRef.current?.injectJavaScript(`window.setMapStyle('${newStyle}'); true;`);
+          }}
+          activeOpacity={0.7}
+        >
+          <MaterialCommunityIcons
+            name={mapStyle === 'satellite' ? "image-filter-hdr" : "earth"}
+            size={18}
+            color="#E5F1FF"
+          />
+        </TouchableOpacity>
+
+        <View style={styles.btnDivider} />
+
+        {/* Fit Mission */}
+        <TouchableOpacity
+          style={styles.bottomControlBtn}
+          onPress={() => webViewRef.current?.injectJavaScript('window.fitToMission(); true;')}
+          activeOpacity={0.7}
+        >
+          <MaterialCommunityIcons name="vector-polyline" size={18} color="#E5F1FF" />
+        </TouchableOpacity>
+
+        <View style={styles.btnDivider} />
+
+        {/* Center on Rover */}
+        <TouchableOpacity
+          style={styles.bottomControlBtn}
+          onPress={() => webViewRef.current?.injectJavaScript('window.centerOnRover(); true;')}
+          activeOpacity={0.7}
+        >
+          <MaterialCommunityIcons name="crosshairs-gps" size={18} color="#E5F1FF" />
+        </TouchableOpacity>
+
+        <View style={styles.btnDivider} />
+
+        {/* Zoom In */}
+        <TouchableOpacity
+          style={styles.bottomControlBtn}
+          onPress={() => webViewRef.current?.injectJavaScript('if (typeof map !== "undefined") { map.zoomIn(); } true;')}
+          activeOpacity={0.7}
+        >
+          <MaterialCommunityIcons name="plus" size={18} color="#E5F1FF" />
+        </TouchableOpacity>
+
+        <View style={styles.btnDivider} />
+
+        {/* Zoom Out */}
+        <TouchableOpacity
+          style={styles.bottomControlBtn}
+          onPress={() => webViewRef.current?.injectJavaScript('if (typeof map !== "undefined") { map.zoomOut(); } true;')}
+          activeOpacity={0.7}
+        >
+          <MaterialCommunityIcons name="minus" size={18} color="#E5F1FF" />
+        </TouchableOpacity>
+      </View>
+
+      {/* Vis Menu Dropdown near Drawing Tools panel (Settings button lives there now) */}
+      {isVisMenuOpen && visualization && (
+        <View style={[styles.visDropdownMenu, { left: 80, top: 80 }]}>
+          <Text style={styles.visDropdownTitle}>MAP SETTINGS</Text>
+          {[
+            { key: 'distanceLabel' as const, label: 'Distance Label', icon: 'ruler' as const },
+            { key: 'angleLabel' as const, label: 'Angle Label', icon: 'angle-acute' as const },
+            { key: 'snapFeature' as const, label: 'Snap Feature', icon: 'magnet' as const },
+            { key: 'roverIcon' as const, label: 'Rover Icon', icon: 'robot' as const },
+            { key: 'waypointPreview' as const, label: 'Waypoint Preview', icon: 'map-marker' as const },
+          ].map((option) => (
+            <TouchableOpacity
+              key={option.key}
+              style={styles.visMenuItem}
+              onPress={() => onVisualizationToggle?.(option.key)}
+              activeOpacity={0.7}
+            >
+              <View style={styles.visMenuItemContent}>
+                <MaterialCommunityIcons name={option.icon} size={13} color="#67E8F9" style={{ marginRight: 8 }} />
+                <Text style={styles.visMenuItemLabel}>{option.label}</Text>
+              </View>
+              <MaterialCommunityIcons 
+                name={visualization[option.key] ? "checkbox-marked" : "checkbox-blank-outline"} 
+                size={14} 
+                color={visualization[option.key] ? '#67E8F9' : '#94A3B8'} 
+              />
+            </TouchableOpacity>
+          ))}
+        </View>
+      )}
+
+      {/* Widget Menu Dropdown near Drawing Tools panel (Widget button lives there now) */}
+      {isWidgetMenuOpen && (
+        <View style={[styles.visDropdownMenu, { left: 80, top: 145 }]}>
+          <Text style={styles.visDropdownTitle}>WIDGET LAYERS</Text>
+          
+          <TouchableOpacity
+            style={styles.visMenuItem}
+            onPress={() => setIsDrawingToolsVisible?.(!isDrawingToolsVisible)}
+            activeOpacity={0.7}
+          >
+            <View style={styles.visMenuItemContent}>
+              <MaterialCommunityIcons name="gesture-tap-button" size={13} color="#67E8F9" style={{ marginRight: 8 }} />
+              <Text style={styles.visMenuItemLabel}>Drawing Tools</Text>
+            </View>
+            <MaterialCommunityIcons 
+              name={isDrawingToolsVisible ? "checkbox-marked" : "checkbox-blank-outline"} 
+              size={14} 
+              color={isDrawingToolsVisible ? '#67E8F9' : '#94A3B8'} 
+            />
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.visMenuItem}
+            onPress={() => setIsMissionOpsVisible?.(!isMissionOpsVisible)}
+            activeOpacity={0.7}
+          >
+            <View style={styles.visMenuItemContent}>
+              <MaterialCommunityIcons name="rocket-launch" size={13} color="#67E8F9" style={{ marginRight: 8 }} />
+              <Text style={styles.visMenuItemLabel}>Mission Control</Text>
+            </View>
+            <MaterialCommunityIcons 
+              name={isMissionOpsVisible ? "checkbox-marked" : "checkbox-blank-outline"} 
+              size={14} 
+              color={isMissionOpsVisible ? '#67E8F9' : '#94A3B8'} 
+            />
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.visMenuItem}
+            onPress={() => setIsStatisticsVisible?.(!isStatisticsVisible)}
+            activeOpacity={0.7}
+          >
+            <View style={styles.visMenuItemContent}>
+              <MaterialCommunityIcons name="chart-bar" size={13} color="#67E8F9" style={{ marginRight: 8 }} />
+              <Text style={styles.visMenuItemLabel}>Mission Stats</Text>
+            </View>
+            <MaterialCommunityIcons 
+              name={isStatisticsVisible ? "checkbox-marked" : "checkbox-blank-outline"} 
+              size={14} 
+              color={isStatisticsVisible ? '#67E8F9' : '#94A3B8'} 
+            />
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.visMenuItem}
+            onPress={() => setIsBottomTableVisible?.(!isBottomTableVisible)}
+            activeOpacity={0.7}
+          >
+            <View style={styles.visMenuItemContent}>
+              <MaterialCommunityIcons name="table-large" size={13} color="#67E8F9" style={{ marginRight: 8 }} />
+              <Text style={styles.visMenuItemLabel}>Waypoints Table</Text>
+            </View>
+            <MaterialCommunityIcons
+              name={isBottomTableVisible ? "checkbox-marked" : "checkbox-blank-outline"}
+              size={14}
+              color={isBottomTableVisible ? '#67E8F9' : '#94A3B8'}
+            />
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.visMenuItem}
+            onPress={() => setIsRobotPositionVisible?.(!isRobotPositionVisible)}
+            activeOpacity={0.7}
+          >
+            <View style={styles.visMenuItemContent}>
+              <MaterialCommunityIcons name="robot" size={13} color="#67E8F9" style={{ marginRight: 8 }} />
+              <Text style={styles.visMenuItemLabel}>Robot Position</Text>
+            </View>
+            <MaterialCommunityIcons
+              name={isRobotPositionVisible ? "checkbox-marked" : "checkbox-blank-outline"}
+              size={14}
+              color={isRobotPositionVisible ? '#67E8F9' : '#94A3B8'}
+            />
+          </TouchableOpacity>
+        </View>
+      )}
+
+      {/* Sleek Rotating Compass Overlay */}
       <View style={styles.compassOverlay}>
         <View style={[
           styles.headingArrow,
           { transform: [{ rotate: `${heading ?? 0}deg` }] }
         ]} />
         <View style={{ transform: [{ rotate: `${-(heading ?? 0)}deg` }] }}>
-          <Fontisto name="compass" color="#67e8f9" size={20} />
+          <Fontisto name="compass" color="#67e8f9" size={18} />
         </View>
         <Text style={styles.compassN}>N</Text>
       </View>
@@ -1636,12 +1774,7 @@ export const PathPlanMap: React.FC<Props> = ({
         </View>
       )}
 
-      {visualization && onVisualizationToggle && (
-        <MapVisualizationControls
-          visualization={visualization}
-          onToggle={onVisualizationToggle}
-        />
-      )}
+
 
       {measurePoints.length > 0 && (
         <View
@@ -1686,24 +1819,58 @@ export const PathPlanMap: React.FC<Props> = ({
         </View>
       )}
     </View>
+    </TouchableWithoutFeedback>
   );
 };
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#0D2A4B',
+    backgroundColor: '#050a12',
+  },
+  bottomControlsBar: {
+    position: 'absolute',
+    bottom: 16,
+    right: 16,
+    width: 320,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#07111be6',
+    borderWidth: 1,
+    borderColor: 'rgba(103, 232, 249, 0.15)',
+    borderRadius: 14,
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    gap: 6,
+    elevation: 6,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.35,
+    shadowRadius: 6,
+  },
+  bottomControlBtn: {
+    width: 48,
+    height: 48,
+    borderRadius: 10,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  btnDivider: {
+    width: 1,
+    height: 32,
+    backgroundColor: 'rgba(103, 232, 249, 0.12)',
   },
   compassOverlay: {
     position: 'absolute',
-    bottom: 14,
-    left: 14,
-    width: 46,
-    height: 46,
-    borderRadius: 23,
-    backgroundColor: 'rgba(13, 42, 75, 0.94)',
-    borderWidth: 1.5,
-    borderColor: 'rgba(59, 130, 246, 0.35)',
+    bottom: 16,
+    left: 16,
+    width: 60,
+    height: 60,
+    borderRadius: 14,
+    backgroundColor: '#07111be6',
+    borderWidth: 1,
+    borderColor: 'rgba(103, 232, 249, 0.15)',
     alignItems: 'center',
     justifyContent: 'center',
     elevation: 6,
@@ -1717,18 +1884,18 @@ const styles = StyleSheet.create({
     top: 2,
     width: 0,
     height: 0,
-    borderLeftWidth: 5,
-    borderRightWidth: 5,
-    borderBottomWidth: 10,
+    borderLeftWidth: 4,
+    borderRightWidth: 4,
+    borderBottomWidth: 8,
     borderLeftColor: 'transparent',
     borderRightColor: 'transparent',
-    borderBottomColor: '#ef4444',
+    borderBottomColor: '#EF4444',
     zIndex: 1,
   },
   compassN: {
     position: 'absolute',
-    top: -1,
-    fontSize: 8,
+    top: 0,
+    fontSize: 7,
     fontWeight: '900',
     color: '#67e8f9',
     zIndex: 2,
@@ -1829,5 +1996,42 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: '#f59e0b',
     fontFamily: 'monospace',
+  },
+  visDropdownMenu: {
+    position: 'absolute',
+    width: 190,
+    backgroundColor: '#07111be6',
+    borderWidth: 1,
+    borderColor: 'rgba(103, 232, 249, 0.15)',
+    borderRadius: 8,
+    padding: 10,
+    gap: 6,
+    elevation: 8,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.35,
+    shadowRadius: 6,
+  },
+  visDropdownTitle: {
+    color: '#67E8F9',
+    fontSize: 8,
+    fontWeight: '700',
+    letterSpacing: 1,
+    marginBottom: 4,
+  },
+  visMenuItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 5,
+  },
+  visMenuItemContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  visMenuItemLabel: {
+    color: '#E5F1FF',
+    fontSize: 10,
+    fontWeight: '500',
   },
 });

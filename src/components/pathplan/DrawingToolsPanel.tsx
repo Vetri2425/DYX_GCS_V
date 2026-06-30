@@ -1,5 +1,6 @@
 import React, { useState, useMemo, useCallback } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
+import { GestureDetector } from 'react-native-gesture-handler';
 import { MaterialCommunityIcons, Fontisto, Ionicons } from '@expo/vector-icons';
 import { colors } from '../../theme/colors';
 import { PathPlanWaypoint } from '../../types/pathplan';
@@ -46,6 +47,12 @@ interface DrawingToolsPanelProps {
   onPrecisePathApply?: (optimized: PathPlanWaypoint[]) => void;
   onPrecisePathClose?: () => void;
   onPrecisePathActivate?: () => void;
+  onClearAll?: () => void;
+  /** Injected by DraggableCard (handleType="custom") — gesture object for the drag handle button */
+  dragGesture?: any;
+  /** True while the card is being dragged — injected by DraggableCard */
+  isDraggingActive?: boolean;
+  onClose?: () => void;
 }
 
 export const DrawingToolsPanel: React.FC<DrawingToolsPanelProps> = ({
@@ -71,9 +78,15 @@ export const DrawingToolsPanel: React.FC<DrawingToolsPanelProps> = ({
   onPrecisePathApply,
   onPrecisePathClose,
   onPrecisePathActivate,
+  onClearAll,
+  dragGesture,
+  isDraggingActive,
+  onClose,
 }) => {
   const [internalCollapsed, setInternalCollapsed] = useState(false);
   const collapsed = onToggleCollapse ? isCollapsed : internalCollapsed;
+  const [showLinesMenu, setShowLinesMenu] = useState(false);
+  const [showShapesMenu, setShowShapesMenu] = useState(false);
 
   // Precise path local state
   const [axis, setAxis] = useState<PathAxis>('EAST_WEST');
@@ -191,200 +204,211 @@ export const DrawingToolsPanel: React.FC<DrawingToolsPanelProps> = ({
 
   return (
     <View style={styles.container}>
-      {/* Header */}
-      <View style={styles.header}>
-        <View style={styles.headerLeft}>
-          <View style={styles.headerIconWrap}>
-            <Ionicons name="pencil" size={16} color={isPrecisePathActive ? colors.blueBtn : colors.accent} />
-          </View>
-          <Text style={[styles.headerTitle, isPrecisePathActive && { color: colors.blueBtn }]}>
-            {isPrecisePathActive ? 'PRECISE PATH' : 'DRAWING TOOLS'}
-          </Text>
-        </View>
-        <TouchableOpacity style={styles.collapseBtn} onPress={handleToggle} activeOpacity={0.7}>
-          <MaterialCommunityIcons
-            name={collapsed ? 'chevron-down' : 'chevron-up'}
-            size={16}
-            color={colors.textSecondary}
+      {/* Mode Capsule */}
+      <View style={styles.capsule}>
+        {/* Points Button */}
+        <TouchableOpacity
+          style={[styles.capsuleBtn, activeDrawingTool === 'line' && styles.capsuleBtnActive]}
+          onPress={() => {
+            setShowLinesMenu(false);
+            setShowShapesMenu(false);
+            onToolSelect(activeDrawingTool === 'line' ? null : 'line');
+          }}
+          activeOpacity={0.7}
+        >
+          <MaterialCommunityIcons 
+            name="map-marker-radius" 
+            size={18} 
+            color={activeDrawingTool === 'line' ? '#67E8F9' : '#94A3B8'} 
           />
+          <Text style={[styles.capsuleBtnText, activeDrawingTool === 'line' && styles.capsuleBtnTextActive]}>Points</Text>
         </TouchableOpacity>
+
+        <View style={styles.divider} />
+
+        {/* Lines Button */}
+        <TouchableOpacity
+          style={[
+            styles.capsuleBtn, 
+            (activeDrawingTool === 'cad-draw' || activeDrawingTool === 'manual-connection') && styles.capsuleBtnActive
+          ]}
+          onPress={() => {
+            setShowShapesMenu(false);
+            setShowLinesMenu(!showLinesMenu);
+          }}
+          activeOpacity={0.7}
+        >
+          <MaterialCommunityIcons 
+            name="vector-polyline" 
+            size={18} 
+            color={(activeDrawingTool === 'cad-draw' || activeDrawingTool === 'manual-connection') ? '#67E8F9' : '#94A3B8'} 
+          />
+          <Text style={[
+            styles.capsuleBtnText, 
+            (activeDrawingTool === 'cad-draw' || activeDrawingTool === 'manual-connection') && styles.capsuleBtnTextActive
+          ]}>Lines</Text>
+        </TouchableOpacity>
+
+        <View style={styles.divider} />
+
+        {/* Shapes Button */}
+        <TouchableOpacity
+          style={[styles.capsuleBtn, showShapesMenu && styles.capsuleBtnActive]}
+          onPress={() => {
+            setShowLinesMenu(false);
+            setShowShapesMenu(!showShapesMenu);
+          }}
+          activeOpacity={0.7}
+        >
+          <MaterialCommunityIcons 
+            name="shape-outline" 
+            size={18} 
+            color={showShapesMenu ? '#67E8F9' : '#94A3B8'} 
+          />
+          <Text style={[styles.capsuleBtnText, showShapesMenu && styles.capsuleBtnTextActive]}>Shapes</Text>
+        </TouchableOpacity>
+
+        <View style={styles.divider} />
+
+        {/* Undo */}
+        <TouchableOpacity
+          style={[styles.capsuleBtn, !canUndo && styles.capsuleBtnDisabled]}
+          onPress={onUndo}
+          disabled={!canUndo}
+          activeOpacity={0.7}
+        >
+          <MaterialCommunityIcons 
+            name="undo" 
+            size={18} 
+            color={canUndo ? '#E5F1FF' : '#475569'} 
+          />
+          <Text style={[styles.capsuleBtnText, !canUndo && { color: '#475569' }]}>Undo</Text>
+        </TouchableOpacity>
+
+        <View style={styles.divider} />
+
+        {/* Redo */}
+        <TouchableOpacity
+          style={[styles.capsuleBtn, !canRedo && styles.capsuleBtnDisabled]}
+          onPress={onRedo}
+          disabled={!canRedo}
+          activeOpacity={0.7}
+        >
+          <MaterialCommunityIcons 
+            name="redo" 
+            size={18} 
+            color={canRedo ? '#E5F1FF' : '#475569'} 
+          />
+          <Text style={[styles.capsuleBtnText, !canRedo && { color: '#475569' }]}>Redo</Text>
+        </TouchableOpacity>
+
+        <View style={styles.divider} />
+
+        {/* Clear */}
+        <TouchableOpacity
+          style={styles.capsuleBtn}
+          onPress={onClearAll}
+          activeOpacity={0.7}
+        >
+          <MaterialCommunityIcons name="trash-can-outline" size={18} color="#EF4444" />
+          <Text style={[styles.capsuleBtnText, { color: '#EF4444' }]}>Clear</Text>
+        </TouchableOpacity>
+
+        {dragGesture && (
+          <>
+            <View style={styles.divider} />
+            {/* Drag Handle */}
+            <GestureDetector gesture={dragGesture}>
+              <View style={[styles.capsuleBtn, isDraggingActive && styles.capsuleBtnDragging]}>
+                <MaterialCommunityIcons name="drag" size={18} color={isDraggingActive ? '#67E8F9' : 'rgba(103,232,249,0.5)'} />
+                <Text style={[styles.capsuleBtnText, isDraggingActive && { color: '#67E8F9' }]}>Drag</Text>
+              </View>
+            </GestureDetector>
+          </>
+        )}
+
+        {onClose && (
+          <>
+            <View style={styles.divider} />
+            {/* Close Panel */}
+            <TouchableOpacity style={styles.capsuleBtn} onPress={onClose} activeOpacity={0.7}>
+              <MaterialCommunityIcons name="close" size={18} color="#EF4444" />
+              <Text style={[styles.capsuleBtnText, { color: '#EF4444' }]}>Close</Text>
+            </TouchableOpacity>
+          </>
+        )}
       </View>
 
-      {/* Undo/Redo actions */}
-      {!collapsed && (
-        <View style={styles.undoRedoRow}>
+      {/* Lines Dropdown Sub-menu */}
+      {showLinesMenu && (
+        <View style={[styles.dropdownMenu, { top: 96 }]}>
           <TouchableOpacity
-            style={[styles.undoRedoBtn, !canUndo && styles.undoRedoBtnDisabled]}
-            onPress={onUndo}
-            disabled={!canUndo}
-            activeOpacity={0.7}
+            style={styles.dropdownItem}
+            onPress={() => {
+              setShowLinesMenu(false);
+              onShowCADDrawing();
+            }}
           >
-            <MaterialCommunityIcons name="undo" size={18} color={canUndo ? colors.text : colors.textMuted} />
-            <Text style={[styles.undoRedoText, !canUndo && styles.undoRedoTextDisabled]}>Undo</Text>
+            <MaterialCommunityIcons name="draw" size={16} color="#E5F1FF" />
+            <Text style={styles.dropdownItemText}>CAD Draw</Text>
           </TouchableOpacity>
           <TouchableOpacity
-            style={[styles.undoRedoBtn, !canRedo && styles.undoRedoBtnDisabled]}
-            onPress={onRedo}
-            disabled={!canRedo}
-            activeOpacity={0.7}
+            style={styles.dropdownItem}
+            onPress={() => {
+              setShowLinesMenu(false);
+              onShowManualConnection();
+            }}
           >
-            <MaterialCommunityIcons name="redo" size={18} color={canRedo ? colors.text : colors.textMuted} />
-            <Text style={[styles.undoRedoText, !canRedo && styles.undoRedoTextDisabled]}>Redo</Text>
+            <MaterialCommunityIcons name="vector-line" size={16} color="#E5F1FF" />
+            <Text style={styles.dropdownItemText}>Manual Connect</Text>
           </TouchableOpacity>
         </View>
       )}
 
-      {!collapsed && (
-        isPrecisePathActive ? (
-          /* ─── Precise Path Controls (inline) ─── */
-          <View style={styles.preciseSection}>
-            {/* Axis selector */}
-            <View style={styles.preciseRow}>
-              <Text style={styles.preciseLabel}>AXIS</Text>
-              <View style={styles.axisRow}>
-                {AXIS_OPTIONS.map(opt => (
-                  <TouchableOpacity
-                    key={opt.value}
-                    style={[styles.axisBtn, axis === opt.value && styles.axisBtnActive]}
-                    onPress={() => setAxis(opt.value)}
-                    activeOpacity={0.7}
-                  >
-                    <MaterialCommunityIcons
-                      name={opt.icon as any}
-                      size={14}
-                      color={axis === opt.value ? '#ffffff' : colors.textSecondary}
-                    />
-                    <Text style={[styles.axisBtnText, axis === opt.value && styles.axisBtnTextActive]}>
-                      {opt.shortLabel}
-                    </Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
-            </View>
-
-            {/* Direction selector */}
-            <View style={styles.preciseRow}>
-              <Text style={styles.preciseLabel}>DIR</Text>
-              <View style={styles.dirRow}>
-                {DIRECTION_OPTIONS.map(opt => (
-                  <TouchableOpacity
-                    key={opt.value}
-                    style={[styles.dirBtn, direction === opt.value && styles.dirBtnActive]}
-                    onPress={() => setDirection(opt.value)}
-                    activeOpacity={0.7}
-                  >
-                    <Text style={[styles.dirBtnText, direction === opt.value && styles.dirBtnTextActive]}>
-                      {opt.label}
-                    </Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
-            </View>
-
-            {/* Stats + Actions */}
-            {stats && (
-              <View style={styles.preciseStatsRow}>
-                <View style={styles.statItem}>
-                  <Text style={styles.statLabel}>POINTS</Text>
-                  <Text style={styles.statValue}>{preview?.length ?? precisePathWaypoints.length}</Text>
-                </View>
-                <View style={styles.statDivider} />
-                <View style={styles.statItem}>
-                  <Text style={styles.statLabel}>
-                    {axis === 'EAST_WEST' || axis === 'WEST_EAST' ? 'ROWS' : 'COLS'}
-                  </Text>
-                  <Text style={styles.statValue}>{stats.groupCount}</Text>
-                </View>
-                <View style={styles.statDivider} />
-                <View style={styles.statItem}>
-                  <Text style={styles.statLabel}>DIST</Text>
-                  <Text style={[styles.statValue, { color: colors.success }]}>
-                    {formatDist(stats.optimizedDist)}
-                  </Text>
-                </View>
-                {stats.savings > 0.5 && (
-                  <>
-                    <View style={styles.statDivider} />
-                    <View style={[styles.statItem, styles.savingsBadge]}>
-                      <Text style={styles.savingsText}>-{stats.savings.toFixed(1)}%</Text>
-                    </View>
-                  </>
-                )}
-              </View>
-            )}
-
-            {/* Apply / Cancel */}
-            <View style={styles.preciseActions}>
-              <TouchableOpacity style={styles.preciseCancelBtn} onPress={handlePreciseClose} activeOpacity={0.7}>
-                <MaterialCommunityIcons name="close" size={16} color={colors.textSecondary} />
-                <Text style={styles.preciseCancelBtnText}>Cancel</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.preciseApplyBtn, (!preview || preview.length < 2) && styles.preciseApplyBtnDisabled]}
-                onPress={handleApply}
-                disabled={!preview || preview.length < 2}
-                activeOpacity={0.7}
-              >
-                <MaterialCommunityIcons name="check-circle" size={16} color="#ffffff" />
-                <Text style={styles.preciseApplyBtnText}>Apply</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        ) : (
-          /* ─── Normal Tool Grid ─── */
-          <>
-            <View style={styles.toolGrid}>
-              {allTools.map((tool) => {
-                const isActive = activeDrawingTool === tool.name;
-                const isGen = (tool as GeneratorTool).onPress !== undefined;
-                return (
-                  <TouchableOpacity
-                    key={tool.name}
-                    style={[styles.toolBtn, isActive && { borderColor: tool.color, backgroundColor: tool.color + '15' }]}
-                    onPress={() => isGen ? (tool as GeneratorTool).onPress() : handleToolPress(tool.name)}
-                    activeOpacity={0.75}
-                  >
-                    <View style={[styles.toolAccent, { backgroundColor: isActive ? tool.color : 'transparent' }]} />
-                    <View style={styles.toolInner}>
-                      <View style={[styles.toolIconWrap, { borderColor: (isActive ? tool.color : colors.textSecondary) + '40' }]}>
-                        {(tool as any).mdiIcon ? (
-                          <MaterialCommunityIcons
-                            name={(tool as any).mdiIcon}
-                            size={20}
-                            color={isActive ? tool.color : colors.textSecondary}
-                          />
-                        ) : (tool as any).fontistoIcon ? (
-                          <Fontisto
-                            name={(tool as any).fontistoIcon}
-                            size={18}
-                            color={isActive ? tool.color : colors.textSecondary}
-                          />
-                        ) : null}
-                      </View>
-                      <Text style={[styles.toolLabel, isActive && { color: '#ffffff' }]}>{tool.title}</Text>
-                    </View>
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
-
-            {/* Active tool instructions */}
-            {activeDrawingTool && (
-              <View style={styles.instructions}>
-                <Text style={styles.instructionText}>
-                  {activeDrawingTool === 'line' && 'Click to place points. Double-tap to finish.'}
-                  {activeDrawingTool === 'cad-draw' && 'Professional CAD drawing with precision tools.'}
-                  {activeDrawingTool === 'precise' && 'Optimize waypoint sequence using boustrophedon path planning.'}
-                  {activeDrawingTool === 'text' && 'Click to place text annotation on map.'}
-                  {activeDrawingTool === 'measure' && 'Click points to measure distance.'}
-                </Text>
-                <TouchableOpacity style={styles.cancelBtn} onPress={() => onToolSelect(null)} activeOpacity={0.7}>
-                  <Text style={styles.cancelBtnText}>Cancel</Text>
-                </TouchableOpacity>
-              </View>
-            )}
-          </>
-        )
+      {/* Shapes Dropdown Sub-menu */}
+      {showShapesMenu && (
+        <View style={[styles.dropdownMenu, { top: 152 }]}>
+          <TouchableOpacity
+            style={styles.dropdownItem}
+            onPress={() => {
+              setShowShapesMenu(false);
+              onShowCircleTool();
+            }}
+          >
+            <MaterialCommunityIcons name="circle-outline" size={16} color="#E5F1FF" />
+            <Text style={styles.dropdownItemText}>Auto Circle</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.dropdownItem}
+            onPress={() => {
+              setShowShapesMenu(false);
+              onShowCornerExtension();
+            }}
+          >
+            <MaterialCommunityIcons name="arrow-expand-all" size={16} color="#E5F1FF" />
+            <Text style={styles.dropdownItemText}>Corner Extend</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.dropdownItem}
+            onPress={() => {
+              setShowShapesMenu(false);
+              onShowSolarTableTool();
+            }}
+          >
+            <MaterialCommunityIcons name="solar-panel" size={16} color="#E5F1FF" />
+            <Text style={styles.dropdownItemText}>Solar Table</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.dropdownItem}
+            onPress={() => {
+              setShowShapesMenu(false);
+              onShowTemplateManager();
+            }}
+          >
+            <MaterialCommunityIcons name="file-document-outline" size={16} color="#E5F1FF" />
+            <Text style={styles.dropdownItemText}>Templates</Text>
+          </TouchableOpacity>
+        </View>
       )}
     </View>
   );
@@ -392,314 +416,88 @@ export const DrawingToolsPanel: React.FC<DrawingToolsPanelProps> = ({
 
 const styles = StyleSheet.create({
   container: {
-    backgroundColor: colors.panelBg,
-    borderRadius: 12,
-    padding: 16,
+    backgroundColor: 'transparent',
+    padding: 0,
+    width: 60,
+    alignItems: 'center',
+  },
+  capsule: {
+    backgroundColor: '#07111be6',
+    borderRadius: 14,
     borderWidth: 1,
-    borderColor: colors.border,
-  },
-
-  // ── HEADER ──
-  header: {
-    flexDirection: 'row',
+    borderColor: 'rgba(103, 232, 249, 0.15)',
+    paddingVertical: 6,
+    width: '100%',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingBottom: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.border,
-    marginBottom: 12,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 5,
   },
-  headerLeft: {
-    flexDirection: 'row',
+  capsuleBtn: {
+    width: 48,
+    height: 48,
+    justifyContent: 'center',
     alignItems: 'center',
-    gap: 10,
-  },
-  headerIconWrap: {
-    width: 32,
-    height: 32,
     borderRadius: 10,
-    backgroundColor: 'rgba(59, 130, 246, 0.15)',
+    flexDirection: 'column',
+  },
+  capsuleBtnActive: {
+    backgroundColor: 'rgba(103, 232, 249, 0.12)',
     borderWidth: 1,
-    borderColor: 'rgba(59, 130, 246, 0.3)',
-    justifyContent: 'center',
-    alignItems: 'center',
+    borderColor: '#67E8F9',
   },
-  headerTitle: {
-    color: colors.accent,
-    fontSize: 14,
-    fontWeight: '700',
-    letterSpacing: 3,
-  },
-  collapseBtn: {
-    width: 28,
-    height: 28,
-    borderRadius: 8,
-    backgroundColor: colors.cardBg,
+  capsuleBtnDragging: {
+    backgroundColor: 'rgba(103, 232, 249, 0.18)',
     borderWidth: 1,
-    borderColor: colors.border,
-    alignItems: 'center',
-    justifyContent: 'center',
+    borderColor: '#67E8F9',
   },
-
-  // ── TOOL GRID ──
-  toolGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 6,
+  capsuleBtnDisabled: {
+    opacity: 0.3,
   },
-  toolBtn: {
-    width: '31.5%',
-    flexDirection: 'row',
-    backgroundColor: colors.cardBg,
-    borderRadius: 10,
-    overflow: 'hidden',
-    borderWidth: 1,
-    borderColor: colors.border,
-    height: 64,
-  },
-  toolAccent: {
-    width: 3,
-    alignSelf: 'stretch',
-  },
-  toolInner: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 8,
-    paddingHorizontal: 4,
-    gap: 4,
-  },
-  toolIconWrap: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    borderWidth: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  toolLabel: {
-    fontSize: 9,
-    fontWeight: '700',
-    color: colors.textSecondary,
-    textAlign: 'center',
-    letterSpacing: 0.5,
-    lineHeight: 11,
-  },
-
-  // ── INSTRUCTIONS ──
-  instructions: {
-    marginTop: 10,
-    padding: 10,
-    backgroundColor: 'rgba(59, 130, 246, 0.08)',
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: 'rgba(59, 130, 246, 0.2)',
-  },
-  instructionText: {
-    fontSize: 11,
-    color: colors.accent,
-    lineHeight: 16,
-    marginBottom: 8,
-  },
-  cancelBtn: {
-    backgroundColor: colors.redBtn,
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    borderRadius: 8,
-    alignItems: 'center',
-  },
-  cancelBtnText: {
-    color: '#ffffff',
-    fontSize: 12,
-    fontWeight: '700',
-  },
-
-  // ── PRECISE PATH CONTROLS ──
-  preciseSection: {
-    gap: 10,
-  },
-  preciseRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-  },
-  preciseLabel: {
-    fontSize: 9,
-    fontWeight: '700',
-    color: 'rgba(103, 232, 249, 0.7)',
-    letterSpacing: 1.5,
-    width: 30,
-  },
-  axisRow: {
-    flexDirection: 'row',
-    gap: 4,
-    flex: 1,
-  },
-  axisBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 3,
-    paddingVertical: 12,
-    paddingHorizontal: 4,
-    flex: 1,
-    backgroundColor: colors.cardBg,
-    borderRadius: 6,
-    borderWidth: 1,
-    borderColor: colors.border,
-  },
-  axisBtnActive: {
-    backgroundColor: 'rgba(59, 130, 246, 0.2)',
-    borderColor: colors.accent,
-  },
-  axisBtnText: {
-    fontSize: 10,
-    fontWeight: '700',
-    color: colors.textSecondary,
-  },
-  axisBtnTextActive: {
-    color: '#ffffff',
-  },
-  dirRow: {
-    flexDirection: 'row',
-    gap: 4,
-    flex: 1,
-  },
-  dirBtn: {
-    flex: 1,
-    paddingVertical: 12,
-    paddingHorizontal: 4,
-    alignItems: 'center',
-    backgroundColor: colors.cardBg,
-    borderRadius: 6,
-    borderWidth: 1,
-    borderColor: colors.border,
-  },
-  dirBtnActive: {
-    backgroundColor: 'rgba(16, 185, 129, 0.15)',
-    borderColor: colors.success,
-  },
-  dirBtnText: {
-    fontSize: 9,
-    fontWeight: '700',
-    color: colors.textSecondary,
-  },
-  dirBtnTextActive: {
-    color: '#ffffff',
-  },
-  preciseStatsRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    paddingVertical: 8,
-    borderTopWidth: 1,
-    borderTopColor: 'rgba(255,255,255,0.05)',
-    paddingLeft: 36,
-  },
-  statItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    flex: 1,
-  },
-  statLabel: {
+  capsuleBtnText: {
     fontSize: 8,
-    fontWeight: '700',
-    color: 'rgba(103, 232, 249, 0.7)',
-    letterSpacing: 1.5,
+    fontWeight: '600',
+    color: '#94A3B8',
+    marginTop: 2,
+    textAlign: 'center',
   },
-  statValue: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: '#ffffff',
+  capsuleBtnTextActive: {
+    color: '#67E8F9',
   },
-  statDivider: {
-    width: 1,
-    height: 18,
-    backgroundColor: colors.border,
+  divider: {
+    width: '60%',
+    height: 1,
+    backgroundColor: 'rgba(103, 232, 249, 0.1)',
+    marginVertical: 4,
   },
-  savingsBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: colors.success,
-    borderRadius: 4,
-    paddingHorizontal: 5,
-    paddingVertical: 2,
-  },
-  savingsText: {
-    color: '#ffffff',
-    fontSize: 9,
-    fontWeight: '700',
-  },
-  preciseActions: {
-    flexDirection: 'row',
-    gap: 8,
-  },
-  preciseCancelBtn: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 4,
-    paddingVertical: 8,
-    paddingHorizontal: 10,
-    backgroundColor: colors.cardBg,
+  dropdownMenu: {
+    position: 'absolute',
+    left: 68,
+    backgroundColor: '#08101a',
     borderRadius: 8,
     borderWidth: 1,
-    borderColor: colors.border,
+    borderColor: 'rgba(103, 232, 249, 0.2)',
+    padding: 4,
+    minWidth: 140,
+    shadowColor: '#000',
+    shadowOffset: { width: 4, height: 4 },
+    shadowOpacity: 0.4,
+    shadowRadius: 6,
+    zIndex: 2000,
   },
-  preciseCancelBtnText: {
-    color: colors.textSecondary,
-    fontSize: 11,
-    fontWeight: '700',
-  },
-  preciseApplyBtn: {
-    flex: 1,
+  dropdownItem: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
-    gap: 4,
-    paddingVertical: 8,
+    gap: 8,
+    paddingVertical: 10,
     paddingHorizontal: 12,
-    backgroundColor: colors.accent,
-    borderRadius: 8,
+    borderRadius: 6,
   },
-  preciseApplyBtnDisabled: {
-    backgroundColor: colors.textMuted,
-    opacity: 0.5,
-  },
-  preciseApplyBtnText: {
-    color: '#ffffff',
+  dropdownItemText: {
+    color: '#E5F1FF',
     fontSize: 11,
-    fontWeight: '700',
-  },
-
-  // ── UNDO/REDO ──
-  undoRedoRow: {
-    flexDirection: 'row',
-    gap: 8,
-    marginBottom: 10,
-  },
-  undoRedoBtn: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 4,
-    paddingVertical: 8,
-    backgroundColor: colors.cardBg,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: colors.border,
-  },
-  undoRedoBtnDisabled: {
-    opacity: 0.35,
-  },
-  undoRedoText: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: colors.text,
-  },
-  undoRedoTextDisabled: {
-    color: colors.textMuted,
+    fontWeight: '600',
   },
 });

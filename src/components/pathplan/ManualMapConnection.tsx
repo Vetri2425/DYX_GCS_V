@@ -179,7 +179,6 @@ export const ManualMapConnection: React.FC<Props> = ({
               handleWaypointConnect(fromId, toId);
             }
           }}
-          onToggleFullscreen={() => { }} // Can be implemented if needed
         />
       </View>
 

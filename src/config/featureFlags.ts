@@ -26,11 +26,12 @@ export const LEGACY_ARDUROVER_ENABLED: boolean = !ROVER_ENABLED;
 
 /**
  * Auth gate — show password on connect + inject X-Rover-Token.
- * Default ON for this PX4 branch. Set EXPO_PUBLIC_AUTH_DISABLED=true to skip.
+ * Only active when ROVER_ENABLED=true or EXPO_PUBLIC_AUTH_ENABLED=true.
+ * In 4WD_CLIENT (ROVER_ENABLED=false) auth is skipped — no auth backend available.
  */
 export const AUTH_ENABLED: boolean =
   process.env.EXPO_PUBLIC_AUTH_DISABLED?.toLowerCase() !== 'true' &&
-  (ROVER_ENABLED || boolEnv('EXPO_PUBLIC_AUTH_ENABLED') || true);
+  (ROVER_ENABLED || boolEnv('EXPO_PUBLIC_AUTH_ENABLED'));
 
 /** Server-side mission staging pipeline (plan → stage → load). */
 export const MISSION_STAGING_ENABLED: boolean =

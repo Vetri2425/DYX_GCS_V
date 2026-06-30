@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Image } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, Image, Modal, TouchableWithoutFeedback } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { colors } from '../../theme/colors';
 import { SettingsScreen } from '../../screens/SettingsScreen';
@@ -76,10 +76,10 @@ const AppHeaderInner: React.FC<Props> = ({
         dash_servo_off_time: offTime,
       });
       if (!result.success) {
-        console.error('[AppHeader] Failed to set dash mode:', result.error);
+        console.error('[AppHeader] Failed to set dash mode config:', result.error);
       }
     } catch (error) {
-      console.error('[AppHeader] Error setting dash mode:', error);
+      console.error('[AppHeader] Error setting dash mode config:', error);
     }
   };
 
@@ -88,9 +88,28 @@ const AppHeaderInner: React.FC<Props> = ({
     setShowDashConfigDialog(false);
   };
 
+  const renderTab = (tab: 'Dashboard' | 'Marking Plan' | 'Mission Progress') => {
+    const isActive = activeTab === tab;
+    return (
+      <TouchableOpacity
+        style={[styles.tab, isActive && styles.tabActive]}
+        onPress={() => onTabChange(tab)}
+        activeOpacity={0.7}
+      >
+        <Text style={[styles.tabText, isActive && styles.tabTextActive]}>
+          {tab}
+        </Text>
+        {isActive && (
+          <View style={styles.activeIndicatorContainer}>
+            <View style={styles.activeUnderline} />
+          </View>
+        )}
+      </TouchableOpacity>
+    );
+  };
   return (
-    <View style={styles.header}>
-      {/* Left: Logo and Title */}
+    <View style={styles.header} pointerEvents="box-none">
+      {/* Left: Logo and Title Capsule */}
       <View style={styles.leftSection}>
         <View style={styles.logoContainer}>
           <Image
@@ -101,78 +120,47 @@ const AppHeaderInner: React.FC<Props> = ({
         </View>
         <View>
           <Text style={styles.title}>DYX Autonomous</Text>
-          <Text style={styles.subtitle}>Way To Mark Robot </Text>
+          <Text style={styles.subtitle}>Way To Mark Robot</Text>
         </View>
       </View>
 
-      {/* Center: Tab Navigation */}
-      <View style={styles.centerSection}>
+      {/* Center: Tab Navigation Capsule */}
+      <View style={styles.centerSection} pointerEvents="box-none">
         <View style={styles.tabContainer}>
-          <TouchableOpacity
-            style={[styles.tab, activeTab === 'Dashboard' && styles.tabActive]}
-            onPress={() => onTabChange('Dashboard')}
-            activeOpacity={0.7}
-          >
-            <Text style={[styles.tabText, activeTab === 'Dashboard' && styles.tabTextActive]}>
-              Dashboard
-            </Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={[styles.tab, activeTab === 'Marking Plan' && styles.tabActive]}
-            onPress={() => onTabChange('Marking Plan')}
-            activeOpacity={0.7}
-          >
-            <Text style={[styles.tabText, activeTab === 'Marking Plan' && styles.tabTextActive]}>
-              Marking Plan
-            </Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={[styles.tab, activeTab === 'Mission Progress' && styles.tabActive]}
-            onPress={() => onTabChange('Mission Progress')}
-            activeOpacity={0.7}
-          >
-            <Text style={[styles.tabText, activeTab === 'Mission Progress' && styles.tabTextActive]}>
-              Mission Progress
-            </Text>
-          </TouchableOpacity>
-
+          {renderTab('Dashboard')}
+          {renderTab('Marking Plan')}
+          {renderTab('Mission Progress')}
         </View>
       </View>
 
-      {/* Right: Mission Mode and Settings */}
+      {/* Right: Settings and Mode Unified Capsule */}
       <View style={styles.rightSection}>
-        <TouchableOpacity
-          onPress={() => setShowSettings(true)}
-          style={styles.gearButton}
-          accessibilityLabel="Open settings"
-          accessibilityRole="button"
-          activeOpacity={0.7}
-        >
-          <Text style={styles.gearIcon}>⚙️</Text>
-        </TouchableOpacity>
+        {/* Mode Selector Button */}
         <TouchableOpacity
           onPress={() => setShowModeDialog(true)}
-          style={styles.modeBox}
+          style={styles.modeCapsuleBtn}
           activeOpacity={0.7}
           accessibilityLabel="Change mission mode"
           accessibilityRole="button"
         >
-          {getModeIcon(missionMode) === 'star-three-points-outline' ? (
-            <MaterialCommunityIcons
-              name="star-three-points-outline"
-              size={14}
-              color="#67E8F9"
-              style={styles.modeIconMdi}
-            />
-          ) : (
-            <Text style={styles.modeIcon}>{getModeIcon(missionMode)}</Text>
-          )}
-          <View>
-            <Text style={styles.modeLabel}>MODE</Text>
-            <Text style={styles.modeValue}>{missionMode}</Text>
+          <Text style={styles.modeCapsuleLabel}>MODE</Text>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 1 }}>
+            <MaterialCommunityIcons name="near-me" size={12} color="#67E8F9" />
+            <Text style={styles.modeCapsuleValue}>{missionMode}</Text>
           </View>
+        </TouchableOpacity>
+
+        <View style={styles.rightDivider} />
+
+        {/* Settings Button */}
+        <TouchableOpacity
+          onPress={() => setShowSettings(true)}
+          style={styles.settingsCapsuleBtn}
+          accessibilityLabel="Open settings"
+          accessibilityRole="button"
+          activeOpacity={0.7}
+        >
+          <MaterialCommunityIcons name="cog-outline" size={18} color="#E5F1FF" />
         </TouchableOpacity>
       </View>
 
@@ -201,43 +189,55 @@ const AppHeaderInner: React.FC<Props> = ({
 
 const styles = StyleSheet.create({
   header: {
-    height: 60,
-    backgroundColor: '#002244',
+    position: 'absolute',
+    top: 14,
+    left: 14,
+    right: 14,
+    height: 58,
+    backgroundColor: 'transparent',
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 16,
-    borderBottomWidth: 1,
-    borderBottomColor: 'rgba(103, 232, 249, 0.3)',
-    position: 'relative',
+    justifyContent: 'space-between',
+    zIndex: 1000,
   },
   leftSection: {
     flexDirection: 'row',
     alignItems: 'center',
-    flex: 1,
+    backgroundColor: '#07111be6',
+    borderWidth: 1,
+    borderColor: 'rgba(103, 232, 249, 0.15)',
+    borderRadius: 14,
+    paddingHorizontal: 14,
+    height: 48,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.3,
+    shadowRadius: 5,
+    elevation: 5,
   },
   logoContainer: {
-    width: 40,
-    height: 40,
-    borderRadius: 8,
+    width: 28,
+    height: 28,
+    borderRadius: 6,
     justifyContent: 'center',
     alignItems: 'center',
-    marginRight: 8,
+    marginRight: 10,
     overflow: 'hidden',
-    backgroundColor: 'rgba(6, 182, 212, 0.1)',
   },
   logoImage: {
-    width: 40,
-    height: 40,
+    width: 28,
+    height: 28,
   },
   title: {
-    color: colors.text,
-    fontSize: 16,
-    fontWeight: 'bold',
+    color: '#E5F1FF',
+    fontSize: 13,
+    fontWeight: '700',
   },
   subtitle: {
-    color: colors.text,
-    fontSize: 13,
-    fontWeight: 'bold',
+    color: '#9FBEE3',
+    fontSize: 8,
+    fontWeight: '500',
+    marginTop: 0,
   },
   centerSection: {
     position: 'absolute',
@@ -248,81 +248,95 @@ const styles = StyleSheet.create({
   },
   tabContainer: {
     flexDirection: 'row',
-    backgroundColor: '#002244',
-    borderRadius: 8,
+    backgroundColor: '#07111be6',
+    borderRadius: 14,
     borderWidth: 1,
-    borderColor: 'rgba(103, 232, 249, 0.3)',
-    padding: 4,
+    borderColor: 'rgba(103, 232, 249, 0.15)',
+    padding: 2,
     pointerEvents: 'auto',
+    height: 48,
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.3,
+    shadowRadius: 5,
+    elevation: 5,
   },
   tab: {
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    borderRadius: 6,
+    paddingHorizontal: 20,
+    height: 42,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   tabActive: {
-    backgroundColor: '#06B6D4',
-    borderRadius: 6,
+    backgroundColor: 'rgba(103, 232, 249, 0.08)',
   },
   tabText: {
-    fontSize: 11,
+    fontSize: 12,
     fontWeight: '600',
     color: '#94A3B8',
   },
   tabTextActive: {
-    color: colors.text,
+    color: '#67E8F9',
+  },
+  activeIndicatorContainer: {
+    position: 'absolute',
+    bottom: 3,
+    left: 0,
+    right: 0,
+    alignItems: 'center',
+  },
+  activeUnderline: {
+    width: 14,
+    height: 2.5,
+    backgroundColor: '#67E8F9',
+    borderRadius: 1.25,
   },
   rightSection: {
-    flex: 1,
-    alignItems: 'flex-end',
-    flexDirection: 'row',
-    justifyContent: 'flex-end',
-    gap: 8,
-  },
-  modeBox: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: 'rgba(6, 182, 212, 0.1)',
-    paddingVertical: 6,
-    paddingHorizontal: 10,
-    borderRadius: 6,
+    backgroundColor: '#07111be6',
     borderWidth: 1,
-    borderColor: 'rgba(103, 232, 249, 0.3)',
+    borderColor: 'rgba(103, 232, 249, 0.15)',
+    borderRadius: 14,
+    paddingHorizontal: 12,
+    height: 48,
+    gap: 8,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.3,
+    shadowRadius: 5,
+    elevation: 5,
   },
-  modeIcon: {
-    fontSize: 14,
-    marginRight: 6,
+  modeCapsuleBtn: {
+    justifyContent: 'center',
+    paddingRight: 8,
   },
-  modeIconMdi: {
-    marginRight: 6,
-  },
-  modeLabel: {
+  modeCapsuleLabel: {
     color: '#94A3B8',
-    fontSize: 9,
+    fontSize: 8,
     fontWeight: '600',
     letterSpacing: 0.5,
   },
-  modeValue: {
-    color: colors.text,
+  modeCapsuleValue: {
+    color: '#E5F1FF',
     fontSize: 11,
     fontWeight: '700',
-    marginTop: 1,
   },
-  gearButton: {
-    alignItems: 'center',
+  rightDivider: {
+    width: 1,
+    height: 20,
+    backgroundColor: 'rgba(103, 232, 249, 0.15)',
+    marginHorizontal: 4,
+  },
+  settingsCapsuleBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 10,
     justifyContent: 'center',
-    backgroundColor: '#1a75d2',
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    borderRadius: 8,
-    borderWidth: 2,
-    borderColor: '#059669',
-    minWidth: 44,
-    minHeight: 44,
-  },
-  gearIcon: {
-    fontSize: 20,
-    color: '#ffffff',
+    alignItems: 'center',
+    backgroundColor: 'rgba(255, 255, 255, 0.04)',
   },
 });
 

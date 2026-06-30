@@ -1,6 +1,8 @@
 import React from 'react';
-import { View, Text, StyleSheet } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
+import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
+import { GestureDetector } from 'react-native-gesture-handler';
+import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
+import Svg, { Circle } from 'react-native-svg';
 import { colors } from '../../theme/colors';
 import { PathPlanWaypoint } from '../../types/pathplan';
 import { vincentyDistance } from '../../utils/missionCalculator';
@@ -8,24 +10,38 @@ import { vincentyDistance } from '../../utils/missionCalculator';
 interface Props {
     waypoints: PathPlanWaypoint[];
     roverPosition?: { lat: number; lon: number } | null;
+    /** Injected by DraggableCard (handleType="custom") — gesture object for the header drag handle */
+    dragGesture?: any;
+    /** True while the card is being dragged — injected by DraggableCard */
+    isDraggingActive?: boolean;
+    onClose?: () => void;
 }
 
-// Card accent colors
-const CARD_COLORS = {
-    points: '#3b82f6',
-    rows: '#a855f7',
-    blocks: '#06b6d4',
-    distance: '#10b981',
-    duration: '#f59e0b',
-    status: '#22c55e',
+// Calculate area of waypoints using Shoelace formula (approximated to meters)
+const calculateArea = (wps: PathPlanWaypoint[]): number => {
+    if (wps.length < 3) return 0;
+    const latMid = (wps[0].lat * Math.PI) / 180;
+    // Meters per degree latitude/longitude approximation
+    const mPerLat = 111132.954 - 559.822 * Math.cos(2 * latMid) + 1.175 * Math.cos(4 * latMid);
+    const mPerLon = 111412.84 * Math.cos(latMid) - 93.5 * Math.cos(3 * latMid);
+
+    const x = wps.map(wp => (wp.lon - wps[0].lon) * mPerLon);
+    const y = wps.map(wp => (wp.lat - wps[0].lat) * mPerLat);
+
+    let area = 0;
+    const n = wps.length;
+    for (let i = 0; i < n; i++) {
+        const j = (i + 1) % n;
+        area += x[i] * y[j];
+        area -= x[j] * y[i];
+    }
+    return Math.abs(area) / 2;
 };
 
-export const MissionStatistics: React.FC<Props> = ({ waypoints, roverPosition }) => {
+export const MissionStatistics: React.FC<Props> = ({ waypoints, roverPosition, dragGesture, isDraggingActive, onClose }) => {
     const totalWaypoints = waypoints.length;
-    const totalRows = new Set(waypoints.map(wp => wp.row).filter(Boolean)).size;
-    const totalBlocks = new Set(waypoints.map(wp => wp.block).filter(Boolean)).size;
-
-    // First leg: distance from rover to first waypoint (if rover position available)
+    
+    // First leg: distance from rover to first waypoint
     const firstLegDistance = (roverPosition && waypoints.length > 0)
         ? vincentyDistance(
             { lat: roverPosition.lat, lon: roverPosition.lon },
@@ -36,119 +52,137 @@ export const MissionStatistics: React.FC<Props> = ({ waypoints, roverPosition })
     const totalDistance = waypoints.reduce((sum, wp) => sum + (wp.distance || 0), 0) + firstLegDistance;
     const totalDistanceM = totalDistance.toFixed(2);
 
+    // Estimate duration at constant speed (1 m/s)
     const totalTimeSeconds = totalDistance / 1;
     const hours = Math.floor(totalTimeSeconds / 3600);
     const minutes = Math.floor((totalTimeSeconds % 3600) / 60);
     const seconds = Math.floor(totalTimeSeconds % 60);
 
+    const durationStr = `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+    
+    const computedArea = calculateArea(waypoints);
+    const areaStr = computedArea > 0 ? `${computedArea.toFixed(1)} m²` : '—';
+
+    // Gauge calculations
     const isReady = totalWaypoints > 0;
-    const statusColor = isReady ? CARD_COLORS.status : '#6B7280';
+    const gaugeValue = isReady ? 92 : 0;
+    const radius = 22;
+    const strokeWidth = 4;
+    const circumference = 2 * Math.PI * radius;
+    const strokeDashoffset = circumference - (circumference * gaugeValue) / 100;
 
     return (
         <View style={styles.container}>
-            {/* Header */}
-            <View style={styles.header}>
-                <View style={styles.headerLeft}>
-                    <View style={styles.headerIconWrap}>
-                        <Ionicons name="stats-chart" size={16} color={colors.accent} />
+            {/* Header — also the drag handle for the floating card */}
+            <GestureDetector gesture={dragGesture}>
+                <View style={[styles.header, isDraggingActive && styles.headerDragging]}>
+                    <View style={styles.headerLeft}>
+                        <View style={styles.headerIconWrap}>
+                            <Ionicons name="stats-chart" size={14} color="#67E8F9" />
+                        </View>
+                        <Text style={styles.headerTitle}>STATISTICS</Text>
                     </View>
-                    <Text style={styles.headerTitle}>STATISTICS</Text>
+                    <View style={styles.headerRight}>
+                        <View style={styles.headerBadge}>
+                            <View style={[styles.headerBadgeDot, { backgroundColor: isReady ? '#10B981' : '#475569' }]} />
+                            <Text style={[styles.headerBadgeText, { color: isReady ? '#10B981' : '#475569' }]}>
+                                {isReady ? `${totalWaypoints} PTS` : 'EMPTY'}
+                            </Text>
+                        </View>
+                        {onClose && (
+                            <TouchableOpacity style={styles.headerCloseBtn} onPress={onClose} activeOpacity={0.7}>
+                                <MaterialCommunityIcons name="close" size={14} color="#94A3B8" />
+                            </TouchableOpacity>
+                        )}
+                    </View>
                 </View>
-                <View style={[styles.headerBadge, { borderColor: statusColor + '50', backgroundColor: statusColor + '15' }]}>
-                    <View style={[styles.headerBadgeDot, { backgroundColor: statusColor }]} />
-                    <Text style={[styles.headerBadgeText, { color: statusColor }]}>
-                        {isReady ? `${totalWaypoints} PTS` : 'EMPTY'}
-                    </Text>
+            </GestureDetector>
+
+            {/* Mission Ready Circular Progress Gauge */}
+            <View style={styles.gaugeCard}>
+                <View style={styles.gaugeWrapper}>
+                    <Svg width={54} height={54} viewBox="0 0 54 54">
+                        <Circle
+                            cx="27"
+                            cy="27"
+                            r={radius}
+                            stroke="#112235"
+                            strokeWidth={strokeWidth}
+                            fill="transparent"
+                        />
+                        <Circle
+                            cx="27"
+                            cy="27"
+                            r={radius}
+                            stroke="#67E8F9"
+                            strokeWidth={strokeWidth}
+                            fill="transparent"
+                            strokeDasharray={circumference}
+                            strokeDashoffset={strokeDashoffset}
+                            strokeLinecap="round"
+                            transform="rotate(-90 27 27)"
+                        />
+                    </Svg>
+                    <View style={styles.gaugeTextOverlay}>
+                        <Text style={styles.gaugePercentageText}>{gaugeValue}%</Text>
+                    </View>
+                </View>
+                <View style={styles.gaugeInfo}>
+                    <Text style={styles.gaugeTitle}>Mission Ready</Text>
+                    <Text style={styles.gaugeSubtitle}>All systems nominal. Ready to deploy.</Text>
                 </View>
             </View>
 
-            {/* Stats Grid - 2 columns × 3 rows */}
-            <View style={styles.grid}>
+            {/* Grid Metrics - 2x2 Grid */}
+            <View style={styles.gridContainer}>
+                {/* Row 1 */}
                 <View style={styles.gridRow}>
-                    <View style={styles.statCard}>
-                        <View style={[styles.cardAccent, { backgroundColor: CARD_COLORS.points }]} />
-                        <View style={styles.cardInner}>
-                            <View style={styles.cardTopRow}>
-                                <Text style={styles.cardLabel}>MARKING POINTS</Text>
-                                <View style={[styles.iconWrap, { borderColor: CARD_COLORS.points + '40' }]}>
-                                    <Ionicons name="location" size={14} color={CARD_COLORS.points} />
-                                </View>
-                            </View>
-                            <Text style={styles.cardValue}>{totalWaypoints}</Text>
+                    {/* Marking Points */}
+                    <View style={styles.metricBox}>
+                        <View style={styles.metricLeft}>
+                            <MaterialCommunityIcons name="map-marker-outline" size={16} color="#3B82F6" />
+                        </View>
+                        <View style={styles.metricRight}>
+                            <Text style={styles.metricLabel}>MARKING POINTS</Text>
+                            <Text style={styles.metricValue}>{totalWaypoints}</Text>
                         </View>
                     </View>
-
-                    <View style={styles.statCard}>
-                        <View style={[styles.cardAccent, { backgroundColor: CARD_COLORS.rows }]} />
-                        <View style={styles.cardInner}>
-                            <View style={styles.cardTopRow}>
-                                <Text style={styles.cardLabel}>TOTAL ROWS</Text>
-                                <View style={[styles.iconWrap, { borderColor: CARD_COLORS.rows + '40' }]}>
-                                    <Ionicons name="reorder-three" size={14} color={CARD_COLORS.rows} />
-                                </View>
-                            </View>
-                            <Text style={styles.cardValue}>{totalRows}</Text>
+                    
+                    {/* Total Distance */}
+                    <View style={styles.metricBox}>
+                        <View style={styles.metricLeft}>
+                            <MaterialCommunityIcons name="vector-polyline" size={16} color="#10B981" />
                         </View>
-                    </View>
-                </View>
-
-                <View style={styles.gridRow}>
-                    <View style={styles.statCard}>
-                        <View style={[styles.cardAccent, { backgroundColor: CARD_COLORS.blocks }]} />
-                        <View style={styles.cardInner}>
-                            <View style={styles.cardTopRow}>
-                                <Text style={styles.cardLabel}>TOTAL BLOCKS</Text>
-                                <View style={[styles.iconWrap, { borderColor: CARD_COLORS.blocks + '40' }]}>
-                                    <Ionicons name="grid" size={14} color={CARD_COLORS.blocks} />
-                                </View>
-                            </View>
-                            <Text style={styles.cardValue}>{totalBlocks}</Text>
-                        </View>
-                    </View>
-
-                    <View style={styles.statCard}>
-                        <View style={[styles.cardAccent, { backgroundColor: CARD_COLORS.distance }]} />
-                        <View style={styles.cardInner}>
-                            <View style={styles.cardTopRow}>
-                                <Text style={styles.cardLabel}>TOTAL DISTANCE</Text>
-                                <View style={[styles.iconWrap, { borderColor: CARD_COLORS.distance + '40' }]}>
-                                    <Ionicons name="speedometer" size={14} color={CARD_COLORS.distance} />
-                                </View>
-                            </View>
-                            <View style={styles.valueRow}>
-                                <Text style={styles.cardValue}>{totalDistanceM}</Text>
-                                <Text style={[styles.unitText, { color: CARD_COLORS.distance }]}>m</Text>
-                            </View>
-                        </View>
-                    </View>
-                </View>
-
-                <View style={styles.gridRow}>
-                    <View style={styles.statCard}>
-                        <View style={[styles.cardAccent, { backgroundColor: CARD_COLORS.duration }]} />
-                        <View style={styles.cardInner}>
-                            <View style={styles.cardTopRow}>
-                                <Text style={styles.cardLabel}>EST. DURATION</Text>
-                                <View style={[styles.iconWrap, { borderColor: CARD_COLORS.duration + '40' }]}>
-                                    <Ionicons name="time" size={14} color={CARD_COLORS.duration} />
-                                </View>
-                            </View>
-                            <Text style={styles.cardValue}>{hours}:{String(minutes).padStart(2, '0')}:{String(seconds).padStart(2, '0')}</Text>
-                        </View>
-                    </View>
-
-                    <View style={styles.statCard}>
-                        <View style={[styles.cardAccent, { backgroundColor: statusColor }]} />
-                        <View style={styles.cardInner}>
-                            <View style={styles.cardTopRow}>
-                                <Text style={styles.cardLabel}>MISSION STATUS</Text>
-                                <View style={[styles.iconWrap, { borderColor: statusColor + '40' }]}>
-                                    <Ionicons name={isReady ? 'checkmark-circle' : 'ellipse-outline'} size={14} color={statusColor} />
-                                </View>
-                            </View>
-                            <Text style={[styles.cardValue, { color: statusColor, fontSize: 16 }]}>
-                                {isReady ? 'Mission Ready' : 'No Data'}
+                        <View style={styles.metricRight}>
+                            <Text style={styles.metricLabel}>TOTAL DISTANCE</Text>
+                            <Text style={styles.metricValue}>
+                                {totalDistanceM} <Text style={styles.metricUnit}>m</Text>
                             </Text>
+                        </View>
+                    </View>
+                </View>
+
+                {/* Row 2 */}
+                <View style={styles.gridRow}>
+                    {/* Est Time */}
+                    <View style={styles.metricBox}>
+                        <View style={styles.metricLeft}>
+                            <MaterialCommunityIcons name="clock-outline" size={16} color="#F59E0B" />
+                        </View>
+                        <View style={styles.metricRight}>
+                            <Text style={styles.metricLabel}>EST. TIME</Text>
+                            <Text style={styles.metricValue}>{durationStr}</Text>
+                        </View>
+                    </View>
+
+                    {/* Total Area */}
+                    <View style={styles.metricBox}>
+                        <View style={styles.metricLeft}>
+                            <MaterialCommunityIcons name="grid" size={16} color="#06B6D4" />
+                        </View>
+                        <View style={styles.metricRight}>
+                            <Text style={styles.metricLabel}>TOTAL AREA</Text>
+                            <Text style={styles.metricValue}>{areaStr}</Text>
                         </View>
                     </View>
                 </View>
@@ -159,130 +193,166 @@ export const MissionStatistics: React.FC<Props> = ({ waypoints, roverPosition })
 
 const styles = StyleSheet.create({
     container: {
-        flex: 1,
-        backgroundColor: colors.panelBg,
+        backgroundColor: '#07111be6',
         borderRadius: 12,
         borderWidth: 1,
-        borderColor: colors.border,
+        borderColor: 'rgba(103, 232, 249, 0.15)',
         padding: 16,
         gap: 12,
+        flex: 1,
     },
-
-    // ── HEADER ──
     header: {
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'space-between',
-        paddingBottom: 12,
+        paddingBottom: 10,
         borderBottomWidth: 1,
-        borderBottomColor: colors.border,
+        borderBottomColor: 'rgba(103, 232, 249, 0.1)',
+    },
+    headerDragging: {
+        borderBottomColor: 'rgba(103, 232, 249, 0.4)',
+        backgroundColor: 'rgba(103, 232, 249, 0.04)',
     },
     headerLeft: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 10,
+        gap: 8,
+    },
+    headerRight: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
+    },
+    headerCloseBtn: {
+        width: 20,
+        height: 20,
+        borderRadius: 4,
+        backgroundColor: 'rgba(255,255,255,0.03)',
+        justifyContent: 'center',
+        alignItems: 'center',
     },
     headerIconWrap: {
-        width: 32,
-        height: 32,
-        borderRadius: 10,
-        backgroundColor: 'rgba(59, 130, 246, 0.15)',
-        borderWidth: 1,
-        borderColor: 'rgba(59, 130, 246, 0.3)',
+        width: 24,
+        height: 24,
+        borderRadius: 6,
+        backgroundColor: 'rgba(103, 232, 249, 0.12)',
         justifyContent: 'center',
         alignItems: 'center',
     },
     headerTitle: {
-        color: colors.accent,
-        fontSize: 14,
+        color: '#E5F1FF',
+        fontSize: 12,
         fontWeight: '700',
-        letterSpacing: 3,
+        letterSpacing: 2,
     },
     headerBadge: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 5,
-        borderWidth: 1,
-        borderRadius: 6,
-        paddingHorizontal: 8,
-        paddingVertical: 3,
+        gap: 4,
+        backgroundColor: 'rgba(255, 255, 255, 0.05)',
+        borderRadius: 4,
+        paddingHorizontal: 6,
+        paddingVertical: 2,
     },
     headerBadgeDot: {
-        width: 5,
-        height: 5,
-        borderRadius: 3,
+        width: 4,
+        height: 4,
+        borderRadius: 2,
     },
     headerBadgeText: {
-        fontSize: 8,
+        fontSize: 7,
         fontWeight: '700',
-        letterSpacing: 1.5,
+        letterSpacing: 1,
     },
-
-    // ── GRID ──
-    grid: {
+    gaugeCard: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        backgroundColor: '#08101a',
+        borderRadius: 10,
+        borderWidth: 1,
+        borderColor: 'rgba(103, 232, 249, 0.1)',
+        padding: 12,
+        gap: 12,
+    },
+    gaugeWrapper: {
+        position: 'relative',
+        width: 54,
+        height: 54,
+    },
+    gaugeTextOverlay: {
+        position: 'absolute',
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    gaugePercentageText: {
+        color: '#67E8F9',
+        fontSize: 11,
+        fontWeight: '700',
+    },
+    gaugeInfo: {
         flex: 1,
+        justifyContent: 'center',
+    },
+    gaugeTitle: {
+        color: '#10B981',
+        fontSize: 12,
+        fontWeight: '700',
+    },
+    gaugeSubtitle: {
+        color: '#9FBEE3',
+        fontSize: 9,
+        marginTop: 2,
+    },
+    gridContainer: {
+        flexDirection: 'column',
         gap: 8,
     },
     gridRow: {
-        flex: 1,
         flexDirection: 'row',
         gap: 8,
     },
-
-    // ── STAT CARD (uniform for all 6) ──
-    statCard: {
+    metricBox: {
         flex: 1,
         flexDirection: 'row',
-        backgroundColor: colors.cardBg,
-        borderRadius: 10,
-        overflow: 'hidden',
+        alignItems: 'center',
+        backgroundColor: '#08101a',
+        borderRadius: 8,
         borderWidth: 1,
-        borderColor: colors.border,
-    },
-    cardAccent: {
-        width: 3,
-        alignSelf: 'stretch',
-    },
-    cardInner: {
-        flex: 1,
+        borderColor: 'rgba(103, 232, 249, 0.1)',
         padding: 10,
+        gap: 8,
     },
-    cardTopRow: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        marginBottom: 6,
-    },
-    iconWrap: {
-        width: 26,
-        height: 26,
-        borderRadius: 13,
-        borderWidth: 1,
+    metricLeft: {
+        width: 28,
+        height: 28,
+        borderRadius: 6,
+        backgroundColor: 'rgba(255,255,255,0.03)',
         justifyContent: 'center',
         alignItems: 'center',
     },
-    cardValue: {
-        color: '#ffffff',
-        fontSize: 22,
-        fontWeight: '800',
-        fontVariant: ['tabular-nums'],
-        textAlign: 'center',
-    },
-    cardLabel: {
-        color: 'rgba(103, 232, 249, 0.7)',
-        fontSize: 9,
-        fontWeight: '700',
-        letterSpacing: 1.5,
-        textTransform: 'uppercase',
-    },
-    valueRow: {
-        flexDirection: 'row',
-        alignItems: 'baseline',
+    metricRight: {
+        flex: 1,
         justifyContent: 'center',
-        gap: 3,
     },
-    unitText: {
-        fontSize: 13,
+    metricLabel: {
+        color: '#9FBEE3',
+        fontSize: 7,
         fontWeight: '600',
+        letterSpacing: 0.5,
+    },
+    metricValue: {
+        color: '#E5F1FF',
+        fontSize: 12,
+        fontWeight: '700',
+        marginTop: 1,
+    },
+    metricUnit: {
+        fontSize: 10,
+        color: '#9FBEE3',
+        fontWeight: '500',
     },
 });

@@ -1,10 +1,10 @@
 export const colors = {
   // Main backgrounds
-  primary: '#0f2b4cff',
-  secondary: '#072347ff',
-  panelBg: '#051d38ff',
-  background: '#0A1628',
-  surface: '#0D2A4B',
+  primary: '#050a12',
+  secondary: '#08101a',
+  panelBg: '#091524e6',
+  background: '#040910',
+  surface: '#071220',
   
   // Accent colors
   accent: '#3B82F6',
@@ -27,23 +27,23 @@ export const colors = {
   text: '#FFFFFF',
   textPrimary: '#E5F1FF',
   textSecondary: '#9FBEE3',
-  textMuted: '#64748B',
+  textMuted: '#475569',
   
   // UI elements
-  border: '#123A61',
-  cardBg: '#0D2A4B',
-  inputBg: '#0e49d1ff',
+  border: '#112235',
+  cardBg: '#07111be6',
+  inputBg: '#091726',
   
   // Header
-  headerBlue: '#0A1F44',
+  headerBlue: '#050a12',
   
   // Button colors
-  greenBtn: '#00B26F',
-  orangeBtn: '#FF8A36',
-  blueBtn: '#1C7DFF',
-  redBtn: '#FF4D4D',
+  greenBtn: '#10B981',
+  orangeBtn: '#F59E0B',
+  blueBtn: '#3B82F6',
+  redBtn: '#EF4444',
   
   // Tab colors
-  tabActive: '#3B82F6',
-  tabInactive: '#64748B',
+  tabActive: '#67E8F9',
+  tabInactive: '#475569',
 };
