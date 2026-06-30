@@ -1,5 +1,5 @@
 import React, { useState, useRef, useMemo, useEffect } from 'react';
-import { View, StyleSheet, TouchableOpacity, Text, Alert, PanResponder, Animated, TouchableWithoutFeedback } from 'react-native';
+import { View, StyleSheet, TouchableOpacity, Text, Alert, PanResponder, Animated } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { WebView } from 'react-native-webview';
 import { Fontisto, MaterialCommunityIcons } from '@expo/vector-icons';
@@ -1458,7 +1458,6 @@ export const PathPlanMap: React.FC<Props> = ({
   };
 
   return (
-    <TouchableWithoutFeedback onPress={onDismissPanel}>
     <View style={styles.container}>
       <WebView
         ref={webViewRef}
@@ -1471,6 +1470,7 @@ export const PathPlanMap: React.FC<Props> = ({
             if (message.type === 'mapReady') {
               setMapReady(true);
             } else if (message.type === 'mapClick') {
+              onDismissPanel?.();
               onMapPress?.({ latitude: message.lat, longitude: message.lng });
               setContextMenu(null);
             } else if (message.type === 'waypointClick') {
@@ -1819,7 +1819,6 @@ export const PathPlanMap: React.FC<Props> = ({
         </View>
       )}
     </View>
-    </TouchableWithoutFeedback>
   );
 };
 

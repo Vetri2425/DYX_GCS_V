@@ -439,8 +439,8 @@ const styles = StyleSheet.create({
         borderRadius: 12,
         borderWidth: 1,
         borderColor: 'rgba(103, 232, 249, 0.15)',
-        padding: 12,
-        gap: 8,
+        padding: 16,
+        gap: 14,
     },
 
     // ── HEADER ──
@@ -521,7 +521,7 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         justifyContent: 'center',
         gap: 8,
-        paddingVertical: 12,
+        paddingVertical: 20,
         borderRadius: 8,
         borderWidth: 1,
         backgroundColor: '#08101a',
@@ -550,7 +550,7 @@ const styles = StyleSheet.create({
         gap: 8,
         borderRadius: 8,
         borderWidth: 1,
-        height: 44,
+        height: 64,
     },
     loadActive: {
         backgroundColor: colors.blueBtn,

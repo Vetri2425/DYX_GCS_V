@@ -2495,12 +2495,12 @@ export default function PathPlanScreen({
             <Text style={{ color: colors.accent, fontSize: 12, fontWeight: '600', marginBottom: 6 }}>Marking Point Details:</Text>
             <View style={{ maxHeight: 280, borderWidth: 1, borderColor: colors.border, borderRadius: 8, backgroundColor: colors.cardBg }}>
               <View style={{ flexDirection: 'row', paddingVertical: 6, paddingHorizontal: 8, borderBottomWidth: 1, borderBottomColor: colors.border }}>
-                <Text style={{ flex: 0.4, color: '#67E8F9', fontWeight: '700', fontSize: 11 }}>#</Text>
-                <Text style={{ flex: 1.8, color: '#67E8F9', fontWeight: '700', fontSize: 11 }}>Latitude</Text>
-                <Text style={{ flex: 1.8, color: '#67E8F9', fontWeight: '700', fontSize: 11 }}>Longitude</Text>
-                <Text style={{ flex: 0.8, color: '#67E8F9', fontWeight: '700', fontSize: 11 }}>Alt(m)</Text>
-                <Text style={{ flex: 0.8, color: '#67E8F9', fontWeight: '700', fontSize: 11 }}>Dist(m)</Text>
-                <Text style={{ flex: 1, color: '#67E8F9', fontWeight: '700', fontSize: 11 }}>Block/Row</Text>
+                <Text style={{ flex: 0.4, color: '#94A3B8', fontWeight: '700', fontSize: 11 }}>#</Text>
+                <Text style={{ flex: 1.8, color: '#94A3B8', fontWeight: '700', fontSize: 11 }}>Latitude</Text>
+                <Text style={{ flex: 1.8, color: '#94A3B8', fontWeight: '700', fontSize: 11 }}>Longitude</Text>
+                <Text style={{ flex: 0.8, color: '#94A3B8', fontWeight: '700', fontSize: 11 }}>Alt(m)</Text>
+                <Text style={{ flex: 0.8, color: '#94A3B8', fontWeight: '700', fontSize: 11 }}>Dist(m)</Text>
+                <Text style={{ flex: 1, color: '#94A3B8', fontWeight: '700', fontSize: 11 }}>Block/Row</Text>
               </View>
               <LegendList
                 data={uploadPreviewWaypoints ?? []}
@@ -2954,6 +2954,7 @@ const styles = StyleSheet.create({
   },
   bottomTableContent: {
     height: 180,
+    overflow: 'hidden',
   },
   bottomTableColHeaderRow: {
     flexDirection: 'row',
@@ -2972,6 +2973,7 @@ const styles = StyleSheet.create({
   },
   bottomTableRowsScroll: {
     flex: 1,
+    minHeight: 0,
   },
   bottomTableRow: {
     flexDirection: 'row',
