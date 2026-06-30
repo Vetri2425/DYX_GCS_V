@@ -1,44 +1,55 @@
 /**
- * usePointMissionEvents — Live + backfill point mission event journal.
+ * usePointMissionEvents — Single owner of `point_mission_event` socket ingestion.
  *
  * Features:
- * - Subscribes to `point_mission_event` socket events
+ * - Subscribes to `point_mission_event` socket events (not forwarded via telemetry)
  * - On socket reconnect, fetches missed events since last event ID
  * - Builds and maintains a `statusMap` keyed by point_index
- * - Exposes `currentPointIndex`, `waitingForContinue` derived state
- *
- * Usage in MissionReportScreen:
- *   const { statusMap, waitingForContinue, currentPointIndex } = usePointMissionEvents(socket);
+ * - Guards against stale generations, duplicate event IDs, and status downgrades
+ * - Exposes terminal mission outcomes from authoritative PX4 journal events
  */
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import type { Socket } from 'socket.io-client';
 import { getPointEvents, getPointStatus } from '../services/missionLifecycleService';
 import {
-  applyPointEvent,
   buildStatusMapFromEvents,
-  hasWaitingForContinue,
+  clearWaitingAfterContinue,
   getCurrentPointIndex,
+  getPointMissionTerminalOutcome,
+  hasWaitingForContinue,
+  ingestPointEvent,
+  INITIAL_POINT_EVENT_CURSOR,
+  type PointEventCursor,
+  type PointMissionTerminalOutcome,
+  type WaypointStatusEntry,
 } from '../adapters/pointEventAdapter';
-import type { WaypointStatusEntry } from '../adapters/pointEventAdapter';
 import type { PointMissionEvent } from '../types/px4/mission';
 import { POINT_MISSION_ENABLED } from '../config/featureFlags';
 
 // ── Hook ──────────────────────────────────────────────────────────────────────
 
+export interface PointMissionTerminalState {
+  outcome: PointMissionTerminalOutcome;
+  event: PointMissionEvent;
+}
+
 export interface UsePointMissionEventsResult {
-  /** Per-point status map: index → WaypointStatusEntry. */
   statusMap: Record<number, WaypointStatusEntry>;
-  /** True when any point is waiting for operator continue. */
   waitingForContinue: boolean;
-  /** Active or most recently active point index (null if no activity). */
   currentPointIndex: number | null;
-  /** Last received event ID (used for backfill on reconnect). */
   lastEventId: number | null;
-  /** Latest point mission generation (for skip/continue guards). */
   expectedGeneration: number | null;
-  /** Reset the status map (call on mission clear/restart). */
+  missionTerminal: PointMissionTerminalState | null;
   resetStatusMap: () => void;
+  acknowledgeContinueSuccess: () => void;
+  clearMissionTerminal: () => void;
+}
+
+function terminalStateFromEvent(event: PointMissionEvent): PointMissionTerminalState | null {
+  const outcome = getPointMissionTerminalOutcome(event);
+  if (!outcome) return null;
+  return { outcome, event };
 }
 
 export function usePointMissionEvents(
@@ -48,75 +59,109 @@ export function usePointMissionEvents(
   const [statusMap, setStatusMap] = useState<Record<number, WaypointStatusEntry>>({});
   const [lastEventId, setLastEventId] = useState<number | null>(null);
   const [expectedGeneration, setExpectedGeneration] = useState<number | null>(null);
+  const [missionTerminal, setMissionTerminal] = useState<PointMissionTerminalState | null>(null);
 
-  const lastEventIdRef = useRef<number | null>(null);
+  const statusMapRef = useRef(statusMap);
+  const cursorRef = useRef<PointEventCursor>(INITIAL_POINT_EVENT_CURSOR);
+
+  useEffect(() => {
+    statusMapRef.current = statusMap;
+  }, [statusMap]);
+
+  const syncCursor = useCallback((cursor: PointEventCursor) => {
+    cursorRef.current = cursor;
+    setLastEventId(cursor.lastEventId > 0 ? cursor.lastEventId : null);
+    if (typeof cursor.generation === 'number') {
+      setExpectedGeneration(cursor.generation);
+    }
+  }, []);
 
   const resetStatusMap = useCallback(() => {
+    statusMapRef.current = {};
     setStatusMap({});
     setLastEventId(null);
     setExpectedGeneration(null);
-    lastEventIdRef.current = null;
+    setMissionTerminal(null);
+    cursorRef.current = INITIAL_POINT_EVENT_CURSOR;
   }, []);
 
-  // ── Live event handler ────────────────────────────────────────────────────
+  const clearMissionTerminal = useCallback(() => {
+    setMissionTerminal(null);
+  }, []);
+
+  const acknowledgeContinueSuccess = useCallback(() => {
+    setStatusMap((prev) => {
+      const next = clearWaitingAfterContinue(prev);
+      statusMapRef.current = next;
+      return next;
+    });
+  }, []);
 
   const handlePointEvent = useCallback((raw: unknown) => {
     if (!POINT_MISSION_ENABLED) return;
     const event = raw as PointMissionEvent;
+    const result = ingestPointEvent(statusMapRef.current, event, cursorRef.current);
 
-    setStatusMap((prev) => applyPointEvent(prev, event));
-    setLastEventId(event.event_id);
-    lastEventIdRef.current = event.event_id;
-    if (typeof event.generation === 'number') {
-      setExpectedGeneration(event.generation);
+    syncCursor(result.cursor);
+
+    if (result.accepted) {
+      statusMapRef.current = result.statusMap;
+      setStatusMap(result.statusMap);
     }
-  }, []);
 
-  // ── Backfill on reconnect ─────────────────────────────────────────────────
+    if (result.terminalEvent) {
+      const terminal = terminalStateFromEvent(result.terminalEvent);
+      if (terminal) {
+        setMissionTerminal(terminal);
+      }
+    }
+  }, [syncCursor]);
 
   const backfill = useCallback(async () => {
     if (!POINT_MISSION_ENABLED) return;
     try {
-      const response = await getPointEvents(lastEventIdRef.current ?? undefined);
-      if (response.events.length > 0) {
-        const patchMap = buildStatusMapFromEvents(response.events);
-        setStatusMap((prev) => ({ ...prev, ...patchMap }));
-        const maxId = Math.max(...response.events.map((e) => e.event_id));
-        setLastEventId(maxId);
-        lastEventIdRef.current = maxId;
-        const lastGen = response.events[response.events.length - 1]?.generation;
-        if (typeof lastGen === 'number') {
-          setExpectedGeneration(lastGen);
+      const response = await getPointEvents(
+        cursorRef.current.lastEventId > 0 ? cursorRef.current.lastEventId : undefined,
+      );
+
+      if (response.events.length === 0) {
+        if (typeof response.last_event_id === 'number' && response.last_event_id > 0) {
+          syncCursor({
+            ...cursorRef.current,
+            lastEventId: Math.max(cursorRef.current.lastEventId, response.last_event_id),
+          });
+        }
+        return;
+      }
+
+      const batch = buildStatusMapFromEvents(
+        response.events,
+        statusMapRef.current,
+        cursorRef.current,
+      );
+
+      statusMapRef.current = batch.statusMap;
+      setStatusMap(batch.statusMap);
+      syncCursor(batch.cursor);
+
+      if (batch.terminalEvent) {
+        const terminal = terminalStateFromEvent(batch.terminalEvent);
+        if (terminal) {
+          setMissionTerminal(terminal);
         }
       }
     } catch {
       // Silent — backfill is best-effort
     }
-  }, []);
-
-  // ── Register socket listeners ─────────────────────────────────────────────
+  }, [syncCursor]);
 
   useEffect(() => {
     if (!socket || !POINT_MISSION_ENABLED) return;
-
     socket.on('point_mission_event', handlePointEvent);
-
-    // Register completion listeners
-    const handleMissionCompleted = () => {
-      // Keep status map as-is — let MissionReportScreen show completion dialog
-    };
-
-    socket.on('mission_completed', handleMissionCompleted);
-    socket.on('mission_completion_degraded', handleMissionCompleted);
-
     return () => {
       socket.off('point_mission_event', handlePointEvent);
-      socket.off('mission_completed', handleMissionCompleted);
-      socket.off('mission_completion_degraded', handleMissionCompleted);
     };
   }, [socket, handlePointEvent]);
-
-  // ── Backfill on reconnect ─────────────────────────────────────────────────
 
   useEffect(() => {
     if (connectionState !== 'connected' || !POINT_MISSION_ENABLED) return;
@@ -125,23 +170,25 @@ export function usePointMissionEvents(
       .then((st) => {
         if (typeof st.expected_generation === 'number') {
           setExpectedGeneration(st.expected_generation);
+          cursorRef.current = {
+            ...cursorRef.current,
+            generation: st.expected_generation,
+          };
         }
       })
       .catch(() => {});
   }, [connectionState, backfill]);
 
-  // ── Derived state ─────────────────────────────────────────────────────────
-
-  const waitingForContinue = hasWaitingForContinue(statusMap);
-  const currentPointIndex = getCurrentPointIndex(statusMap);
-
   return {
     statusMap,
-    waitingForContinue,
-    currentPointIndex,
+    waitingForContinue: hasWaitingForContinue(statusMap),
+    currentPointIndex: getCurrentPointIndex(statusMap),
     lastEventId,
     expectedGeneration,
+    missionTerminal,
     resetStatusMap,
+    acknowledgeContinueSuccess,
+    clearMissionTerminal,
   };
 }
 

@@ -169,6 +169,7 @@ export interface PointMissionEvent {
   point_index: number;
   generation: number;
   timestamp: string;
+  terminal?: boolean;
   lat?: number;
   lon?: number;
   reason?: string;

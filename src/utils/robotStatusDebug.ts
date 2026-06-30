@@ -73,11 +73,11 @@ export function isRobotStatusDebugEnabled(): boolean {
 }
 
 /** Always-on connection diagnostics (Metro terminal) — not gated on telemetry events. */
-export function telemetryDiagLog(message: string, extra?: Record<string, unknown>): void {
-  const env = process.env.EXPO_PUBLIC_TELEMETRY_DIAG;
-  if (env?.toLowerCase() === 'false' || env === '0') return;
-  const suffix = extra ? ` ${JSON.stringify(extra)}` : '';
-  console.log(`[GCS-Telemetry] ${message}${suffix}`);
+export function telemetryDiagLog(_message: string, _extra?: Record<string, unknown>): void {
+  // const env = process.env.EXPO_PUBLIC_TELEMETRY_DIAG;
+  // if (env?.toLowerCase() === 'false' || env === '0') return;
+  // const suffix = _extra ? ` ${JSON.stringify(_extra)}` : '';
+  // console.log(`[GCS-Telemetry] ${_message}${suffix}`);
 }
 
 export function getRobotStatusDebug(): RobotStatusDebugSnapshot {
@@ -91,7 +91,7 @@ export function subscribeRobotStatusDebug(listener: () => void): () => void {
 
 export function patchRobotStatusDebug(
   patch: Partial<RobotStatusDebugSnapshot>,
-): RobotStatusDebugSnapshot {
+): void {
   snapshot = {
     ...snapshot,
     ...patch,
@@ -99,37 +99,28 @@ export function patchRobotStatusDebug(
     adapted: patch.adapted ? { ...snapshot.adapted, ...patch.adapted } : snapshot.adapted,
   };
   listeners.forEach((fn) => fn());
-
-  if (isRobotStatusDebugEnabled()) {
-    console.log('[RobotStatusDebug]', formatRobotStatusDebugLine(snapshot));
-  }
-
-  return snapshot;
-}
-
-export function resetRobotStatusDebug(): void {
   snapshot = { ...DEFAULT_SNAPSHOT };
   listeners.forEach((fn) => fn());
 }
 
-function formatRobotStatusDebugLine(s: RobotStatusDebugSnapshot): string {
-  const raw = s.rawPayload;
-  const keys = raw ? Object.keys(raw).slice(0, 12).join(',') : '—';
-  return [
-    `src=${s.lastSource}`,
-    `sock=${s.socketConnected ? 'up' : 'down'}`,
-    `conn=${s.connectionState}`,
-    `px4=${s.px4Detected}`,
-    `tel#=${s.telemetryEventCount}`,
-    `rej#=${s.rejectedEventCount}`,
-    raw ? `raw{battery_pct:${raw.battery_pct},gps_fix:${raw.gps_fix},gps_sat:${raw.gps_sat},lat:${raw.lat},connected:${raw.connected}}` : 'raw=—',
-    `ui{battery:${s.uiStatus?.battery ?? '—'},gps:${s.uiStatus?.gps ?? '—'},sats:${s.uiStatus?.satellites ?? '—'}}`,
-    `keys=${keys}`,
-    s.rejectReason ? `reject=${s.rejectReason}` : '',
-  ]
-    .filter(Boolean)
-    .join(' | ');
-}
+// function formatRobotStatusDebugLine(s: RobotStatusDebugSnapshot): string {
+//   const raw = s.rawPayload;
+//   const keys = raw ? Object.keys(raw).slice(0, 12).join(',') : '—';
+//   return [
+//     `src=${s.lastSource}`,
+//     `sock=${s.socketConnected ? 'up' : 'down'}`,
+//     `conn=${s.connectionState}`,
+//     `px4=${s.px4Detected}`,
+//     `tel#=${s.telemetryEventCount}`,
+//     `rej#=${s.rejectedEventCount}`,
+//     raw ? `raw{battery_pct:${raw.battery_pct},gps_fix:${raw.gps_fix},gps_sat:${raw.gps_sat},lat:${raw.lat},connected:${raw.connected}}` : 'raw=—',
+//     `ui{battery:${s.uiStatus?.battery ?? '—'},gps:${s.uiStatus?.gps ?? '—'},sats:${s.uiStatus?.satellites ?? '—'}}`,
+//     `keys=${keys}`,
+//     s.rejectReason ? `reject=${s.rejectReason}` : '',
+//   ]
+//     .filter(Boolean)
+//     .join(' | ');
+// }
 
 /** Pick robot-status-relevant fields from a socket/REST payload. */
 export function pickRawRobotFields(

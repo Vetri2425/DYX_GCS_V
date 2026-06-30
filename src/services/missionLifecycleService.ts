@@ -23,6 +23,11 @@ import type {
   PointMissionStatusResponse,
   PointEventHistoryResponse,
 } from '../types/px4/mission';
+import {
+  normalizePointContinueResponse,
+  normalizePointMissionStatus,
+  normalizePointSkipResponse,
+} from './px4PointApiNormalize';
 
 // ── Mission lifecycle ─────────────────────────────────────────────────────────
 
@@ -102,7 +107,8 @@ export async function getMissionStatus(): Promise<MissionStatusResponse> {
  * Call after receiving `point_waiting_for_continue` event.
  */
 export async function continuePoint(): Promise<PointContinueResponse> {
-  return apiPost<PointContinueResponse>(PX4_MISSION.POINT_CONTINUE);
+  const raw = await apiPost<Record<string, unknown>>(PX4_MISSION.POINT_CONTINUE);
+  return normalizePointContinueResponse(raw);
 }
 
 /**
@@ -112,14 +118,16 @@ export async function continuePoint(): Promise<PointContinueResponse> {
 export async function skipPoint(
   request: PointSkipRequest,
 ): Promise<PointSkipResponse> {
-  return apiPost<PointSkipResponse>(PX4_MISSION.POINT_SKIP, request);
+  const raw = await apiPost<Record<string, unknown>>(PX4_MISSION.POINT_SKIP, request);
+  return normalizePointSkipResponse(raw);
 }
 
 /**
  * Get detailed point mission status (index, generation, waiting state).
  */
 export async function getPointStatus(): Promise<PointMissionStatusResponse> {
-  return apiGet<PointMissionStatusResponse>(PX4_MISSION.POINT_STATUS);
+  const raw = await apiGet<Record<string, unknown>>(PX4_MISSION.POINT_STATUS);
+  return normalizePointMissionStatus(raw);
 }
 
 /**

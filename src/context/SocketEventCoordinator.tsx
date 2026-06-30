@@ -5,8 +5,8 @@
  * event listeners out of TelemetryProvider into this coordinator.
  *
  * 4WD_SERVER additions (when ROVER_ENABLED):
- *   - point_mission_event forwarding
- *   - mission_completed / mission_completion_degraded
+ *   - mission_completed / mission_completion_degraded (continuous/dash)
+ *   - point_mission_event is owned by usePointMissionEvents
  *   - gps_safety_abort (replaces legacy failsafe emits)
  *   - mission_status → MissionStagingContext state sync
  *   - auth_revoked handled by AuthContext (not here)

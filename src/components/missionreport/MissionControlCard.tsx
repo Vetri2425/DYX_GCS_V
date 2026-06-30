@@ -58,8 +58,8 @@ const MissionControlCard: React.FC<MissionControlCardProps> = ({
   // Only active when mission mode is Auto or Manual (not Dash, Continuous, etc.)
   const isModeButtonsActive = React.useMemo(() => {
     const normalizedMode = (missionMode || '').toLowerCase().trim();
-    return normalizedMode === 'auto' || 
-           normalizedMode === 'manual';
+    return normalizedMode === 'auto' ||
+      normalizedMode === 'manual';
   }, [missionMode]);
   const [bulkTo, setBulkTo] = React.useState<string>('');
   const [bulkError, setBulkError] = React.useState<string | null>(null);
@@ -248,7 +248,7 @@ const MissionControlCard: React.FC<MissionControlCardProps> = ({
     try {
       console.log('[MissionControlCard] Changing mode to:', newMode);
       const response = await setBackendMissionMode({ mode: newMode.toLowerCase() as 'auto' | 'manual' });
-      
+
       if (response.success) {
         onSetMode(newMode);
         console.log('[MissionControlCard] Mode changed successfully');
@@ -289,12 +289,12 @@ const MissionControlCard: React.FC<MissionControlCardProps> = ({
           >
             <Text style={styles.buttonText}>
               {isStarting
-                  ? '⏳ Starting...'
-                  : isStopping
-                    ? '⏳ Stopping...'
-                    : isRunning
-                      ? 'STOP'
-                      : 'START'}
+                ? '⏳ Starting...'
+                : isStopping
+                  ? '⏳ Stopping...'
+                  : isRunning
+                    ? 'STOP'
+                    : 'START'}
             </Text>
           </TouchableOpacity>
 
@@ -489,7 +489,7 @@ const MissionControlCard: React.FC<MissionControlCardProps> = ({
                 {bulkError ? <Text style={styles.errorText}>{bulkError}</Text> : null}
               </View>
 
-              <View style={[styles.confirmButtons, { marginTop: 14 }]}> 
+              <View style={[styles.confirmButtons, { marginTop: 14 }]}>
                 <TouchableOpacity style={styles.confirmCancelBtn} onPress={() => setShowBulkModal(false)} disabled={isBulkSubmitting}>
                   <Text style={styles.confirmCancelText}>Cancel</Text>
                 </TouchableOpacity>
@@ -590,8 +590,10 @@ const MissionControlCard: React.FC<MissionControlCardProps> = ({
               <View style={styles.confirmBody}>
                 <View style={[
                   styles.confirmBigIcon,
-                  { borderColor: confirmAction?.action?.toLowerCase().includes('stop') ? `${colors.danger}40` : `${colors.warning}40`,
-                    backgroundColor: confirmAction?.action?.toLowerCase().includes('stop') ? `${colors.danger}12` : `${colors.warning}12` },
+                  {
+                    borderColor: confirmAction?.action?.toLowerCase().includes('stop') ? `${colors.danger}40` : `${colors.warning}40`,
+                    backgroundColor: confirmAction?.action?.toLowerCase().includes('stop') ? `${colors.danger}12` : `${colors.warning}12`
+                  },
                 ]}>
                   {confirmAction?.action?.toLowerCase().includes('stop')
                     ? <Text style={{ fontSize: 28 }}>🛑</Text>
@@ -629,21 +631,21 @@ const MissionControlCard: React.FC<MissionControlCardProps> = ({
                       return 'No GPS';
                     })();
                     return (
-                      <View style={{flex: 1, flexDirection: 'row', backgroundColor: colors.cardBg, borderRadius: 10, overflow: 'hidden', borderWidth: 1, borderColor: colors.border}}>
+                      <View style={{ flex: 1, flexDirection: 'row', backgroundColor: colors.cardBg, borderRadius: 10, overflow: 'hidden', borderWidth: 1, borderColor: colors.border }}>
                         <View style={{ width: 3, alignSelf: 'stretch', backgroundColor: rtkStatusColor }} />
                         <View style={{ flex: 1, padding: 10, gap: 6, justifyContent: 'center' }}>
                           <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-                            <View style={{width: 28, height: 28, borderRadius: 14, borderWidth: 1, borderColor: rtkStatusColor + '40', justifyContent: 'center', alignItems: 'center'}}>
+                            <View style={{ width: 28, height: 28, borderRadius: 14, borderWidth: 1, borderColor: rtkStatusColor + '40', justifyContent: 'center', alignItems: 'center' }}>
                               <Ionicons name="cellular" size={16} color={rtkStatusColor} />
                             </View>
-                            <View style={{flexDirection: 'row', alignItems: 'center', gap: 4, borderWidth: 1, borderRadius: 5, paddingHorizontal: 6, paddingVertical: 2, backgroundColor: rtkStatusColor + '22', borderColor: rtkStatusColor}}>
+                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, borderWidth: 1, borderRadius: 5, paddingHorizontal: 6, paddingVertical: 2, backgroundColor: rtkStatusColor + '22', borderColor: rtkStatusColor }}>
                               <View style={{ width: 4, height: 4, borderRadius: 2, backgroundColor: rtkStatusColor }} />
-                              <Text style={{fontSize: 7, fontWeight: '700', letterSpacing: 1, color: rtkStatusColor}}>{rtkStatusBadge}</Text>
+                              <Text style={{ fontSize: 7, fontWeight: '700', letterSpacing: 1, color: rtkStatusColor }}>{rtkStatusBadge}</Text>
                             </View>
                           </View>
                           <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-                            <Text style={{color: 'rgba(103, 232, 249, 0.8)', fontSize: 9, fontWeight: '700', letterSpacing: 2, textTransform: 'uppercase'}}>GPS / RTK</Text>
-                            <Text style={{color: rtkStatusColor, fontSize: 12, fontWeight: '700', flexShrink: 1, textAlign: 'right'}} numberOfLines={1}>{rtkStatusText}</Text>
+                            <Text style={{ color: 'rgba(103, 232, 249, 0.8)', fontSize: 9, fontWeight: '700', letterSpacing: 2, textTransform: 'uppercase' }}>GPS / RTK</Text>
+                            <Text style={{ color: rtkStatusColor, fontSize: 12, fontWeight: '700', flexShrink: 1, textAlign: 'right' }} numberOfLines={1}>{rtkStatusText}</Text>
                           </View>
                         </View>
                       </View>
@@ -651,21 +653,21 @@ const MissionControlCard: React.FC<MissionControlCardProps> = ({
                   })()}
 
                   {/* Mode Card */}
-                  <View style={{flex: 1, flexDirection: 'row', backgroundColor: colors.cardBg, borderRadius: 10, overflow: 'hidden', borderWidth: 1, borderColor: colors.border}}>
+                  <View style={{ flex: 1, flexDirection: 'row', backgroundColor: colors.cardBg, borderRadius: 10, overflow: 'hidden', borderWidth: 1, borderColor: colors.border }}>
                     <View style={{ width: 3, alignSelf: 'stretch', backgroundColor: colors.success }} />
                     <View style={{ flex: 1, padding: 10, gap: 6, justifyContent: 'center' }}>
                       <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-                        <View style={{width: 28, height: 28, borderRadius: 14, borderWidth: 1, borderColor: 'rgba(16, 185, 129, 0.3)', justifyContent: 'center', alignItems: 'center'}}>
+                        <View style={{ width: 28, height: 28, borderRadius: 14, borderWidth: 1, borderColor: 'rgba(16, 185, 129, 0.3)', justifyContent: 'center', alignItems: 'center' }}>
                           <Ionicons name="settings-sharp" size={16} color={colors.success} />
                         </View>
-                        <View style={{flexDirection: 'row', alignItems: 'center', gap: 4, borderWidth: 1, borderRadius: 5, paddingHorizontal: 6, paddingVertical: 2, backgroundColor: 'rgba(16, 185, 129, 0.15)', borderColor: colors.success}}>
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, borderWidth: 1, borderRadius: 5, paddingHorizontal: 6, paddingVertical: 2, backgroundColor: 'rgba(16, 185, 129, 0.15)', borderColor: colors.success }}>
                           <View style={{ width: 4, height: 4, borderRadius: 2, backgroundColor: colors.success }} />
-                          <Text style={{fontSize: 7, fontWeight: '700', letterSpacing: 1, color: colors.success}}>ACTIVE</Text>
+                          <Text style={{ fontSize: 7, fontWeight: '700', letterSpacing: 1, color: colors.success }}>ACTIVE</Text>
                         </View>
                       </View>
                       <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-                        <Text style={{color: 'rgba(103, 232, 249, 0.8)', fontSize: 9, fontWeight: '700', letterSpacing: 2, textTransform: 'uppercase'}}>MODE</Text>
-                        <Text style={{color: '#ffffff', fontSize: 12, fontWeight: '700', flexShrink: 1, textAlign: 'right'}} numberOfLines={1}>{missionMode}</Text>
+                        <Text style={{ color: 'rgba(103, 232, 249, 0.8)', fontSize: 9, fontWeight: '700', letterSpacing: 2, textTransform: 'uppercase' }}>MODE</Text>
+                        <Text style={{ color: '#ffffff', fontSize: 12, fontWeight: '700', flexShrink: 1, textAlign: 'right' }} numberOfLines={1}>{missionMode}</Text>
                       </View>
                     </View>
                   </View>

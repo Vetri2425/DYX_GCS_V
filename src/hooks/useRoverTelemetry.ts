@@ -1573,10 +1573,7 @@ export function useRoverTelemetry(): UseRoverTelemetryResult {
           }
         });
 
-        // 4WD_SERVER — point mission event journal (replaces mission_event)
-        socket.on(SOCKET_EVENTS.POINT_MISSION_EVENT, (data: any) => {
-          missionEventCallbackRef.current.forEach((cb) => cb(data));
-        });
+        // point_mission_event is owned exclusively by usePointMissionEvents (MissionReportScreen).
 
         socket.on(SOCKET_EVENTS.MISSION_COMPLETED, (data: any) => {
           missionEventCallbackRef.current.forEach((cb) =>

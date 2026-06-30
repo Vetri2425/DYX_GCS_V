@@ -1950,11 +1950,11 @@ export default function PathPlanScreen({ isVisible = true }: PathPlanScreenProps
                 {/* Point B */}
                 <View style={cadStyles.gpsRow}>
                   <Text style={cadStyles.gpsLabel}>Point B — Lat:</Text>
-                  <TouchableOpacity style={cadStyles.gpsInput} onPress={() => {}}>
+                  <TouchableOpacity style={cadStyles.gpsInput} onPress={() => { }}>
                     <Text style={cadStyles.gpsInputText}>{gpsInputB.lat || 'enter value'}</Text>
                   </TouchableOpacity>
                   <Text style={cadStyles.gpsLabel}>Lon:</Text>
-                  <TouchableOpacity style={cadStyles.gpsInput} onPress={() => {}}>
+                  <TouchableOpacity style={cadStyles.gpsInput} onPress={() => { }}>
                     <Text style={cadStyles.gpsInputText}>{gpsInputB.lon || 'enter value'}</Text>
                   </TouchableOpacity>
                 </View>
@@ -2114,7 +2114,7 @@ export default function PathPlanScreen({ isVisible = true }: PathPlanScreenProps
                   measurePoints={measurePoints}
                   measureResult={measureResult}
                   onMeasureClear={() => { setMeasurePoints([]); setMeasureResult(null); }}
-              onMeasureWaypointSelect={handleMeasureWaypointSelect}
+                  onMeasureWaypointSelect={handleMeasureWaypointSelect}
                   isVisible={isVisible}
                 />
               </View>
