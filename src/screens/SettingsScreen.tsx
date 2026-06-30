@@ -172,9 +172,10 @@ const SettingsScreenComponent: React.FC<SettingsScreenProps> = ({ visible, onClo
     setRtkError(null);
 
     try {
-      const ntripUrl = `rtcm://${profile.username}:${profile.password}@${profile.casterAddress}:${profile.port}/${profile.mountpoint}`;
-      console.log('[RTK] Starting stream with URL:', ntripUrl);
-      const response = await services.injectRTK(ntripUrl.trim());
+      // NRP_ROS LEGACY DISABLED — injectRTK (POST /api/rtk/inject). Use RTKInjectionScreen + rtkService.
+      console.warn('[RTK] NRP_ROS injectRTK disabled — use RTK Injection screen (PX4 /api/rtk/ntrip/start)');
+      const response = { success: false, message: 'NRP_ROS RTK inject disabled — use RTK Injection screen' };
+      // const response = await services.injectRTK(ntripUrl.trim());
 
       if (response.success) {
         setRtkFeedback(response.message ?? 'RTK stream started successfully.');

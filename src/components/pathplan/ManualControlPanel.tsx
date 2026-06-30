@@ -69,29 +69,9 @@ export const ManualControlPanel: React.FC<ManualControlPanelProps> = ({
     
     lastEmitTime.current = now;
     
-    const left = leftThrottleRef.current;
-    const right = rightThrottleRef.current;
-    
-    // Convert normalized values (-1 to 1) to PWM (1000-2000)
-    const leftPWM = Math.round(1500 + (left * 500));
-    const rightPWM = Math.round(1500 + (right * 500));
-    
-    const payload = {
-      left_throttle: left,
-      right_throttle: right,
-      left_pwm: leftPWM,
-      right_pwm: rightPWM,
-      channels: [73, 74],
-      timestamp: new Date().toISOString(),
-    };
-    
-    // Emit via Socket.IO
-    if (socket?.connected) {
-      socket.emit('manual_control', payload);
-      console.log('[ManualControl] Emitted:', payload);
-    } else {
-      console.warn('[ManualControl] Socket not connected');
-    }
+    // NRP_ROS LEGACY DISABLED — socket.emit('manual_control', PWM payload)
+    // Use joystickLeaseService / useJoystickLease (4WD_SERVER) instead.
+    console.warn('[ManualControl] NRP_ROS manual_control disabled — wire useJoystickLease');
   }, [isConnected, socket]);
 
   /**
@@ -239,7 +219,7 @@ export const ManualControlPanel: React.FC<ManualControlPanelProps> = ({
   }, [services]);
 
   /**
-   * Emergency stop - immediately stop both throttles and switch to HOLD
+   * Emergency stop - immediately stop both throttles and call PX4 e-stop.
    */
   const emergencyStop = useCallback(async () => {
     leftThrottleRef.current = 0;
@@ -252,10 +232,10 @@ export const ManualControlPanel: React.FC<ManualControlPanelProps> = ({
     sendManualControl();
     
     try {
-      await services.setMode('HOLD');
-      Alert.alert('EMERGENCY STOP', 'Rover stopped and switched to HOLD mode.');
+      await services.emergencyStop();
+      Alert.alert('EMERGENCY STOP', 'PX4 emergency stop sent.');
     } catch (error) {
-      Alert.alert('Error', 'Failed to activate HOLD mode');
+      Alert.alert('Error', 'Failed to send PX4 emergency stop');
       console.error('[ManualControl] Emergency stop failed:', error);
     }
   }, [services, sendManualControl]);

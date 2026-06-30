@@ -28,7 +28,9 @@
         "android.permission.ACCESS_NETWORK_STATE"
       ]
     },
-    "ios": {},
+    "ios": {
+      "bundleIdentifier": "com.dyxgcs.mobile"
+    },
     "web": {
       "orientation": "landscape"
     },
@@ -56,6 +58,9 @@
       "checkOnLaunch": "always",
       "fallbackToCacheTimeout": 0,
       "url": "https://u.expo.dev/5e4ca5bf-e5a2-402e-ae22-e7e102b59c66"
-    }
+    },
+    "plugins": [
+      "expo-font"
+    ]
   }
 }

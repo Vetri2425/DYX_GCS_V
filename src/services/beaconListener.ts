@@ -228,23 +228,29 @@ class BeaconListener {
             const raw = msg.toString();
             const parsed = JSON.parse(raw);
 
-            // Verify this is a rover beacon
-            if (parsed.type !== 'rover_beacon') {
+            // 4WD_SERVER sends type "drawing"; legacy NRP sends "rover_beacon".
+            // Accept known types or any payload with rover_id + reachable host.
+            const beaconType = parsed.type as string | undefined;
+            const knownTypes = new Set(['rover_beacon', 'drawing', 'px4', 'rover']);
+            if (beaconType && !knownTypes.has(beaconType)) {
                 return;
             }
 
-            // Validate required fields
-            if (!parsed.rover_id || !parsed.ip || !parsed.port) {
-                console.warn('[BeaconListener] Invalid beacon - missing required fields:', parsed);
+            const roverId = parsed.rover_id || parsed.id;
+            const ip = parsed.ip || parsed.host || rinfo.address;
+            const port = parsed.port ?? 5001;
+
+            if (!roverId || !ip) {
+                console.warn('[BeaconListener] Invalid beacon - missing rover_id or ip:', parsed);
                 return;
             }
 
             // Construct DiscoveredRover with defaults for optional fields
             const rover: DiscoveredRover = {
-                roverId: parsed.rover_id,
-                roverName: parsed.rover_name || parsed.rover_id,
-                ip: parsed.ip,
-                port: parsed.port,
+                roverId,
+                roverName: parsed.rover_name || parsed.name || roverId,
+                ip,
+                port,
                 version: parsed.version || '1.0',
                 uptime: parsed.uptime || 0,
                 lastSeen: Date.now(),

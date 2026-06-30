@@ -31,30 +31,43 @@ import {
   Waypoint,
 } from '../types/telemetry';
 import { LoraRTKStatus } from '../types/rtk';
+import { AUTH_ENABLED, isPx4DxpEnabled } from '../config/featureFlags';
+import { isPx4Payload, toRoverTelemetry, mergeMissionStatus } from '../adapters/px4TelemetryAdapter';
+import { toNetworkData } from '../adapters/px4NetworkAdapter';
+import { rtkStatusToEnvelope } from '../adapters/px4RtkStatusAdapter';
+import { normalizePx4Mode } from '../adapters/px4ModeAdapter';
+import { PX4_SYSTEM, PX4_TELEMETRY, PX4_RTK } from '../config/px4Endpoints';
+import type { Px4HealthzResponse } from '../types/px4/telemetry';
+import type { RtkStatusResponse } from '../services/rtkService';
+import { apiGet, apiPost } from '../services/apiClient';
+import { loadSession } from '../services/authStorage';
+import {
+  isRobotStatusDebugEnabled,
+  getRobotStatusDebug,
+  patchRobotStatusDebug,
+  pickRawRobotFields,
+  resetRobotStatusDebug,
+  telemetryDiagLog,
+} from '../utils/robotStatusDebug';
 
-// ArduRover custom mode number → name translation.
-// MAVROS emits "CMODEn" when vehicle-type detection hasn't completed yet.
-const ARDUROVER_MODES: Record<number, string> = {
-  0: 'MANUAL', 1: 'ACRO', 3: 'STEERING', 4: 'HOLD',
-  5: 'LOITER', 6: 'FOLLOW', 7: 'SIMPLE', 8: 'DOCK',
-  9: 'CIRCLE', 10: 'AUTO', 11: 'RTL', 12: 'SMART_RTL',
-  15: 'GUIDED', 16: 'INITIALISING',
-};
+/** Mode normalizer — PX4 only (NRP_ROS CMODE table disabled). */
+const normalizeRoverMode = (mode: unknown): string => normalizePx4Mode(mode);
 
-// Normalize mode names from MAVROS/bridge payloads.
-// Supports "CMODE9", "CMODE(9)", and plain names like "CIRCLE".
-const normalizeRoverMode = (mode: unknown): string => {
-  if (typeof mode !== 'string') return 'UNKNOWN';
+// NRP_ROS LEGACY DISABLED — ArduRover CMODE(n) mode translation table.
+// const ARDUROVER_MODES: Record<number, string> = {
+//   0: 'MANUAL', 1: 'ACRO', 3: 'STEERING', 4: 'HOLD',
+//   5: 'LOITER', 6: 'FOLLOW', 7: 'SIMPLE', 8: 'DOCK',
+//   9: 'CIRCLE', 10: 'AUTO', 11: 'RTL', 12: 'SMART_RTL',
+//   15: 'GUIDED', 16: 'INITIALISING',
+// };
+// const normalizeRoverMode = (mode: unknown): string => { ... };
 
-  const rawMode = mode.trim().toUpperCase();
-  const cModeMatch = rawMode.match(/^CMODE\s*\(?\s*(\d+)\s*\)?$/);
-  if (!cModeMatch) return rawMode;
-
-  const modeNumber = parseInt(cModeMatch[1], 10);
-  const resolved = ARDUROVER_MODES[modeNumber] ?? rawMode;
-  console.log(`[QT][Telemetry] CMODE translated: ${rawMode} → ${resolved}`);
-  return resolved;
-};
+/** Stub for NRP_ROS legacy service methods — routes disabled during PX4 migration. */
+const nrpRosLegacyDisabled = (label: string): Promise<ServiceResponse> =>
+  Promise.resolve({
+    success: false,
+    message: `NRP_ROS legacy disabled (${label}) — use 4WD_SERVER services`,
+  });
 
 // Default constants
 const THROTTLE_MS = 50; // ~20 Hz - Faster updates for better responsiveness
@@ -141,42 +154,14 @@ const createDefaultTelemetry = (): RoverTelemetry => ({
   distance_to_next_m: undefined, // Backend mission distance to next waypoint in meters
 });
 
-// Helper: Fetch JSON with proper error handling
-async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
-  try {
-    const response = await fetch(path, {
-      headers: {
-        'Content-Type': 'application/json',
-        ...(init?.headers ?? {}),
-      },
-      ...init,
-    });
-
-    if (!response.ok) {
-      const text = await response.text().catch(() => '');
-      throw new Error(`Request failed (${response.status}): ${text}`);
-    }
-
-    return (await response.json()) as T;
-  } catch (error) {
-    if (!isOfflineMode()) {
-      console.error('[fetchJson] Error:', error);
-    }
-    throw error;
-  }
-}
-
-// Helper: POST to service endpoint
+// Helper: POST to PX4 service endpoint through authenticated apiClient.
 async function postService(path: string, body?: Record<string, unknown>): Promise<ServiceResponse> {
-  return fetchJson<ServiceResponse>(`${getHttpBase()}${path}`, {
-    method: 'POST',
-    body: body ? JSON.stringify(body) : undefined,
-  });
+  return apiPost<ServiceResponse>(path, body);
 }
 
-// Helper: GET from service endpoint
+// Helper: GET from PX4 service endpoint through authenticated apiClient.
 async function getService<T extends ServiceResponse = ServiceResponse>(path: string): Promise<T> {
-  return fetchJson<T>(`${getHttpBase()}${path}`);
+  return apiGet<T>(path);
 }
 
 // Map RTK status to fix type number
@@ -954,6 +939,21 @@ export function useRoverTelemetry(): UseRoverTelemetryResult {
     if (envelope.distance_to_next_m !== undefined) {
       next.distance_to_next_m = envelope.distance_to_next_m;
     }
+    if (envelope.fcu_connected !== undefined) {
+      next.fcu_connected = envelope.fcu_connected;
+    }
+    if (envelope.gps_fix_name !== undefined) {
+      next.gps_fix_name = envelope.gps_fix_name;
+    }
+    if (envelope.mission_state !== undefined) {
+      next.mission_state = envelope.mission_state;
+    }
+    if (envelope.rpp_state_name !== undefined) {
+      next.rpp_state_name = envelope.rpp_state_name;
+    }
+    if (envelope.rtk_stream_active !== undefined) {
+      next.rtk_stream_active = envelope.rtk_stream_active;
+    }
 
     next.lastMessageTs = envelope.timestamp ?? Date.now();
 
@@ -989,6 +989,11 @@ export function useRoverTelemetry(): UseRoverTelemetryResult {
     if (envelope.wp_brg !== undefined) changed = changed || prev.wp_brg !== next.wp_brg;
     if (envelope.position_error_cm !== undefined) changed = changed || prev.position_error_cm !== next.position_error_cm;
     if (envelope.distance_to_next_m !== undefined) changed = changed || prev.distance_to_next_m !== next.distance_to_next_m;
+    if (envelope.fcu_connected !== undefined) changed = changed || prev.fcu_connected !== next.fcu_connected;
+    if (envelope.gps_fix_name !== undefined) changed = changed || prev.gps_fix_name !== next.gps_fix_name;
+    if (envelope.mission_state !== undefined) changed = changed || prev.mission_state !== next.mission_state;
+    if (envelope.rpp_state_name !== undefined) changed = changed || prev.rpp_state_name !== next.rpp_state_name;
+    if (envelope.rtk_stream_active !== undefined) changed = changed || prev.rtk_stream_active !== next.rtk_stream_active;
 
     if (!changed) {
       // No meaningful change; update timestamps but skip dispatch to prevent loops
@@ -1041,6 +1046,117 @@ export function useRoverTelemetry(): UseRoverTelemetryResult {
   }, []); // ✅ Empty dependency array - this function is stable and uses refs for all external values
 
   const pingIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const robotStatusPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const pollRobotStatus = useCallback(async () => {
+    if (!mountedRef.current || isOfflineMode()) return;
+
+    try {
+      const prevNetwork = mutableRef.current.telemetry.network ?? DEFAULT_NETWORK;
+      const [networkRaw, rtkRaw, healthRaw] = await Promise.all([
+        apiGet(PX4_SYSTEM.NETWORK).catch(() => null),
+        apiGet<RtkStatusResponse>(PX4_RTK.STATUS).catch(() => null),
+        apiGet<Px4HealthzResponse>(PX4_SYSTEM.HEALTHZ).catch(() => null),
+      ]);
+
+      const envelope: TelemetryEnvelope = { timestamp: Date.now() };
+
+      if (networkRaw) {
+        envelope.network = toNetworkData(networkRaw as Parameters<typeof toNetworkData>[0], prevNetwork);
+      }
+      if (rtkRaw) {
+        const rtkEnv = rtkStatusToEnvelope(rtkRaw);
+        envelope.network = { ...(envelope.network ?? prevNetwork), ...rtkEnv.network };
+        if (rtkEnv.rtk) envelope.rtk = rtkEnv.rtk;
+        if (rtkEnv.rtk_stream_active !== undefined) {
+          envelope.rtk_stream_active = rtkEnv.rtk_stream_active;
+        }
+      }
+      if (healthRaw) {
+        envelope.fcu_connected = Boolean(healthRaw.fcu_connected);
+        if (healthRaw.mission_state != null) {
+          envelope.mission_state = String(healthRaw.mission_state);
+        }
+        envelope.state = {
+          system_status: healthRaw.fcu_connected ? 'ACTIVE' : 'STANDBY',
+        };
+      }
+
+      applyEnvelopeRef.current(envelope);
+
+      patchRobotStatusDebug({
+        lastSource: 'rest_poll',
+        socketConnected: Boolean(socketRef.current?.connected),
+      });
+      telemetryDiagLog('REST poll OK', {
+        fcu: healthRaw?.fcu_connected,
+        network: Boolean(networkRaw),
+        rtk: Boolean(rtkRaw),
+        sock: socketRef.current?.connected ?? false,
+      });
+    } catch (err) {
+      telemetryDiagLog('REST poll failed', {
+        err: err instanceof Error ? err.message : String(err),
+        sock: socketRef.current?.connected ?? false,
+      });
+    }
+  }, []);
+
+  const fetchTelemetrySnapshot = useCallback(async () => {
+    if (!mountedRef.current || isOfflineMode()) return;
+    try {
+      const latest = await apiGet(PX4_TELEMETRY.LATEST);
+      if (!isPx4Payload(latest)) {
+        telemetryDiagLog('REST /telemetry/latest — payload not PX4', {
+          keys: latest && typeof latest === 'object' ? Object.keys(latest as object).slice(0, 8) : 'non-object',
+        });
+        return;
+      }
+      const adapted = toRoverTelemetry(latest as Parameters<typeof toRoverTelemetry>[0]);
+      applyEnvelopeRef.current({
+        timestamp: Date.now(),
+        state: adapted.state,
+        global: adapted.global,
+        battery: adapted.battery,
+        rtk: adapted.rtk,
+        mission: adapted.mission,
+        servo: adapted.servo,
+        hrms: adapted.hrms,
+        vrms: adapted.vrms,
+        imu_status: adapted.imu_status,
+        distance_to_next_m: adapted.distance_to_next_m,
+        xtrack_cm: adapted.xtrack_cm,
+        attitude: adapted.attitude,
+        fcu_connected: adapted.fcu_connected,
+        gps_fix_name: adapted.gps_fix_name,
+        rpp_state_name: adapted.rpp_state_name,
+      });
+      patchRobotStatusDebug({
+        lastSource: 'rest_telemetry',
+        px4Detected: true,
+        rawPayload: pickRawRobotFields(latest as unknown as Record<string, unknown>),
+        adapted: {
+          battery_pct: adapted.battery.percentage,
+          battery_v: adapted.battery.voltage,
+          gps_fix: adapted.rtk.fix_type,
+          gps_sat: adapted.global.satellites_visible,
+          hrms: adapted.hrms,
+          vrms: adapted.vrms,
+          mode: adapted.state.mode,
+          fcu_connected: adapted.fcu_connected,
+        },
+      });
+      telemetryDiagLog('REST /telemetry/latest OK', {
+        battery: adapted.battery.percentage,
+        gps_fix: adapted.rtk.fix_type,
+        fcu: adapted.fcu_connected,
+      });
+    } catch (err) {
+      telemetryDiagLog('REST /telemetry/latest failed', {
+        err: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }, []);
 
   const clearReconnectTimer = useCallback(() => {
     if (reconnectTimerRef.current) {
@@ -1153,7 +1269,7 @@ export function useRoverTelemetry(): UseRoverTelemetryResult {
 
     setConnectionState('connecting');
 
-    connectDelayRef.current = setTimeout(() => {
+    connectDelayRef.current = setTimeout(async () => {
       connectDelayRef.current = null;
 
       if (!mountedRef.current) {
@@ -1162,142 +1278,102 @@ export function useRoverTelemetry(): UseRoverTelemetryResult {
 
       try {
         const backendUrl = getHttpBase();
-        // console.log('[SOCKET] Connecting to:', backendUrl);
-        // console.log('[SOCKET] Config:', SOCKET_CONFIG);
 
-        const socket = io(backendUrl, SOCKET_CONFIG as Partial<ManagerOptions & SocketOptions>);
+        // Auth token must be present before socket.connect() when AUTH_ENABLED.
+        const session = AUTH_ENABLED ? await loadSession().catch(() => null) : null;
+        const hasToken = Boolean(session?.token);
+        const socketConfig: any = {
+          ...SOCKET_CONFIG,
+          auth: hasToken ? { token: session!.token } : undefined,
+        };
+
+        telemetryDiagLog('Socket connect attempt', {
+          url: backendUrl,
+          authEnabled: AUTH_ENABLED,
+          hasToken,
+        });
+
+        if (AUTH_ENABLED && !hasToken) {
+          telemetryDiagLog(
+            'WARNING: no auth token — backend will refuse socket (login first on discovery screen)',
+          );
+        }
+
+        const socket = io(backendUrl, socketConfig as Partial<ManagerOptions & SocketOptions>);
         socketRef.current = socket;
 
         socket.on('connect', () => {
-          // console.log('[SOCKET] ✅ Connected - ID:', socket.id);
-          // console.log('[SOCKET] Backend URL:', backendUrl);
-          // console.log('[SOCKET] Transport:', socket.io.engine?.transport?.name || 'unknown');
+          telemetryDiagLog('Socket connected', {
+            id: socket.id,
+            transport: socket.io.engine?.transport?.name ?? 'unknown',
+          });
           clearReconnectTimer();
           backoffRef.current = INITIAL_BACKOFF_MS;
           setConnectionState('connected');
 
-          // 🔴 CRITICAL FIX: Subscribe to mission status updates on connect
-          // console.log('[MISSION_STATUS] 📡 Subscribing to mission status updates');
-          socket.emit('subscribe_mission_status');
+          if (isRobotStatusDebugEnabled()) {
+            patchRobotStatusDebug({
+              connectionState: 'connected',
+              socketConnected: true,
+              rejectReason: null,
+            });
+          }
 
-          // 🔍 DEBUG: Request telemetry subscription 
-          // console.log('[TELEMETRY] 📡 Requesting telemetry subscription');
-          socket.emit('subscribe_telemetry');
-          socket.emit('subscribe_rover_data');
+          void fetchTelemetrySnapshot();
+          void pollRobotStatus();
 
-          // 🔍 CRITICAL: Try different subscription patterns that backend might expect
-          // console.log('[TELEMETRY] 🔍 Trying alternative subscription patterns');
-          socket.emit('subscribe', { event: 'rover_data' });
-          socket.emit('join', { room: 'telemetry' });
-          socket.emit('join', { room: 'rover_data' });
-          socket.emit('subscribe_to_telemetry');
-          socket.emit('subscribe_to_rover_data');
+          // NRP_ROS LEGACY DISABLED — dead subscription emits (PX4 broadcasts to auth'd clients).
+          // socket.emit('subscribe_mission_status');
+          // socket.emit('subscribe_telemetry');
+          // socket.emit('subscribe_rover_data');
+          // socket.emit('subscribe', { event: 'rover_data' });
+          // socket.emit('join', { room: 'telemetry' });
+          // socket.emit('join', { room: 'rover_data' });
+          // socket.emit('subscribe_to_telemetry');
+          // socket.emit('subscribe_to_rover_data');
+          // socket.emit('ping');
 
-          // 🔍 CRITICAL: Try HTTP API fallback for missing data
-          // console.log('[TELEMETRY] 🌐 Trying HTTP API fallback for missing telemetry');
-          setTimeout(async () => {
-            try {
-              // console.log('[TELEMETRY] 🌐 Making HTTP request to:', `${getHttpBase()}/api/telemetry`);
-              const response = await fetch(`${getHttpBase()}/api/telemetry`);
-              // console.log('[TELEMETRY] 🌐 HTTP response status:', response.status);
-
-              if (response.ok) {
-                const data = await response.json();
-                // console.log('[TELEMETRY] 🌐 HTTP API fallback data received:', data);
-                const envelope = toTelemetryEnvelopeFromBridge(data);
-                if (envelope) {
-                  // console.log('[TELEMETRY] 🌐 HTTP API telemetry parsed, applying to UI');
-                  applyEnvelopeRef.current(envelope);
-                }
-              } else {
-                // console.log('[TELEMETRY] 🌐 HTTP API response not OK:', response.status);
-              }
-            } catch (err) {
-              // console.log('[TELEMETRY] 🌐 HTTP API fallback failed:', err);
-            }
-
-            // 🔍 Try alternative endpoints
-            try {
-              // console.log('[TELEMETRY] 🔍 Trying alternative endpoints');
-              const endpoints = ['/api/rover/data', '/api/vehicle/telemetry', '/api/status', '/api/gps'];
-
-              for (const endpoint of endpoints) {
-                try {
-                  const response = await fetch(`${getHttpBase()}${endpoint}`);
-                  if (response.ok) {
-                    const data = await response.json();
-                    // console.log(`[TELEMETRY] 🔍 Alternative endpoint ${endpoint} data:`, data);
-                    const envelope = toTelemetryEnvelopeFromBridge(data);
-                    if (envelope) {
-                      // console.log(`[TELEMETRY] 🔍 Alternative endpoint ${endpoint} worked!`);
-                      applyEnvelopeRef.current(envelope);
-                      break;
-                    }
-                  }
-                } catch (err) {
-                  // console.log(`[TELEMETRY] 🔍 Alternative endpoint ${endpoint} failed:`, err);
-                }
-              }
-            } catch (err) {
-              // console.log('[TELEMETRY] 🔍 Alternative endpoints check failed:', err);
-            }
-          }, 2000); // Try after 2 seconds
-
-          // 🔍 DEBUG: Log ALL incoming events to see what backend is actually sending
-          // socket.onAny((eventName, ...args) => {
-          //   console.log('[SOCKET] 📨 ANY EVENT RECEIVED:', eventName, args);
-          // });
-
-          socket.emit('ping');
+          // NRP_ROS LEGACY DISABLED — HTTP fallbacks to /api/telemetry, /api/rover/data, etc.
+          // setTimeout(async () => { fetch(`${getHttpBase()}/api/telemetry`) ... }, 2000);
         });
 
-        socket.on('pong', () => {
-          // Pong received - connection alive
-        });
-
-        // 🔴 CRITICAL FIX: Handle mission status subscription confirmation
-        socket.on('mission_status_subscribed', (data: any) => {
-          console.log('[MISSION_STATUS] ✅ Subscription confirmed by backend', data);
-        });
+        // NRP_ROS LEGACY DISABLED — custom ping/pong and subscription ack events.
+        // socket.on('pong', () => {});
+        // socket.on('mission_status_subscribed', (data: any) => { ... });
 
         socket.on('connect_error', (error: any) => {
+          const backendUrl = getHttpBase();
+          telemetryDiagLog('Socket connect_error', {
+            message: error.message || String(error),
+            code: error.code,
+            url: backendUrl,
+            hasToken,
+          });
           if (!isOfflineMode()) {
-            const backendUrl = getHttpBase();
             console.error('[SOCKET] Connection error:', error.message || error);
-            console.error('[SOCKET] Backend URL:', backendUrl);
-            console.error('[SOCKET] Error details:', {
-              code: error.code,
-              type: error.type,
-              data: error.data,
-              description: error.description,
-            });
-
-            // Provide user-friendly error messages
-            if (error.code === 'ECONNREFUSED') {
-              console.error('[SOCKET] ❌ Backend server is not running or not accessible');
-            } else if (error.code === 'ETIMEDOUT') {
-              console.error('[SOCKET] ❌ Connection timed out - backend may be overloaded or network issues');
-            } else if (error.code === 'ENOTFOUND') {
-              console.error('[SOCKET] ❌ DNS resolution failed - check IP address');
-            } else {
-              console.error('[SOCKET] ❌ Unknown connection error');
+            if (error.message?.includes('unauthorised') || error.message?.includes('unauthorized')) {
+              console.error('[SOCKET] Auth rejected — re-enter password on discovery screen');
             }
           }
 
+          patchRobotStatusDebug({
+            connectionState: 'error',
+            socketConnected: false,
+            rejectReason: error.message ?? 'connect_error',
+          });
           resetTelemetry();
           setConnectionState('error');
           scheduleReconnect();
         });
 
         socket.on('disconnect', (reason: any) => {
-          if (!isOfflineMode()) {
-            console.warn('[SOCKET] Disconnected:', reason);
-          }
+          telemetryDiagLog('Socket disconnected', { reason });
           if (manualDisconnectRef.current) {
             manualDisconnectRef.current = false;
             return;
           }
           resetTelemetry();
+          resetRobotStatusDebug();
           setConnectionState('disconnected');
           if (reason === 'io server disconnect') {
             socket.connect();
@@ -1336,24 +1412,104 @@ export function useRoverTelemetry(): UseRoverTelemetryResult {
           setConnectionState('error');
         });
 
-        // ✅ CRITICAL: Register listeners using .current to prevent re-registration loops
-        // console.log('[SOCKET] 🔌 Registering event listeners:', {
-        //   TELEMETRY: SOCKET_EVENTS.TELEMETRY,
-        //   ROVER_DATA: SOCKET_EVENTS.ROVER_DATA
-        // });
-        socket.on(SOCKET_EVENTS.TELEMETRY, handleBridgeTelemetry.current);
-        socket.on(SOCKET_EVENTS.ROVER_DATA, handleRoverData.current);
-        socket.on('lora_rtk_status', handleLoraRTKStatus.current);
+        // NRP_ROS LEGACY DISABLED — nested envelope + alias telemetry listeners.
+        // socket.on(SOCKET_EVENTS.TELEMETRY, handleBridgeTelemetry.current);
+        // socket.on(SOCKET_EVENTS.ROVER_DATA, handleRoverData.current);
+        // socket.on('lora_rtk_status', handleLoraRTKStatus.current);
+        // socket.on('rover_data_telemetry', handleRoverData.current);
+        // socket.on('telemetry_data', handleBridgeTelemetry.current);
+        // socket.on('gps_data', handleRoverData.current);
+        // socket.on('battery_data', handleBridgeTelemetry.current);
+        // socket.on('satellite_data', handleBridgeTelemetry.current);
+        // socket.on('rtk_data', handleRoverData.current);
+        // socket.on('vehicle_telemetry', handleBridgeTelemetry.current);
 
-        // 🔍 DEBUG: Add listeners for alternative event names
-        // console.log('[SOCKET] 🔍 Adding listeners for alternative event names');
-        socket.on('rover_data_telemetry', handleRoverData.current);
-        socket.on('telemetry_data', handleBridgeTelemetry.current);
-        socket.on('gps_data', handleRoverData.current);
-        socket.on('battery_data', handleBridgeTelemetry.current);
-        socket.on('satellite_data', handleBridgeTelemetry.current);
-        socket.on('rtk_data', handleRoverData.current);
-        socket.on('vehicle_telemetry', handleBridgeTelemetry.current);
+        // 4WD_SERVER — flat telemetry socket contract
+        socket.on(SOCKET_EVENTS.TELEMETRY, (payload: unknown) => {
+          const raw =
+            payload && typeof payload === 'object'
+              ? pickRawRobotFields(payload as Record<string, unknown>)
+              : null;
+          const px4 = isPx4Payload(payload);
+          const dbg = getRobotStatusDebug();
+
+          if (!px4) {
+            patchRobotStatusDebug({
+              lastSource: 'rejected',
+              rejectReason: 'telemetry payload failed isPx4Payload()',
+              px4Detected: false,
+              rawPayload: raw,
+              telemetryEventCount: dbg.telemetryEventCount + 1,
+              rejectedEventCount: dbg.rejectedEventCount + 1,
+              socketConnected: true,
+              connectionState: 'connected',
+            });
+            if (dbg.rejectedEventCount < 3) {
+              telemetryDiagLog('Socket telemetry REJECTED (not PX4 shape)', {
+                keys: raw ? Object.keys(raw) : 'non-object',
+              });
+            }
+            return;
+          }
+
+          if (dbg.telemetryEventCount === 0) {
+            const first = payload as unknown as Record<string, unknown>;
+            telemetryDiagLog('First socket telemetry event received', {
+              battery: first.battery_pct,
+              gps_fix: first.gps_fix,
+            });
+          }
+
+          const adapted = toRoverTelemetry(payload as any);
+          const envelope: TelemetryEnvelope = {
+            timestamp: Date.now(),
+            state: adapted.state,
+            global: adapted.global,
+            battery: adapted.battery,
+            rtk: adapted.rtk,
+            mission: adapted.mission,
+            servo: adapted.servo,
+            hrms: adapted.hrms,
+            vrms: adapted.vrms,
+            imu_status: adapted.imu_status,
+            distance_to_next_m: adapted.distance_to_next_m,
+            xtrack_cm: adapted.xtrack_cm,
+            attitude: adapted.attitude,
+            fcu_connected: adapted.fcu_connected,
+            gps_fix_name: adapted.gps_fix_name,
+            rpp_state_name: adapted.rpp_state_name,
+          };
+          applyEnvelopeRef.current(envelope);
+
+          if (isRobotStatusDebugEnabled()) {
+            patchRobotStatusDebug({
+              lastSource: 'socket_telemetry',
+              rejectReason: null,
+              px4Detected: true,
+              rawPayload: raw,
+              telemetryEventCount: dbg.telemetryEventCount + 1,
+              socketConnected: true,
+              connectionState: 'connected',
+              lastMessageTs: Date.now(),
+              adapted: {
+                battery_pct: adapted.battery.percentage,
+                battery_v: adapted.battery.voltage,
+                gps_fix: adapted.rtk.fix_type,
+                gps_fix_name: adapted.gps_fix_name,
+                gps_sat: adapted.global.satellites_visible,
+                hrms: adapted.hrms,
+                vrms: adapted.vrms,
+                mode: adapted.state.mode,
+                armed: adapted.state.armed,
+                fcu_connected: adapted.fcu_connected,
+                rpp_state_name: adapted.rpp_state_name,
+                imu_status: adapted.imu_status,
+                lat: adapted.global.lat,
+                lon: adapted.global.lon,
+              },
+            });
+          }
+        });
 
         // console.log('[SOCKET] ✅ Event listeners registered successfully');
 
@@ -1365,109 +1521,73 @@ export function useRoverTelemetry(): UseRoverTelemetryResult {
         //   }
         // });
 
-        // Mission events
-        socket.on(SOCKET_EVENTS.MISSION_EVENT, (data: MissionEventData) => {
-          console.log('[MISSION_EVENT]', data);
-          missionEventCallbackRef.current.forEach((cb) => cb(data));
-        });
+        // NRP_ROS LEGACY DISABLED — mission_event / server_activity / nested mission_status parsers.
+        // socket.on('mission_event', ...);
+        // socket.on('mission_logs_snapshot', ...);
+        // socket.on('server_activity', ...);
+        // socket.on('mission_status', (data) => { data.mission_state, data.current_waypoint ... });
 
-        socket.on(SOCKET_EVENTS.MISSION_LOGS_SNAPSHOT, (data: any) => {
-          console.log('[MISSION_LOGS_SNAPSHOT]', data);
-          missionEventCallbackRef.current.forEach((cb) => cb(data as MissionEventData));
-        });
-
-        socket.on(SOCKET_EVENTS.SERVER_ACTIVITY, (activity: any) => {
-          try {
-            if (!activity) return;
-
-            // 🔍 DEBUG: Check if server_activity contains telemetry data
-            if (activity.message && activity.message.includes('rover_data')) {
-              // console.log('[SERVER_ACTIVITY] 🔍 Found rover_data mention in activity:', activity);
-            }
-
-            // 🔍 DEBUG: Parse telemetry from server_activity if it contains nested data
-            if (activity.telemetry || activity.data || activity.rover_data) {
-              // console.log('[SERVER_ACTIVITY] 🎯 Found telemetry data in server_activity!');
-              const telemetryData = activity.telemetry || activity.data || activity.rover_data;
-              const envelope = toTelemetryEnvelopeFromBridge(telemetryData);
-              if (envelope) {
-                // console.log('[SERVER_ACTIVITY] ✅ Telemetry parsed from server_activity, applying to UI');
-                applyEnvelopeRef.current(envelope);
-              }
-            }
-
-            if (activity.event === 'mission' || activity.event === 'servo') {
-              console.log('[SERVER_ACTIVITY]', activity);
-              missionEventCallbackRef.current.forEach((cb) => cb(activity as MissionEventData));
-            }
-          } catch (err) {
-            console.error('[SERVER_ACTIVITY] Error:', err);
-          }
-        });
-
+        // 4WD_SERVER — flat mission_status socket contract
         socket.on(SOCKET_EVENTS.MISSION_STATUS, (data: any) => {
-          // Log every mission_state change for debugging button sync
-         // Log key mission status fields for debugging state transitions and button sync issues.
-          // This helps trace mission lifecycle events (start, pause, resume, stop) and
-          // verify that waypoint progress is being reported correctly by the backend.
-          // console.log('[MISSION_STATUS] Received:', {
-          //   mission_state: data.mission_state,
-          //   mission_mode: data.mission_mode,
-          //   current_waypoint: data.current_waypoint,
-          //   total_waypoints: data.total_waypoints,
-          //   event_type: data.event_type,
-          // });
-
-          // 🔍 CRITICAL FIX: Parse GPS telemetry data from mission_status events!
-          if (data.current_position || data.pixhawk_state) {
-            // console.log('[MISSION_STATUS] 🎯 Parsing GPS data from mission_status event!');
-            const envelope = toTelemetryEnvelopeFromBridge(data);
-            if (envelope) {
-              // Extract distance_to_next_m from mission_status (sent at 20Hz by backend)
-              if (typeof data.distance_to_next_m === 'number') {
-                envelope.distance_to_next_m = data.distance_to_next_m;
-              }
-              // console.log('[MISSION_STATUS] ✅ GPS telemetry parsed, applying to UI');
-              applyEnvelopeRef.current(envelope);
-            }
+          if (isRobotStatusDebugEnabled()) {
+            const mdbg = getRobotStatusDebug();
+            patchRobotStatusDebug({
+              lastSource: 'socket_mission_status',
+              missionStatusEventCount: mdbg.missionStatusEventCount + 1,
+              socketConnected: true,
+              rawPayload: pickRawRobotFields(data),
+            });
           }
 
-          // Only log and update when mission status actually changes
-          const statusKey = `${data.mission_state || data.mission_mode}-${data.current_waypoint}-${data.total_waypoints}`;
+          const statusKey = `${data.state}-${data.rpp_state}-${data.dist_to_goal}`;
           if (statusKey !== lastMissionStatusRef.current) {
-            // console.log('[MISSION_STATUS] State changed:', statusKey);
             lastMissionStatusRef.current = statusKey;
-
-            // ✅ CRITICAL: Route through applyEnvelopeRef to respect throttling
-            // This prevents render → effect → state → render loops
+            const base = mutableRef.current.telemetry;
+            const merged = mergeMissionStatus(base, {
+              state: data.state,
+              rpp_state: data.rpp_state,
+              rpp_state_name: data.rpp_state_name,
+              dist_to_goal: data.dist_to_goal,
+              speed: data.speed,
+              xtrack: data.xtrack,
+            });
             const envelope: TelemetryEnvelope = {
               timestamp: Date.now(),
-              mission: {
-                total_wp: data.total_waypoints ?? 0,
-                current_wp: data.current_waypoint ?? 0,
-                status: data.mission_state || data.mission_mode || 'IDLE',
-                progress_pct:
-                  data.total_waypoints > 0
-                    ? Math.round((data.current_waypoint / data.total_waypoints) * 100)
-                    : 0,
-              },
+              mission: merged.mission,
+              global: merged.global,
+              distance_to_next_m: merged.distance_to_next_m,
+              xtrack_cm: merged.xtrack_cm,
             };
-            // Debounce rapid mission status updates to avoid cascades
             if (missionStatusDebounceRef.current) {
               clearTimeout(missionStatusDebounceRef.current);
             }
             missionStatusDebounceRef.current = setTimeout(() => {
-              console.log('[MISSION_STATUS] Applying to telemetry:', envelope.mission?.status);
               applyEnvelopeRef.current(envelope);
               missionStatusDebounceRef.current = null;
-            }, 250);
+            }, 100);
           }
-
           try {
             missionEventCallbackRef.current.forEach((cb) => cb(data as any));
           } catch (err) {
             console.error('[MISSION_STATUS] Error:', err);
           }
+        });
+
+        // 4WD_SERVER — point mission event journal (replaces mission_event)
+        socket.on(SOCKET_EVENTS.POINT_MISSION_EVENT, (data: any) => {
+          missionEventCallbackRef.current.forEach((cb) => cb(data));
+        });
+
+        socket.on(SOCKET_EVENTS.MISSION_COMPLETED, (data: any) => {
+          missionEventCallbackRef.current.forEach((cb) =>
+            cb({ type: 'mission_completed', ...data }),
+          );
+        });
+
+        socket.on(SOCKET_EVENTS.MISSION_COMPLETION_DEGRADED, (data: any) => {
+          missionEventCallbackRef.current.forEach((cb) =>
+            cb({ type: 'mission_completion_degraded', ...data }),
+          );
         });
 
         socket.on(SOCKET_EVENTS.MISSION_ERROR, (data: { error: string }) => {
@@ -1481,144 +1601,50 @@ export function useRoverTelemetry(): UseRoverTelemetryResult {
           );
         });
 
-        socket.on(SOCKET_EVENTS.MISSION_COMMAND_ACK, (data: { status: string; command: string }) => {
-          console.log('[MISSION_COMMAND_ACK]', data);
-          missionEventCallbackRef.current.forEach((cb) =>
-            cb({
-              type: 'mission_command_ack',
-              message: `Command ${data.command} ${data.status}`,
-              timestamp: Date.now(),
-            } as any),
-          );
-        });
+        // NRP_ROS LEGACY DISABLED — mission_command_ack, upload/download progress, failsafe_*, obstacle, LED.
+        // socket.on('mission_command_ack', ...);
+        // socket.on('mission_upload_progress', ...);
+        // socket.on('failsafe_resumed', ...);
+        // socket.on('obstacle_detection_changed', ...);
+        // socket.on('led_controller_changed', ...);
+        // socket.on('emergency_stop_ack', ...);
+        // socket.on('manual_control_error', ...);
 
-        socket.on(SOCKET_EVENTS.MISSION_CONTROLLER_STATUS, (data: { running: boolean; error?: string }) => {
-          console.log('[MISSION_CONTROLLER_STATUS]', data);
-          if (data.error) {
-            console.error('[MISSION_CONTROLLER_ERROR]', data.error);
-          }
-        });
-
-        // Mission progress events
-        socket.on(SOCKET_EVENTS.MISSION_UPLOAD_PROGRESS, (data: { percent: number; message?: string }) => {
-          console.log('[MISSION_UPLOAD_PROGRESS]', data);
-          uploadProgressCallbackRef.current.forEach((cb) => cb(data));
-        });
-
-        socket.on(SOCKET_EVENTS.MISSION_DOWNLOAD_PROGRESS, (data: { percent: number; message?: string }) => {
-          console.log('[MISSION_DOWNLOAD_PROGRESS]', data);
-          downloadProgressCallbackRef.current.forEach((cb) => cb(data));
-        });
-
-        // Failsafe recovery events
-        socket.on(SOCKET_EVENTS.FAILSAFE_RESUMED, (data: { message?: string; timestamp?: string }) => {
-          console.log('[FAILSAFE_RESUMED]', data);
-          missionEventCallbackRef.current.forEach((cb) =>
-            cb({
-              type: 'failsafe_resumed',
-              message: data.message || 'Mission resumed after GPS failsafe',
-              timestamp: data.timestamp ? new Date(data.timestamp).getTime() : Date.now(),
-              data: data,
-            } as any),
-          );
-        });
-
-        socket.on(SOCKET_EVENTS.FAILSAFE_RESTARTED, (data: { message?: string; timestamp?: string }) => {
-          console.log('[FAILSAFE_RESTARTED]', data);
-          missionEventCallbackRef.current.forEach((cb) =>
-            cb({
-              type: 'failsafe_restarted',
-              message: data.message || 'Mission restarted after GPS failsafe',
-              timestamp: data.timestamp ? new Date(data.timestamp).getTime() : Date.now(),
-              data: data,
-            } as any),
-          );
-        });
-
-        // 🚫 OBSTACLE DETECTION HANDLERS
-        socket.on('obstacle_detection_changed', (data: { enabled: boolean }) => {
-          console.log('[OBSTACLE_DETECTION] Detection toggled:', data.enabled ? 'ON' : 'OFF');
-          missionEventCallbackRef.current.forEach((cb) =>
-            cb({
-              type: 'obstacle_detection_changed',
-              message: `Obstacle detection ${data.enabled ? 'enabled' : 'disabled'}`,
-              timestamp: Date.now(),
-              data: data,
-            } as any),
-          );
-        });
-
-        socket.on('obstacle_error', (data: { error: string }) => {
-          console.error('[OBSTACLE_ERROR]', data.error);
-          missionEventCallbackRef.current.forEach((cb) =>
-            cb({
-              type: 'obstacle_error',
-              message: `Obstacle detection error: ${data.error}`,
-              timestamp: Date.now(),
-              error: data.error,
-            } as any),
-          );
-        });
-
-        // 💡 LED CONTROLLER HANDLERS
-        socket.on('led_controller_changed', (data: { enabled: boolean; timestamp: number }) => {
-          console.log('[LED_CONTROLLER] State toggled:', data.enabled ? 'ON' : 'OFF');
-          missionEventCallbackRef.current.forEach((cb) =>
-            cb({
-              type: 'led_controller_changed',
-              message: `LED controller ${data.enabled ? 'enabled' : 'disabled'}`,
-              timestamp: Date.now(),
-              data: data,
-            } as any),
-          );
-        });
-
-        socket.on('led_error', (data: { message: string; timestamp: number }) => {
-          console.error('[LED_ERROR]', data.message);
-          missionEventCallbackRef.current.forEach((cb) =>
-            cb({
-              type: 'led_error',
-              message: data.message || 'LED controller error',
-              timestamp: Date.now(),
-              data: data,
-            } as any),
-          );
-        });
-
-        // 🚨 EMERGENCY & MANUAL CONTROL HANDLERS
-        socket.on('emergency_stop_ack', (data: any) => {
-          console.log('[EMERGENCY_STOP] ✅ Acknowledged:', data);
+        // 4WD_SERVER — estop_result (replaces emergency_stop_ack)
+        socket.on(SOCKET_EVENTS.ESTOP_RESULT, (data: any) => {
+          console.log('[ESTOP_RESULT] PX4 e-stop result:', data);
           missionEventCallbackRef.current.forEach((cb) =>
             cb({
               type: 'emergency_stop',
-              message: 'Emergency stop acknowledged',
+              message: data?.message || 'E-stop executed',
               timestamp: Date.now(),
               data: data,
             } as any),
           );
         });
 
-        socket.on('manual_control_error', (data: { error: string }) => {
-          console.error('[MANUAL_CONTROL_ERROR]', data.error);
+        // 4WD_SERVER — joystick errors (replaces manual_control_error)
+        socket.on(SOCKET_EVENTS.JOYSTICK_ERROR, (data: { message?: string; code?: string }) => {
+          console.error('[JOYSTICK_ERROR]', data);
           missionEventCallbackRef.current.forEach((cb) =>
             cb({
-              type: 'manual_control_error',
-              message: `Manual control error: ${data.error}`,
+              type: 'joystick_error',
+              message: data.message || 'Joystick error',
               timestamp: Date.now(),
-              error: data.error,
+              data,
             } as any),
           );
+        });
+
+        socket.on(SOCKET_EVENTS.ROVER_DISCONNECTED, () => {
+          console.warn('[ROVER_DISCONNECTED] FCU link lost');
         });
 
         socket.connect();
 
-        const pingInterval = setInterval(() => {
-          if (socket.connected) {
-            socket.emit('ping');
-          }
-        }, 5000);
-
-        pingIntervalRef.current = pingInterval;
+        // NRP_ROS LEGACY DISABLED — periodic ping emit
+        // const pingInterval = setInterval(() => { socket.emit('ping'); }, 5000);
+        pingIntervalRef.current = null;
       } catch (error) {
         if (!isOfflineMode()) { console.error('[SOCKET] Initialization failed:', error); }
         setConnectionState('error');
@@ -1642,6 +1668,11 @@ export function useRoverTelemetry(): UseRoverTelemetryResult {
   // Single initialization effect - no dependencies to prevent infinite loops
   useEffect(() => {
     mountedRef.current = true;
+    telemetryDiagLog('useRoverTelemetry mounted', {
+      backend: getHttpBase(),
+      authEnabled: AUTH_ENABLED,
+      offline: isOfflineMode(),
+    });
     connectSocketRef.current();
 
     return () => {
@@ -1699,13 +1730,12 @@ export function useRoverTelemetry(): UseRoverTelemetryResult {
   const services = useMemo<RoverServices>(
     () => ({
       armVehicle: async () => {
-        const response = await postService(API_ENDPOINTS.ARM, { value: true });
-        if (response.success) {
-          // Set the lock BEFORE pushStatePatch so applyEnvelope already
-          // respects it if a stale rover_data event fires concurrently.
+        // PX4 fix: payload is { arm: true } not { value: true }
+        const armPayload = { arm: true };
+        const response = await postService(API_ENDPOINTS.ARM, armPayload);
+        if (response.success && !isPx4DxpEnabled()) {
+          // Legacy ArduRover optimistic arm lock (NOT used in PX4 — wait for telemetry)
           mutableRef.current.armedLockUntil = Date.now() + 3000;
-          // Force armed=true directly into mutableRef so pushStatePatch
-          // reads the correct base state even if a stale event just wrote false.
           mutableRef.current.telemetry = {
             ...mutableRef.current.telemetry,
             state: { ...mutableRef.current.telemetry.state, armed: true, system_status: 'ARMED' },
@@ -1715,131 +1745,45 @@ export function useRoverTelemetry(): UseRoverTelemetryResult {
         return response;
       },
       disarmVehicle: async () => {
-        const response = await postService(API_ENDPOINTS.ARM, { value: false });
+        // PX4 fix: payload is { arm: false } not { value: false }
+        const armPayload = { arm: false };
+        const response = await postService(API_ENDPOINTS.ARM, armPayload);
         if (response.success) {
-          // Clear any arm lock immediately on explicit disarm.
           mutableRef.current.armedLockUntil = null;
-          pushStatePatch({ armed: false, system_status: 'DISARMED' });
         }
         return response;
       },
-      setMode: (mode: string) => postService(API_ENDPOINTS.SET_MODE, { mode }),
-      uploadMission: (waypoints: Waypoint[]) => {
-        const formattedWaypoints = waypoints.map((wp) => ({
-          ...wp,
-          lat: parseFloat(Number(wp.lat).toFixed(9)),
-          lng: parseFloat(Number(wp.lng).toFixed(9)),
-        }));
-        console.log('[MISSION_UPLOAD] Waypoints:', formattedWaypoints);
-        return postService(API_ENDPOINTS.MISSION_UPLOAD, { waypoints: formattedWaypoints });
-      },
-      loadMissionToController: (waypoints: Waypoint[], servoConfig?: any) => {
-        const formattedWaypoints = waypoints.map((wp) => ({
-          ...wp,
-          lat: parseFloat(Number(wp.lat).toFixed(9)),
-          lng: parseFloat(Number(wp.lng).toFixed(9)),
-        }));
-        console.log('[MISSION_LOAD] Loading waypoints to controller:', formattedWaypoints);
-
-        // Use new endpoint with full mission config support
-        const payload: any = { waypoints: formattedWaypoints };
-
-        // Add servo config if provided
-        if (servoConfig) {
-          payload.servoConfig = servoConfig;
+      setMode: (mode: string) => {
+        if (mode !== 'MANUAL') {
+          return Promise.resolve({
+            success: false,
+            message: `NRP_ROS legacy mode '${mode}' disabled — PX4 REST mode control only supports MANUAL`,
+          } as ServiceResponse);
         }
-
-        // Add mission configuration parameters with sensible defaults
-        payload.config = {
-          waypoint_threshold: 0.5,      // 50cm threshold for waypoint reached
-          hold_duration: 5.0,            // 5 seconds hold time at waypoint
-          mission_timeout: 3600.0,       // 1 hour per waypoint timeout
-          accuracy_threshold_mm: 100.0,  // 10cm GPS accuracy threshold
-          fallback_zone_timeout_seconds: 60.0,  // 60s to wait in threshold zone
-        };
-
-        console.log('[MISSION_LOAD] Using /api/mission/load endpoint with config:', payload.config);
-        return postService(API_ENDPOINTS.MISSION_LOAD, payload);
+        return postService(API_ENDPOINTS.SET_MODE, { mode });
       },
-      downloadMission: () => getService(API_ENDPOINTS.MISSION_DOWNLOAD),
+      // NRP_ROS LEGACY DISABLED — client-side waypoint upload/load/download
+      uploadMission: () => nrpRosLegacyDisabled('uploadMission'),
+      loadMissionToController: () => nrpRosLegacyDisabled('loadMissionToController'),
+      downloadMission: () => nrpRosLegacyDisabled('downloadMission'),
       clearMission: () => postService(API_ENDPOINTS.MISSION_CLEAR),
-      setCurrentWaypoint: (wpSeq: number) =>
-        postService(API_ENDPOINTS.MISSION_SET_CURRENT, { wp_seq: wpSeq }),
+      setCurrentWaypoint: () => nrpRosLegacyDisabled('setCurrentWaypoint'),
       startMission: () => postService(API_ENDPOINTS.MISSION_START),
       stopMission: () => postService(API_ENDPOINTS.MISSION_STOP),
       restartMission: () => postService(API_ENDPOINTS.MISSION_RESTART),
-      nextMission: () => postService(API_ENDPOINTS.MISSION_NEXT),
-      skipMission: async () => {
-        // Try configured skip endpoint first; fall back to /api/mission/skip for compatibility
-        try {
-          return await postService(API_ENDPOINTS.MISSION_SKIP);
-        } catch (err) {
-          console.warn('[skipMission] primary endpoint failed, attempting fallback /api/mission/skip', err);
-          try {
-            return await postService('/api/mission/skip');
-          } catch (err2) {
-            console.error('[skipMission] both endpoints failed', err2);
-            // Re-throw last error so callers can handle it
-            throw err2;
-          }
-        }
-      },
-      // Bulk skip range of waypoints (requires mission to be PAUSED per backend rules)
-      // Body: { command: 'bulk_skip', skip_from: number, skip_to: number }
-      // Returns ServiceResponse from backend with details
-      // Example: { success: true, next_waypoint: 8, skipped_count: 2 }
-      // Caller should handle UI confirmation and validation before calling
-      bulkSkipRange: async (skipFrom: number, skipTo: number) => {
-        try {
-          return await postService(API_ENDPOINTS.MISSION_COMMAND, {
-            command: 'bulk_skip',
-            skip_from: skipFrom,
-            skip_to: skipTo,
-          });
-        } catch (err) {
-          console.error('[bulkSkipRange] error calling bulk skip', err);
-          throw err;
-        }
-      },
+      // NRP_ROS LEGACY DISABLED — next/skip/bulk_skip (use pointMissionService on PX4)
+      nextMission: () => nrpRosLegacyDisabled('nextMission'),
+      skipMission: () => nrpRosLegacyDisabled('skipMission'),
+      bulkSkipRange: () => nrpRosLegacyDisabled('bulkSkipRange'),
 
       pauseMission: () => postService(API_ENDPOINTS.MISSION_PAUSE),
       resumeMission: () => postService(API_ENDPOINTS.MISSION_RESUME),
       getMissionStatus: () => getService(API_ENDPOINTS.MISSION_STATUS),
-      requestMissionLogs: async () => {
-        if (!socketRef.current || !socketRef.current.connected) {
-          return { success: false, message: 'Socket not connected' } as ServiceResponse;
-        }
-        console.log('[MISSION_LOGS] Requesting mission logs');
-        socketRef.current.emit('request_mission_logs');
-        return { success: true, message: 'Mission logs requested' } as ServiceResponse;
-      },
-      resumeFailsafeMission: async () => {
-        if (!socketRef.current || !socketRef.current.connected) {
-          return { success: false, message: 'Socket not connected' } as ServiceResponse;
-        }
-        console.log('[FAILSAFE_RECOVERY] Resuming mission after failsafe');
-        socketRef.current.emit(SOCKET_EVENTS.FAILSAFE_RESUME_MISSION);
-        return { success: true, message: 'Failsafe mission resume requested' } as ServiceResponse;
-      },
-      restartFailsafeMission: async () => {
-        if (!socketRef.current || !socketRef.current.connected) {
-          return { success: false, message: 'Socket not connected' } as ServiceResponse;
-        }
-        console.log('[FAILSAFE_RECOVERY] Restarting mission after failsafe');
-        socketRef.current.emit(SOCKET_EVENTS.FAILSAFE_RESTART_MISSION);
-        return { success: true, message: 'Failsafe mission restart requested' } as ServiceResponse;
-      },
-      injectRTK: async (ntripUrl: string) => {
-        console.log('[RTK DEBUG] Sending RTK inject request', { endpoint: API_ENDPOINTS.RTK_INJECT, ntripUrl });
-        try {
-          const res = await postService(API_ENDPOINTS.RTK_INJECT, { ntrip_url: ntripUrl });
-          console.log('[RTK DEBUG] RTK inject response', res);
-          return res;
-        } catch (err) {
-          console.error('[RTK DEBUG] RTK inject error', err);
-          throw err;
-        }
-      },
+      // NRP_ROS LEGACY DISABLED — socket mission logs + failsafe emits + RTK inject URL
+      requestMissionLogs: () => nrpRosLegacyDisabled('requestMissionLogs'),
+      resumeFailsafeMission: () => nrpRosLegacyDisabled('resumeFailsafeMission'),
+      restartFailsafeMission: () => nrpRosLegacyDisabled('restartFailsafeMission'),
+      injectRTK: () => nrpRosLegacyDisabled('injectRTK'),
       stopRTK: async () => {
         console.log('[RTK DEBUG] Sending RTK stop request', { endpoint: API_ENDPOINTS.RTK_STOP });
         try {
@@ -1866,29 +1810,14 @@ export function useRoverTelemetry(): UseRoverTelemetryResult {
         }
       },
 
+      // PX4: no separate NTRIP stop — use RTK_STOP
       stopNTRIPStream: async () => {
-        console.log('[RTK DEBUG] Stopping NTRIP stream');
-        try {
-          const res = await postService(API_ENDPOINTS.RTK_NTRIP_STOP);
-          console.log('[RTK DEBUG] NTRIP stop response', res);
-          return res as import('../types/rtk').NTRIPStopResponse;
-        } catch (err) {
-          console.error('[RTK DEBUG] NTRIP stop error', err);
-          throw err;
-        }
+        const res = await postService(API_ENDPOINTS.RTK_STOP);
+        return res as import('../types/rtk').NTRIPStopResponse;
       },
 
-      startLoRaStream: async () => {
-        console.log('[RTK DEBUG] Starting LoRa stream via REST');
-        try {
-          const res = await postService(API_ENDPOINTS.RTK_LORA_START);
-          console.log('[RTK DEBUG] LoRa start response', res);
-          return res as import('../types/rtk').LoRaStartResponse;
-        } catch (err) {
-          console.error('[RTK DEBUG] LoRa start error', err);
-          throw err;
-        }
-      },
+      startLoRaStream: async () =>
+        nrpRosLegacyDisabled('startLoRaStream') as Promise<import('../types/rtk').LoRaStartResponse>,
 
       stopLoRaStream: async () => {
         console.log('[RTK DEBUG] Stopping LoRa stream via REST');
@@ -1905,7 +1834,7 @@ export function useRoverTelemetry(): UseRoverTelemetryResult {
       stopAllRTKStreams: async () => {
         console.log('[RTK DEBUG] Stopping all RTK streams');
         try {
-          const res = await postService(API_ENDPOINTS.RTK_STOP_ALL);
+          const res = await postService(API_ENDPOINTS.RTK_STOP);
           console.log('[RTK DEBUG] Stop all response', res);
           return res as import('../types/rtk').RTKStopAllResponse;
         } catch (err) {
@@ -1914,58 +1843,10 @@ export function useRoverTelemetry(): UseRoverTelemetryResult {
         }
       },
 
-      // Legacy LoRa Socket.IO methods (keeping for compatibility)
-      startLoraRTKStream: async () => {
-        if (!socketRef.current || !socketRef.current.connected) {
-          console.warn('[LORA DEBUG] Socket not connected - cannot start LoRa stream');
-          return { success: false, message: 'Socket not connected' } as ServiceResponse;
-        }
-        console.log('[LORA DEBUG] Emitting start_lora_rtk_stream');
-        try {
-          // Attempt to use an acknowledgement callback if the server supports it
-          let ackReceived = false;
-          socketRef.current.emit('start_lora_rtk_stream', {}, (ack?: any) => {
-            ackReceived = true;
-            console.log('[LORA DEBUG] start_lora_rtk_stream ack:', ack);
-          });
-          // Small timeout to indicate whether ack was received (non-blocking)
-          setTimeout(() => {
-            if (!ackReceived) console.log('[LORA DEBUG] No ack received for start_lora_rtk_stream (server may not ack)');
-          }, 500);
-          return { success: true, message: 'LoRa RTK start requested' } as ServiceResponse;
-        } catch (err) {
-          console.error('[LORA DEBUG] Error emitting start_lora_rtk_stream', err);
-          throw err;
-        }
-      },
-      stopLoraRTKStream: async () => {
-        if (!socketRef.current || !socketRef.current.connected) {
-          console.warn('[LORA DEBUG] Socket not connected - cannot stop LoRa stream');
-          return { success: false, message: 'Socket not connected' } as ServiceResponse;
-        }
-        console.log('[LORA DEBUG] Emitting stop_lora_rtk_stream');
-        try {
-          let ackReceived = false;
-          socketRef.current.emit('stop_lora_rtk_stream', {}, (ack?: any) => {
-            ackReceived = true;
-            console.log('[LORA DEBUG] stop_lora_rtk_stream ack:', ack);
-          });
-          setTimeout(() => {
-            if (!ackReceived) console.log('[LORA DEBUG] No ack received for stop_lora_rtk_stream (server may not ack)');
-          }, 500);
-          return { success: true, message: 'LoRa RTK stop requested' } as ServiceResponse;
-        } catch (err) {
-          console.error('[LORA DEBUG] Error emitting stop_lora_rtk_stream', err);
-          throw err;
-        }
-      },
-      getLoraRTKStatus: async () => {
-        if (!socketRef.current || !socketRef.current.connected) {
-          return { success: false, message: 'Socket not connected' } as ServiceResponse;
-        }
-        socketRef.current.emit('get_lora_rtk_status', {});
-        return { success: true, message: 'LoRa RTK status requested' } as ServiceResponse;
-      },
+      // NRP_ROS LEGACY DISABLED — LoRa socket emits (use rtkService REST on PX4)
+      startLoraRTKStream: () => nrpRosLegacyDisabled('startLoraRTKStream'),
+      stopLoraRTKStream: () => nrpRosLegacyDisabled('stopLoraRTKStream'),
+      getLoraRTKStatus: () => nrpRosLegacyDisabled('getLoraRTKStatus'),
       onLoraRTKStatus: (cb: (status: LoraRTKStatus) => void) => {
         loraStatusCallbackRef.current.push(cb);
         return () => {
@@ -1993,167 +1874,54 @@ export function useRoverTelemetry(): UseRoverTelemetryResult {
           }
         };
       },
-      controlServo: (servoId: number, angle: number) =>
-        postService(API_ENDPOINTS.SERVO_CONTROL, { servo_id: servoId, angle }),
-      getTTSStatus: () => getService(API_ENDPOINTS.TTS_STATUS),
-      controlTTS: (enabled: boolean) =>
-        postService(API_ENDPOINTS.TTS_CONTROL, { enabled }),
-      testTTS: (message?: string) =>
-        postService(API_ENDPOINTS.TTS_TEST, { message: message || 'TTS voice test' }),
-      setTTSLanguage: (language: string) =>
-        postService(API_ENDPOINTS.TTS_SET_LANGUAGE, { language }),
-      getTTSGender: () => getService(API_ENDPOINTS.TTS_GET_GENDER),
-      setTTSGender: (gender: 'male' | 'female') =>
-        postService(API_ENDPOINTS.TTS_SET_GENDER, { gender }),
+      // NRP_ROS LEGACY DISABLED — servo PWM, TTS, mission config socket, LED, bulk MAVLink params
+      controlServo: () => nrpRosLegacyDisabled('controlServo'),
+      getTTSStatus: () => nrpRosLegacyDisabled('getTTSStatus'),
+      controlTTS: () => nrpRosLegacyDisabled('controlTTS'),
+      testTTS: () => nrpRosLegacyDisabled('testTTS'),
+      setTTSLanguage: () => nrpRosLegacyDisabled('setTTSLanguage'),
+      getTTSGender: () => nrpRosLegacyDisabled('getTTSGender'),
+      setTTSGender: () => nrpRosLegacyDisabled('setTTSGender'),
+      updateMissionParameters: () => nrpRosLegacyDisabled('updateMissionParameters'),
+      updateObstacleZones: () => nrpRosLegacyDisabled('updateObstacleZones'),
+      setObstacleDetection: () => nrpRosLegacyDisabled('setObstacleDetection'),
+      setLEDController: () => nrpRosLegacyDisabled('setLEDController'),
+      getLEDControllerStatus: () => nrpRosLegacyDisabled('getLEDControllerStatus'),
+      getParams: () => nrpRosLegacyDisabled('getParams') as Promise<import('../types/params').ParamListResponse>,
+      getParam: () => nrpRosLegacyDisabled('getParam') as Promise<import('../types/params').ParamGetResponse>,
+      setParam: () => nrpRosLegacyDisabled('setParam') as Promise<import('../types/params').ParamSetResponse>,
+      getParamGroups: () => nrpRosLegacyDisabled('getParamGroups') as Promise<import('../types/params').ParamGroupsResponse>,
+      downloadParams: () => nrpRosLegacyDisabled('downloadParams') as Promise<import('../types/params').ParamDownloadResponse>,
+      uploadParams: () => nrpRosLegacyDisabled('uploadParams') as Promise<import('../types/params').ParamUploadResponse>,
 
-      // Mission Parameters Configuration
-      updateMissionParameters: async (params) => {
-        console.log('[MISSION_CONFIG] Updating mission parameters:', params);
-        try {
-          const res = await postService(API_ENDPOINTS.MISSION_CONFIG, params);
-          console.log('[MISSION_CONFIG] Update response:', res);
-          return res;
-        } catch (err) {
-          console.error('[MISSION_CONFIG] Error updating mission parameters:', err);
-          throw err;
-        }
-      },
-
-      // Obstacle Detection Zones Configuration
-      updateObstacleZones: async (zones) => {
-        console.log('[OBSTACLE_CONFIG] Updating obstacle detection zones:', zones);
-        try {
-          const res = await postService(API_ENDPOINTS.MISSION_CONFIG, zones);
-          console.log('[OBSTACLE_CONFIG] Update response:', res);
-          return res;
-        } catch (err) {
-          console.error('[OBSTACLE_CONFIG] Error updating obstacle zones:', err);
-          throw err;
-        }
-      },
-
-      // Obstacle Detection Toggle (via WebSocket)
-      setObstacleDetection: async (enabled) => {
-        if (!socketRef.current || !socketRef.current.connected) {
-          return { success: false, message: 'Socket not connected' } as ServiceResponse;
-        }
-        console.log('[OBSTACLE] Sending set_obstacle_detection:', enabled);
-        try {
-          let ackReceived = false;
-          socketRef.current.emit('set_obstacle_detection', { enabled }, (ack?: any) => {
-            ackReceived = true;
-            console.log('[OBSTACLE] set_obstacle_detection ack:', ack);
-          });
-          setTimeout(() => {
-            if (!ackReceived) console.log('[OBSTACLE] No ack received for set_obstacle_detection');
-          }, 500);
-          return { success: true, message: `Obstacle detection ${enabled ? 'enabled' : 'disabled'}` } as ServiceResponse;
-        } catch (err) {
-          console.error('[OBSTACLE] Error setting obstacle detection:', err);
-          throw err;
-        }
-      },
-
-      // LED Controller Toggle (via WebSocket)
-      setLEDController: async (enabled) => {
-        if (!socketRef.current || !socketRef.current.connected) {
-          return { success: false, message: 'Socket not connected' } as ServiceResponse;
-        }
-        console.log('[LED] Sending set_led_controller:', enabled);
-        try {
-          let ackReceived = false;
-          socketRef.current.emit('set_led_controller', { enabled }, (ack?: any) => {
-            ackReceived = true;
-            console.log('[LED] set_led_controller ack:', ack);
-          });
-          setTimeout(() => {
-            if (!ackReceived) console.log('[LED] No ack received for set_led_controller');
-          }, 500);
-          return { success: true, message: `LED controller ${enabled ? 'enabled' : 'disabled'}` } as ServiceResponse;
-        } catch (err) {
-          console.error('[LED] Error setting LED controller:', err);
-          throw err;
-        }
-      },
-
-      // LED Controller Status (via HTTP GET)
-      getLEDControllerStatus: () => getService(API_ENDPOINTS.LED_STATUS),
-
-      // MAVLink Param Control (Task 01)
-      getParams: async (group?: string) => {
-        const url = group
-          ? `${API_ENDPOINTS.PARAMS_LIST}?group=${encodeURIComponent(group)}`
-          : API_ENDPOINTS.PARAMS_LIST;
-        return getService<import('../types/params').ParamListResponse>(url);
-      },
-      getParam: async (name: string) => {
-        const url = `/api/params/${encodeURIComponent(name)}`;
-        return getService<import('../types/params').ParamGetResponse>(url);
-      },
-      setParam: async (name: string, value: number) => {
-        const url = `/api/params/${encodeURIComponent(name)}`;
-        return postService(url, { value }) as Promise<import('../types/params').ParamSetResponse>;
-      },
-      getParamGroups: async () => {
-        return getService<import('../types/params').ParamGroupsResponse>(API_ENDPOINTS.PARAMS_GROUPS);
-      },
-      downloadParams: async () => {
-        return getService<import('../types/params').ParamDownloadResponse>(API_ENDPOINTS.PARAMS_DOWNLOAD);
-      },
-      uploadParams: async (content: string, dryRun: boolean) => {
-        return postService(API_ENDPOINTS.PARAMS_UPLOAD, { content, dry_run: dryRun }) as Promise<import('../types/params').ParamUploadResponse>;
-      },
-
-      // Emergency Stop
+      // 4WD_SERVER — E-stop (socket primary, /api/estop REST fallback)
       emergencyStop: async () => {
-        if (!socketRef.current || !socketRef.current.connected) {
-          console.warn('[EMERGENCY_STOP] Socket not connected, trying REST API');
-          try {
-            return await postService(API_ENDPOINTS.SERVO_EMERGENCY_STOP);
-          } catch (err) {
-            console.error('[EMERGENCY_STOP] REST API failed:', err);
-            return { success: false, message: 'Emergency stop failed - socket disconnected' } as ServiceResponse;
-          }
+        if (socketRef.current?.connected) {
+          socketRef.current.emit(SOCKET_EVENTS.EMERGENCY_STOP);
+          return { success: true, message: 'Emergency stop sent' } as ServiceResponse;
         }
-        console.log('[EMERGENCY_STOP] 🚨 Sending emergency stop command');
-        socketRef.current.emit('emergency_stop');
-        return { success: true, message: 'Emergency stop sent' } as ServiceResponse;
+        try {
+          return await postService(API_ENDPOINTS.ESTOP);
+        } catch (err) {
+          console.error('[EMERGENCY_STOP] REST failed:', err);
+          return { success: false, message: 'Emergency stop failed' } as ServiceResponse;
+        }
       },
 
-      // Manual Control
-      sendManualControl: async (command) => {
-        if (!socketRef.current || !socketRef.current.connected) {
-          return { success: false, message: 'Socket not connected' } as ServiceResponse;
-        }
-        console.log('[MANUAL_CONTROL] Sending command:', command);
-        socketRef.current.emit('manual_control', command);
-        return { success: true, message: 'Manual control command sent' } as ServiceResponse;
-      },
+      // NRP_ROS LEGACY DISABLED — PWM manual_control socket emits (use joystickLeaseService)
+      sendManualControl: () => nrpRosLegacyDisabled('sendManualControl'),
+      stopManualControl: () => nrpRosLegacyDisabled('stopManualControl'),
 
-      stopManualControl: async () => {
-        if (!socketRef.current || !socketRef.current.connected) {
-          return { success: false, message: 'Socket not connected' } as ServiceResponse;
-        }
-        console.log('[MANUAL_CONTROL] Stopping manual control');
-        socketRef.current.emit('stop_manual_control');
-        return { success: true, message: 'Manual control stopped' } as ServiceResponse;
-      },
-
-      // Activity Logging
       getActivityLogs: () => getService(API_ENDPOINTS.ACTIVITY_LOGS),
-      getActivityTypes: () => getService(API_ENDPOINTS.ACTIVITY_TYPES),
-      downloadActivityLogs: () => postService(API_ENDPOINTS.ACTIVITY_DOWNLOAD),
-
-      // System Status
-      getNodes: () => getService(API_ENDPOINTS.NODES_LIST),
-      getNodeDetails: (nodeName: string) => {
-        const endpoint = API_ENDPOINTS.NODE_DETAILS.replace('{name}', nodeName);
-        return getService(endpoint);
-      },
-      getServoStatus: () => getService(API_ENDPOINTS.SERVO_STATUS),
-      getMissionServoConfig: () => getService(API_ENDPOINTS.MISSION_SERVO_CONFIG),
-      updateMissionServoConfig: (config: any) => postService(API_ENDPOINTS.MISSION_SERVO_CONFIG, config),
-      testMissionServoConfig: (config: any) => postService(API_ENDPOINTS.MISSION_SERVO_CONFIG_TEST, config),
+      // NRP_ROS LEGACY DISABLED — activity types/download, ROS nodes, servo config
+      getActivityTypes: () => nrpRosLegacyDisabled('getActivityTypes'),
+      downloadActivityLogs: () => nrpRosLegacyDisabled('downloadActivityLogs'),
+      getNodes: () => nrpRosLegacyDisabled('getNodes'),
+      getNodeDetails: () => nrpRosLegacyDisabled('getNodeDetails'),
+      getServoStatus: () => getService(API_ENDPOINTS.SPRAY_STATUS),
+      getMissionServoConfig: () => nrpRosLegacyDisabled('getMissionServoConfig'),
+      updateMissionServoConfig: () => nrpRosLegacyDisabled('updateMissionServoConfig'),
+      testMissionServoConfig: () => nrpRosLegacyDisabled('testMissionServoConfig'),
     }),
     [pushStatePatch],
   );
@@ -2167,6 +1935,41 @@ export function useRoverTelemetry(): UseRoverTelemetryResult {
       }
     };
   }, []);
+
+  useEffect(() => {
+    if (isRobotStatusDebugEnabled()) {
+      patchRobotStatusDebug({
+        connectionState,
+        socketConnected: Boolean(socketRef.current?.connected),
+      });
+    }
+  }, [connectionState]);
+
+  useEffect(() => {
+    if (isOfflineMode()) {
+      if (robotStatusPollRef.current) {
+        clearInterval(robotStatusPollRef.current);
+        robotStatusPollRef.current = null;
+      }
+      return undefined;
+    }
+
+    telemetryDiagLog('Starting REST fallback poll (5s)', { connectionState });
+    void pollRobotStatus();
+    void fetchTelemetrySnapshot();
+
+    robotStatusPollRef.current = setInterval(() => {
+      void pollRobotStatus();
+      void fetchTelemetrySnapshot();
+    }, 5000);
+
+    return () => {
+      if (robotStatusPollRef.current) {
+        clearInterval(robotStatusPollRef.current);
+        robotStatusPollRef.current = null;
+      }
+    };
+  }, [connectionState, pollRobotStatus, fetchTelemetrySnapshot]);
 
   // ✅ CRITICAL FIX: Use ref to track previous position and only create new object when values actually change
   // This prevents infinite loops caused by creating new object references on every render

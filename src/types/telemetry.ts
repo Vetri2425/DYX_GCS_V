@@ -83,6 +83,11 @@ export interface RoverTelemetry {
   position_error_cm?: number; // Total position error = sqrt(wp_dist² + xtrack²) in cm
   gps_failsafe?: GpsFailsafeStatus;
   distance_to_next_m?: number; // Backend mission distance to next waypoint in meters
+  fcu_connected?: boolean;
+  gps_fix_name?: string;
+  mission_state?: string;
+  rpp_state_name?: string;
+  rtk_stream_active?: boolean;
 }
 
 // Telemetry envelope from backend
@@ -107,6 +112,11 @@ export interface TelemetryEnvelope {
   wp_brg?: number;
   position_error_cm?: number; // Total position error = sqrt(wp_dist² + xtrack²) in cm
   distance_to_next_m?: number; // Backend mission distance to next waypoint in meters
+  fcu_connected?: boolean;
+  gps_fix_name?: string;
+  mission_state?: string;
+  rpp_state_name?: string;
+  rtk_stream_active?: boolean;
 }
 
 // Service response

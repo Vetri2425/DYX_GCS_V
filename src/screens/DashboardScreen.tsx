@@ -4,7 +4,6 @@ import { MaterialCommunityIcons, Ionicons } from '@expo/vector-icons';
 import { colors } from '../theme/colors';
 import { useRover } from '../context/RoverContext';
 import { RobotSettingsModal } from '../components/dashboard/RobotSettingsModal';
-import QuickTuneScreen from './QuickTuneScreen';
 import { saveParamsToFile, loadParamsFromFile } from '../services/paramFileService';
 
 // ── UTILS ────────────────────────────────────────────────────────
@@ -254,7 +253,6 @@ export default function DashboardScreen() {
   const { telemetry, connectionState, roverPosition, services } = useRover();
   const mountedRef = useRef(true);
   const [showRobotSettings, setShowRobotSettings] = useState(false);
-  const [showQuickTune, setShowQuickTune] = useState(false);
   const [paramSaving, setParamSaving] = useState(false);
   const [paramLoading, setParamLoading] = useState(false);
 
@@ -320,8 +318,9 @@ export default function DashboardScreen() {
           <BottomActionBtn 
             flex={1.2}
             title="QUICK TUNE" 
-            status="AUTO" statusColor={colors.warning} 
-            onPress={() => setShowQuickTune(true)} disabled={!isConnected}
+            status="PX4 OFF" statusColor={colors.textMuted}
+            // NRP_ROS LEGACY DISABLED — QuickTune /api/quicktune/* has no 4WD_SERVER contract.
+            onPress={undefined} disabled
           >
             <View style={styles.actionChipRow}>
               <View style={styles.chip}><View style={[styles.dot, {backgroundColor: colors.textPrimary}]} /><Text style={styles.chipText}>STEERING PID</Text></View>
@@ -400,7 +399,6 @@ export default function DashboardScreen() {
 
       {/* Modals */}
       <RobotSettingsModal visible={showRobotSettings} onClose={() => setShowRobotSettings(false)} />
-      <QuickTuneScreen visible={showQuickTune} onClose={() => setShowQuickTune(false)} />
     </View>
   );
 }

@@ -198,7 +198,7 @@ export const CADDrawingCanvas: React.FC<CADDrawingCanvasProps> = ({
     { name: 'rectangle' as CADTool, icon: 'rectangle-outline', title: 'Rectangle', group: 'sketch' },
     { name: 'circle' as CADTool, icon: 'circle-outline', title: 'Circle', group: 'sketch' },
     { name: 'arc' as CADTool, icon: 'vector-curve', title: 'Arc', group: 'sketch' },
-    { name: 'spline' as CADTool, icon: 'bezier', title: 'Spline', group: 'sketch' },
+    { name: 'spline' as CADTool, icon: 'draw-pen', title: 'Spline', group: 'sketch' },
     { name: 'point' as CADTool, icon: 'circle-small', title: 'Point', group: 'sketch' },
     { name: 'text' as CADTool, icon: 'text-box-outline', title: 'Text', group: 'annotation' },
     { name: 'polygon' as CADTool, icon: 'hexagon-outline', title: 'Polygon', group: 'sketch' },

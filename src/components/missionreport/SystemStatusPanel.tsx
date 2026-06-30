@@ -89,15 +89,17 @@ export const SystemStatusPanel: React.FC<Props> = ({
     const connectionType = telemetry.network.connection_type || 'none';
     const wifiConnected = telemetry.network.wifi_connected || false;
     const wifiSignal = telemetry.network.wifi_signal_strength || 0;
-    const loraConnected = telemetry.network.lora_connected || false;
+    const rtkStreamActive =
+      telemetry.rtk_stream_active ?? telemetry.network.lora_connected ?? false;
+    const fcuConnected = telemetry.fcu_connected ?? false;
     const batteryPct = telemetry.battery.percentage;
     const backendConnected = connectionState === 'connected';
 
     return {
-      // Network/Jetson Status - WiFi signal bars or Ethernet
+      // Jetson network (GET /api/network)
       networkIcon: connectionType === 'ethernet' ? 'hardware-chip' : getWiFiSignalBars(wifiSignal, wifiConnected),
       networkColor: connectionType === 'ethernet'
-        ? (loraConnected ? '#00FF00' : '#FF0000')
+        ? (wifiConnected || connectionType === 'ethernet' ? '#00FF00' : '#FF0000')
         : (wifiConnected ? '#00FF00' : '#FF0000'),
       networkOpacity: connectionType === 'ethernet'
         ? 1
@@ -105,22 +107,27 @@ export const SystemStatusPanel: React.FC<Props> = ({
           ? (wifiSignal >= 4 ? 1 : wifiSignal >= 3 ? 0.8 : wifiSignal >= 2 ? 0.6 : 0.4)
           : 0.7,
 
-      // LoRa Status
+      // RTK correction stream (GET /api/rtk/status)
       loraIcon: 'radio-outline',
-      loraColor: loraConnected ? '#00FF00' : '#666666',
-      loraOpacity: loraConnected ? 1 : 0.7,
+      loraColor: rtkStreamActive ? '#00FF00' : '#666666',
+      loraOpacity: rtkStreamActive ? 1 : 0.7,
 
-      // Backend/RC Status
+      // GCS ↔ backend socket
       rcIcon: 'bluetooth',
       rcColor: backendConnected ? '#00FF00' : '#FF0000',
       rcOpacity: backendConnected ? 1 : 0.7,
+
+      // FCU / MAVROS link (GET /api/healthz)
+      fcuIcon: 'airplane',
+      fcuColor: fcuConnected ? '#00FF00' : '#FF0000',
+      fcuOpacity: fcuConnected ? 1 : 0.7,
 
       // Battery Status
       batteryIcon: batteryPct > 50 ? 'battery-charging' : batteryPct > 20 ? 'battery-half' : 'battery-dead',
       batteryColor: batteryPct > 50 ? '#00FF00' : batteryPct > 20 ? '#FFAA00' : '#FF0000',
       batteryPct: batteryPct.toFixed(0),
     };
-  }, [telemetry, connectionState]);
+  }, [telemetry, connectionState, telemetry.fcu_connected, telemetry.rtk_stream_active]);
 
   return (
     <View style={styles.container}>
@@ -155,12 +162,21 @@ export const SystemStatusPanel: React.FC<Props> = ({
               />
             </View>
 
-            {/* RC/Backend */}
+            {/* GCS socket */}
             <View style={[styles.iconWrapper, { opacity: systemStatus.rcOpacity, borderColor: `${systemStatus.rcColor}40` }]}>
               <Ionicons
                 name={systemStatus.rcIcon as any}
                 size={18}
                 color={systemStatus.rcColor}
+              />
+            </View>
+
+            {/* FCU / MAVROS */}
+            <View style={[styles.iconWrapper, { opacity: systemStatus.fcuOpacity, borderColor: `${systemStatus.fcuColor}40` }]}>
+              <Ionicons
+                name={systemStatus.fcuIcon as any}
+                size={18}
+                color={systemStatus.fcuColor}
               />
             </View>
 

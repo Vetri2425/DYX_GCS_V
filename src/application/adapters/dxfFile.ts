@@ -42,7 +42,7 @@ export async function pickDxfFile(): Promise<{ name: string; text: string } | nu
   let text: string;
   try {
     text = await FileSystem.readAsStringAsync(uri, {
-      encoding: FileSystem.EncodingType.UTF8,
+      encoding: 'utf8',
     });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);

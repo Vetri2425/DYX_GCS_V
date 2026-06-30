@@ -1,14 +1,17 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Alert } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import VoiceSettingsModal from './VoiceSettingsModal';
 import { FailsafeModeSelector } from '../pathplan/FailsafeModeSelector';
 import { colors } from '../../theme/colors';
 import { useRover } from '../../context/RoverContext';
+import { emergencyStop } from '../../services/vehicleControlService';
+import { ROVER_ENABLED } from '../../config/featureFlags';
+import { getBackendURL } from '../../config';
 
 export function HeaderBar({ missionMode = 'DGPS Mark' }: { missionMode?: string }) {
   const [showVoiceModal, setShowVoiceModal] = useState(false);
-  const { gpsFailsafeMode, setGpsFailsafeMode, telemetry, services } = useRover();
+  const { gpsFailsafeMode, setGpsFailsafeMode, telemetry, services, connectionState, reconnect } = useRover();
   const [showFailsafeModeSelector, setShowFailsafeModeSelector] = useState(false);
   const [isEmergencyStopping, setIsEmergencyStopping] = useState(false);
   const getModeIcon = (mode: string): string => {
@@ -28,6 +31,23 @@ export function HeaderBar({ missionMode = 'DGPS Mark' }: { missionMode?: string 
     }
   };
 
+  const connectionInfo = useMemo(() => {
+    const host = getBackendURL().replace(/^https?:\/\//, '');
+    if (connectionState === 'connecting') {
+      return { label: 'Connecting…', sublabel: host, color: colors.warning, dot: colors.warning };
+    }
+    if (connectionState === 'connected') {
+      const fcuUp = telemetry.fcu_connected !== false;
+      return fcuUp
+        ? { label: 'Online', sublabel: host, color: colors.success, dot: colors.success }
+        : { label: 'GCS only', sublabel: `${host} · FCU offline`, color: colors.warning, dot: colors.warning };
+    }
+    if (connectionState === 'error') {
+      return { label: 'Error', sublabel: host, color: colors.danger, dot: colors.danger };
+    }
+    return { label: 'Offline', sublabel: host, color: colors.danger, dot: colors.danger };
+  }, [connectionState, telemetry.fcu_connected]);
+
   const handleEmergencyStop = async () => {
     Alert.alert(
       '🚨 EMERGENCY STOP',
@@ -43,12 +63,23 @@ export function HeaderBar({ missionMode = 'DGPS Mark' }: { missionMode?: string 
           onPress: async () => {
             setIsEmergencyStopping(true);
             try {
-              console.log('[EMERGENCY] Executing emergency stop from header');
-              const response = await services.emergencyStop();
-              if (response?.success) {
-                Alert.alert('✅ Emergency Stop', 'All operations stopped');
+              if (ROVER_ENABLED) {
+                // PX4: use vehicleControlService (socket primary, /api/estop fallback)
+                await emergencyStop((result) => {
+                  if (result.success) {
+                    Alert.alert('✅ Emergency Stop', 'All operations stopped');
+                  } else {
+                    Alert.alert('⚠️ E-Stop', result.message || 'Stop issued');
+                  }
+                });
               } else {
-                Alert.alert('❌ Failed', 'Emergency stop failed');
+                // Legacy ArduRover path
+                const response = await services.emergencyStop();
+                if (response?.success) {
+                  Alert.alert('✅ Emergency Stop', 'All operations stopped');
+                } else {
+                  Alert.alert('❌ Failed', 'Emergency stop failed');
+                }
               }
             } catch (error) {
               console.error('[EMERGENCY] Error:', error);
@@ -97,14 +128,26 @@ export function HeaderBar({ missionMode = 'DGPS Mark' }: { missionMode?: string 
             <Text style={styles.modeValue}>{missionMode}</Text>
           </View>
         </View>
-        <View style={styles.statusBadge}>
-          <View style={styles.statusDot} />
-          <Text style={styles.statusText}>Connecting...</Text>
+        <View style={[styles.statusBadge, { borderColor: `${connectionInfo.color}55` }]}>
+          <View style={[styles.statusDot, { backgroundColor: connectionInfo.dot }]} />
+          <View>
+            <Text style={[styles.statusText, { color: connectionInfo.color }]}>
+              {connectionInfo.label}
+            </Text>
+            <Text style={styles.statusHost} numberOfLines={1}>
+              {connectionInfo.sublabel}
+            </Text>
+          </View>
         </View>
-        <View style={styles.reconnectButton}>
+        <TouchableOpacity
+          style={styles.reconnectButton}
+          onPress={reconnect}
+          accessibilityLabel="Reconnect to rover"
+          accessibilityRole="button"
+        >
           <Text style={styles.reconnectIcon}>🔄</Text>
           <Text style={styles.reconnectText}>Reconnect</Text>
-        </View>
+        </TouchableOpacity>
         <TouchableOpacity
           onPress={() => {
             console.log('🔊 Voice button pressed - opening modal');
@@ -321,8 +364,14 @@ const styles = StyleSheet.create({
     marginRight: 8,
   },
   statusText: {
-    color: '#c6d7ff',
-    fontSize: 13,
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  statusHost: {
+    color: 'rgba(255,255,255,0.45)',
+    fontSize: 9,
+    maxWidth: 140,
+    fontFamily: 'monospace',
   },
   reconnectButton: {
     flexDirection: 'row',

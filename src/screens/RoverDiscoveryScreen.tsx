@@ -22,13 +22,24 @@ import { Ionicons } from '@expo/vector-icons';
 import { quickScanForJetsonDevices, JetsonDevice } from '../utils/jetsonDiscovery';
 import { saveBackendURL, markSessionSkipped } from '../utils/backendStorage';
 import beaconListener, { DiscoveredRover } from '../services/beaconListener';
+import { setBackendURL } from '../config';
+import { useAuth } from '../hooks/useAuth';
+import { AUTH_ENABLED } from '../config/featureFlags';
+import ConnectPasswordModal from '../components/common/ConnectPasswordModal';
 import axios from 'axios';
 
 interface RoverDiscoveryScreenProps {
   onRoverSelected: (device: JetsonDevice) => void;
 }
 
+interface PendingConnect {
+  device: JetsonDevice;
+  roverId?: string;
+  accentColor: string;
+}
+
 export default function RoverDiscoveryScreen({ onRoverSelected }: RoverDiscoveryScreenProps) {
+  const { login } = useAuth();
   const [discoveredRovers, setDiscoveredRovers] = useState<DiscoveredRover[]>([]);
   const [networkDevices, setNetworkDevices] = useState<JetsonDevice[]>([]);
   const [scanning, setScanning] = useState(false);
@@ -37,6 +48,10 @@ export default function RoverDiscoveryScreen({ onRoverSelected }: RoverDiscovery
   const [manualUrl, setManualUrl] = useState('http://');
   const [testingManualUrl, setTestingManualUrl] = useState(false);
   const [connectingRoverId, setConnectingRoverId] = useState<string | null>(null);
+  const [showPasswordModal, setShowPasswordModal] = useState(false);
+  const [pendingConnect, setPendingConnect] = useState<PendingConnect | null>(null);
+  const [connectError, setConnectError] = useState<string | null>(null);
+  const [isConnecting, setIsConnecting] = useState(false);
 
   // Animations
   const spinAnim = useRef(new Animated.Value(0)).current;
@@ -120,34 +135,76 @@ export default function RoverDiscoveryScreen({ onRoverSelected }: RoverDiscovery
     }
   };
 
-  const handleSelectBeaconRover = async (rover: DiscoveredRover) => {
-    setConnectingRoverId(rover.roverId);
+  const roverToDevice = (rover: DiscoveredRover): JetsonDevice => ({
+    id: rover.roverId,
+    name: rover.roverName,
+    ip: rover.ip,
+    port: rover.port,
+    url: rover.url,
+    responseTime: 0,
+  });
+
+  const openPasswordModal = (device: JetsonDevice, accentColor: string, roverId?: string) => {
+    setConnectError(null);
+    setPendingConnect({ device, roverId, accentColor });
+    setShowPasswordModal(true);
+  };
+
+  const closePasswordModal = () => {
+    setShowPasswordModal(false);
+    setPendingConnect(null);
+    setConnectError(null);
+    setConnectingRoverId(null);
+  };
+
+  const finishConnect = async (device: JetsonDevice, password: string) => {
+    setConnectingRoverId(device.id);
+    setIsConnecting(true);
+    setConnectError(null);
     try {
-      const device: JetsonDevice = {
-        id: rover.roverId,
-        name: rover.roverName,
-        ip: rover.ip,
-        port: rover.port,
-        url: rover.url,
-        responseTime: 0,
-      };
+      setBackendURL(device.url);
       await saveBackendURL(device.url, device.ip, device.port);
+
+      if (AUTH_ENABLED) {
+        await login(password);
+      }
+
+      setShowPasswordModal(false);
+      setPendingConnect(null);
       onRoverSelected(device);
-    } catch {
-      Alert.alert('Error', 'Failed to connect to rover');
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      const displayMsg =
+        msg.includes('401') || msg.includes('invalid_password') || msg.includes('nvalid')
+          ? 'Incorrect password. Please try again.'
+          : `Connection failed: ${msg}`;
+      setConnectError(displayMsg);
+    } finally {
       setConnectingRoverId(null);
+      setIsConnecting(false);
     }
   };
 
-  const handleSelectNetworkDevice = async (device: JetsonDevice) => {
-    setConnectingRoverId(device.id);
-    try {
-      await saveBackendURL(device.url, device.ip, device.port);
-      onRoverSelected(device);
-    } catch {
-      Alert.alert('Error', 'Failed to connect to rover');
-      setConnectingRoverId(null);
+  const handleSelectBeaconRover = (rover: DiscoveredRover) => {
+    const device = roverToDevice(rover);
+    if (AUTH_ENABLED) {
+      openPasswordModal(device, '#4ade80', rover.roverId);
+      return;
     }
+    void finishConnect(device, '');
+  };
+
+  const handleSelectNetworkDevice = (device: JetsonDevice) => {
+    if (AUTH_ENABLED) {
+      openPasswordModal(device, '#3b82f6');
+      return;
+    }
+    void finishConnect(device, '');
+  };
+
+  const handlePasswordConnect = (password: string) => {
+    if (!pendingConnect) return;
+    void finishConnect(pendingConnect.device, password);
   };
 
   const handleConnectManualUrl = async () => {
@@ -160,11 +217,20 @@ export default function RoverDiscoveryScreen({ onRoverSelected }: RoverDiscovery
       const urlObj = new URL(manualUrl);
       const ip = urlObj.hostname;
       const port = urlObj.port ? parseInt(urlObj.port) : 5001;
-      const response = await axios.get(`${manualUrl}/api/status`, {
-        timeout: 10000,
-        validateStatus: () => true,
-      });
-      if (response.status < 500) {
+      // Use /api/healthz (4WD_SERVER) with fallback to /api/ping for both backends
+      let reachable = false;
+      // NRP_ROS LEGACY DISABLED — '/api/status' probe removed (use /api/healthz on 4WD_SERVER)
+      for (const probePath of ['/api/healthz', '/api/ping']) {
+        try {
+          const r = await axios.get(`${manualUrl}${probePath}`, {
+            timeout: 5000,
+            validateStatus: () => true,
+          });
+          if (r.status < 500) { reachable = true; break; }
+        } catch { /* try next */ }
+      }
+      const response = { status: reachable ? 200 : 503 };
+      if (reachable) {
         const device: JetsonDevice = {
           id: 'custom-' + ip,
           name: `Custom Rover (${ip})`,
@@ -173,8 +239,13 @@ export default function RoverDiscoveryScreen({ onRoverSelected }: RoverDiscovery
           url: manualUrl,
           responseTime: 0,
         };
-        await saveBackendURL(manualUrl, ip, port);
         setShowManualInput(false);
+        if (AUTH_ENABLED) {
+          openPasswordModal(device, '#f59e0b');
+          return;
+        }
+        setBackendURL(manualUrl);
+        await saveBackendURL(manualUrl, ip, port);
         onRoverSelected(device);
       } else {
         Alert.alert('Connection Failed', `Server responded with status ${response.status}`);
@@ -273,8 +344,12 @@ export default function RoverDiscoveryScreen({ onRoverSelected }: RoverDiscovery
             </Text>
           </View>
           <View style={styles.statusInfoRow}>
-            <Text style={styles.statusLabel}>UDP Port</Text>
+            <Text style={styles.statusLabel}>Beacon UDP</Text>
             <Text style={styles.udpPortValue}>5002</Text>
+          </View>
+          <View style={styles.statusInfoRow}>
+            <Text style={styles.statusLabel}>API Port</Text>
+            <Text style={styles.udpPortValue}>5001</Text>
           </View>
         </View>
 
@@ -334,17 +409,21 @@ export default function RoverDiscoveryScreen({ onRoverSelected }: RoverDiscovery
   );
 
   // ── ROVER CARDS ──────────────────────────────────────────────────────────
+  const isRoverPending = (id: string): boolean =>
+    showPasswordModal && pendingConnect?.device.id === id;
+
   const renderRoverCard = (rover: DiscoveredRover) => {
     const isStale = now - rover.lastSeen > 5000;
     const dotColor = isStale ? '#fb923c' : '#4ade80';
-    const isConnecting = connectingRoverId === rover.roverId;
+    const isConnectingThis = connectingRoverId === rover.roverId;
+    const isPending = isRoverPending(rover.roverId);
 
     return (
       <TouchableOpacity
         key={rover.roverId}
-        style={styles.roverCard}
+        style={[styles.roverCard, isPending && styles.roverCardSelected]}
         onPress={() => handleSelectBeaconRover(rover)}
-        disabled={isConnecting}
+        disabled={isConnectingThis || isConnecting}
         activeOpacity={0.75}
       >
         <View style={[styles.cardAccent, { backgroundColor: dotColor }]} />
@@ -378,7 +457,7 @@ export default function RoverDiscoveryScreen({ onRoverSelected }: RoverDiscovery
           </View>
         </View>
         <View style={styles.cardArrow}>
-          {isConnecting ? (
+          {isConnectingThis ? (
             <ActivityIndicator size="small" color="#4ade80" />
           ) : (
             <>
@@ -392,13 +471,14 @@ export default function RoverDiscoveryScreen({ onRoverSelected }: RoverDiscovery
   };
 
   const renderNetworkCard = (device: JetsonDevice) => {
-    const isConnecting = connectingRoverId === device.id;
+    const isConnectingThis = connectingRoverId === device.id;
+    const isPending = isRoverPending(device.id);
     return (
       <TouchableOpacity
         key={device.id}
-        style={styles.roverCard}
+        style={[styles.roverCard, isPending && styles.roverCardSelected]}
         onPress={() => handleSelectNetworkDevice(device)}
-        disabled={isConnecting}
+        disabled={isConnectingThis || isConnecting}
         activeOpacity={0.75}
       >
         <View style={[styles.cardAccent, { backgroundColor: '#3b82f6' }]} />
@@ -424,7 +504,7 @@ export default function RoverDiscoveryScreen({ onRoverSelected }: RoverDiscovery
           </View>
         </View>
         <View style={styles.cardArrow}>
-          {isConnecting ? (
+          {isConnectingThis ? (
             <ActivityIndicator size="small" color="#3b82f6" />
           ) : (
             <>
@@ -548,8 +628,8 @@ export default function RoverDiscoveryScreen({ onRoverSelected }: RoverDiscovery
                   <View style={styles.tipDot} />
                 </View>
                 <Text style={styles.tipText}>
-                  Rover broadcasts on{' '}
-                  <Text style={styles.tipHighlightGreen}>UDP port 5002</Text>
+                  Beacon on <Text style={styles.tipHighlightGreen}>UDP 5002</Text>
+                  {' · '}API on <Text style={styles.tipHighlightGreen}>HTTP 5001</Text>
                 </Text>
               </View>
               <View style={styles.tipRow}>
@@ -602,6 +682,18 @@ export default function RoverDiscoveryScreen({ onRoverSelected }: RoverDiscovery
       {renderLeftPanel()}
       {renderMainContent()}
 
+      <ConnectPasswordModal
+        visible={showPasswordModal && pendingConnect !== null}
+        roverName={pendingConnect?.device.name ?? ''}
+        roverId={pendingConnect?.roverId}
+        host={`${pendingConnect?.device.ip ?? ''}:${pendingConnect?.device.port ?? 5001}`}
+        accentColor={pendingConnect?.accentColor ?? '#4ade80'}
+        isConnecting={isConnecting}
+        error={connectError}
+        onClose={closePasswordModal}
+        onConnect={handlePasswordConnect}
+      />
+
       {/* Manual URL Modal */}
       <Modal
         visible={showManualInput}
@@ -616,7 +708,7 @@ export default function RoverDiscoveryScreen({ onRoverSelected }: RoverDiscovery
               <Text style={styles.modalTitle}>Manual Backend URL</Text>
             </View>
             <Text style={styles.modalHint}>
-              Connects to /api/status{'\n'}Example: http://192.168.1.242:5001
+              Probes /api/healthz (4WD_SERVER){'\n'}Example: http://192.168.1.101:5001
             </Text>
             <TextInput
               style={styles.urlInput}
@@ -718,7 +810,7 @@ const styles = StyleSheet.create({
     padding: 16,
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.05)',
-    marginBottom: 20,
+    marginBottom: 16,
   },
   statusCardHeader: {
     flexDirection: 'row',
@@ -1003,6 +1095,10 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.05)',
+  },
+  roverCardSelected: {
+    borderColor: 'rgba(74,222,128,0.5)',
+    backgroundColor: 'rgba(74,222,128,0.08)',
   },
   cardAccent: {
     width: 3,

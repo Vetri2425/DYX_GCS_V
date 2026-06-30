@@ -23,6 +23,7 @@ import useRoverTelemetry, {
 import { RoverTelemetry, ConnectionState, GpsFailsafeMode, GpsFailsafeStatus, GpsFailsafeEvent } from '../types/telemetry';
 import type { Socket } from 'socket.io-client';
 
+
 export interface TelemetryContextValue {
   telemetry: RoverTelemetry;
   roverPosition: { lat: number; lng: number; timestamp: number } | null;
@@ -61,28 +62,26 @@ export function TelemetryProvider({ children }: TelemetryProviderProps): React.R
 
   const setGpsFailsafeMode = useCallback((mode: GpsFailsafeMode) => {
     setGpsFailsafeModeState(mode);
-    if (rover.socket) {
-      rover.socket.emit('set_gps_failsafe_mode', { mode });
-    }
-  }, [rover.socket]);
+    // NRP_ROS LEGACY DISABLED — socket.emit('set_gps_failsafe_mode')
+  }, []);
 
   const onFailsafeAcknowledge = useCallback(() => {
-    if (rover.socket) {
-      rover.socket.emit('failsafe_acknowledge');
-    }
-  }, [rover.socket]);
+    // NRP_ROS LEGACY DISABLED — socket.emit('failsafe_acknowledge')
+  }, []);
 
   const onFailsafeResume = useCallback(() => {
-    if (rover.socket) {
-      rover.socket.emit('failsafe_resume_mission');
-    }
-  }, [rover.socket]);
+    // 4WD_SERVER — GPS safety abort recovery via REST
+    import('../services/missionLifecycleService').then(({ resumeMission }) => {
+      resumeMission().catch(console.error);
+    });
+  }, []);
 
   const onFailsafeRestart = useCallback(() => {
-    if (rover.socket) {
-      rover.socket.emit('failsafe_restart_mission');
-    }
-  }, [rover.socket]);
+    // 4WD_SERVER — GPS safety abort recovery via REST
+    import('../services/missionLifecycleService').then(({ restartMission }) => {
+      restartMission().catch(console.error);
+    });
+  }, []);
 
   // Listen for GPS failsafe events (mission_status forwarding moved to SocketEventCoordinator)
   useEffect(() => {
@@ -98,15 +97,14 @@ export function TelemetryProvider({ children }: TelemetryProviderProps): React.R
       setGpsFailsafeModeState(data.mode);
     };
 
-    rover.socket.on('servo_suppressed', handleServoSuppressed);
-    rover.socket.on('failsafe_mode_changed', handleFailsafeModeChanged);
-
-    // Request current GPS failsafe mode after registering listener
-    rover.socket.emit('request_gps_failsafe_mode');
+    // NRP_ROS LEGACY DISABLED — servo_suppressed / failsafe_mode_changed / request_gps_failsafe_mode
+    // rover.socket.on('servo_suppressed', handleServoSuppressed);
+    // rover.socket.on('failsafe_mode_changed', handleFailsafeModeChanged);
+    // rover.socket.emit('request_gps_failsafe_mode');
 
     return () => {
-      rover.socket?.off('servo_suppressed', handleServoSuppressed);
-      rover.socket?.off('failsafe_mode_changed', handleFailsafeModeChanged);
+      // rover.socket?.off('servo_suppressed', handleServoSuppressed);
+      // rover.socket?.off('failsafe_mode_changed', handleFailsafeModeChanged);
     };
   }, [rover.socket, rover.connectionState]);
 

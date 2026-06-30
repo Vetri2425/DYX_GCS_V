@@ -44,7 +44,7 @@ export const ALLOWED_DISCOVERY_IPS: string[] = Array.from(
 // Priority order within allowed IPs
 export const PRIORITY_BACKEND_IPS: string[] = [
   '192.168.1.102',
-  '192.168.1.242',
+  '192.168.1.102',
   '192.168.1.213',
   '192.168.1.100',
   '192.168.1.101',
@@ -78,7 +78,7 @@ async function testJetsonConnection(ip: string, port: number = 5001): Promise<Je
   try {
     // Try multiple endpoints to detect backend server
     // Using a short timeout to speed up scanning
-    const endpoints = ['/api/ping', '/api/rtk/status', '/'];
+    const endpoints = ['/api/healthz', '/api/ping', '/api/rtk/status', '/'];
 
     for (const endpoint of endpoints) {
       try {

@@ -4,6 +4,12 @@ import { Ionicons } from '@expo/vector-icons';
 import { colors } from '../../theme/colors';
 import { VehicleStatus } from './types';
 import { RoverTelemetry } from '../../types/telemetry';
+import {
+  getRobotStatusDebug,
+  isRobotStatusDebugEnabled,
+  subscribeRobotStatusDebug,
+  type RobotStatusDebugSnapshot,
+} from '../../utils/robotStatusDebug';
 
 interface Props {
   status: VehicleStatus;
@@ -81,8 +87,53 @@ type StatusRowItem = {
   icon: keyof typeof Ionicons.glyphMap;
 };
 
+function DebugLine({ label, value }: { label: string; value: string }) {
+  return (
+    <Text style={debugStyles.line} numberOfLines={2}>
+      <Text style={debugStyles.label}>{label}: </Text>
+      {value}
+    </Text>
+  );
+}
+
+function RobotStatusDebugPanel({ snap }: { snap: RobotStatusDebugSnapshot }) {
+  const raw = snap.rawPayload;
+  const adapted = snap.adapted;
+  const ui = snap.uiStatus;
+
+  return (
+    <View style={debugStyles.panel}>
+      <Text style={debugStyles.title}>DEBUG — SOCKET vs UI</Text>
+      <DebugLine label="Source" value={`${snap.lastSource} · tel#${snap.telemetryEventCount} · rej#${snap.rejectedEventCount}`} />
+      <DebugLine label="Socket" value={`${snap.connectionState} · sock=${snap.socketConnected ? 'up' : 'down'} · px4=${snap.px4Detected ? 'yes' : 'no'}`} />
+      {snap.rejectReason ? <DebugLine label="Reject" value={snap.rejectReason} /> : null}
+      <Text style={debugStyles.section}>RAW (socket/REST)</Text>
+      <DebugLine label="battery" value={`pct=${String(raw?.battery_pct ?? '—')} v=${String(raw?.battery_v ?? '—')}`} />
+      <DebugLine label="gps" value={`fix=${String(raw?.gps_fix ?? '—')} name=${String(raw?.gps_fix_name ?? '—')} sats=${String(raw?.gps_sat ?? '—')}`} />
+      <DebugLine label="pos" value={`lat=${String(raw?.lat ?? '—')} lon=${String(raw?.lon ?? '—')} fcu=${String(raw?.connected ?? '—')}`} />
+      <Text style={debugStyles.section}>ADAPTED</Text>
+      <DebugLine label="battery" value={`${adapted.battery_pct ?? '—'}% · ${adapted.battery_v ?? '—'}V`} />
+      <DebugLine label="gps" value={`fix=${adapted.gps_fix ?? '—'} · ${adapted.gps_fix_name ?? '—'} · sats=${adapted.gps_sat ?? '—'}`} />
+      <DebugLine label="accuracy" value={`hrms=${adapted.hrms ?? '—'} vrms=${adapted.vrms ?? '—'}`} />
+      <DebugLine label="vehicle" value={`mode=${adapted.mode ?? '—'} rpp=${adapted.rpp_state_name ?? '—'}`} />
+      <Text style={debugStyles.section}>UI (VehicleStatusCard)</Text>
+      <DebugLine label="shown" value={`bat=${ui?.battery ?? '—'} · gps=${ui?.gps ?? '—'} · sats=${ui?.satellites ?? '—'}`} />
+      <DebugLine label="shown2" value={`hrms=${ui?.hrms ?? '—'} · vrms=${ui?.vrms ?? '—'} · imu=${ui?.imu ?? '—'}`} />
+      <DebugLine label="online" value={snap.uiConnected ? 'YES' : 'NO'} />
+      <DebugLine label="lastMsg" value={snap.lastMessageTs ? new Date(snap.lastMessageTs).toLocaleTimeString() : 'never'} />
+    </View>
+  );
+}
+
 export const VehicleStatusCard: React.FC<Props> = ({ status, telemetry, isConnected }) => {
   const connectionColor = isConnected ? colors.success : colors.danger;
+  const showDebug = isRobotStatusDebugEnabled();
+  const [debugSnap, setDebugSnap] = useState(getRobotStatusDebug());
+
+  useEffect(() => {
+    if (!showDebug) return undefined;
+    return subscribeRobotStatusDebug(() => setDebugSnap(getRobotStatusDebug()));
+  }, [showDebug]);
 
   const rtkColor      = useDebouncedColor(() => getRtkColor(telemetry),      telemetry?.rtk?.fix_type);
   const batteryColor  = useDebouncedColor(() => getBatteryColor(telemetry),  telemetry?.battery?.percentage);
@@ -142,10 +193,47 @@ export const VehicleStatusCard: React.FC<Props> = ({ status, telemetry, isConnec
             </View>
           </View>
         ))}
+        {showDebug ? <RobotStatusDebugPanel snap={debugSnap} /> : null}
       </ScrollView>
     </View>
   );
 };
+
+const debugStyles = StyleSheet.create({
+  panel: {
+    marginTop: 8,
+    padding: 8,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(251,191,36,0.35)',
+    backgroundColor: 'rgba(251,191,36,0.08)',
+  },
+  title: {
+    color: '#fbbf24',
+    fontSize: 9,
+    fontWeight: '800',
+    letterSpacing: 1.2,
+    marginBottom: 6,
+  },
+  section: {
+    color: 'rgba(255,255,255,0.35)',
+    fontSize: 8,
+    fontWeight: '700',
+    letterSpacing: 1,
+    marginTop: 6,
+    marginBottom: 2,
+    textTransform: 'uppercase',
+  },
+  line: {
+    color: 'rgba(255,255,255,0.75)',
+    fontSize: 9,
+    fontFamily: 'monospace',
+    lineHeight: 13,
+  },
+  label: {
+    color: 'rgba(103,232,249,0.9)',
+  },
+});
 
 const styles = StyleSheet.create({
   card: {
