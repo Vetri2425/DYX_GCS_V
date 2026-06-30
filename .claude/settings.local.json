@@ -117,7 +117,8 @@
       "Bash(python3 *)",
       "Bash(mv temp/templates/*.dwg temp/templates/DWG/)",
       "Bash(mv temp/templates/*.dxf temp/templates/DXF/)",
-      "Bash(Test-Path *)"
+      "Bash(Test-Path *)",
+      "Bash(npx tsc *)"
     ],
     "deny": [],
     "ask": []

@@ -46,7 +46,6 @@ import {
   getRobotStatusDebug,
   patchRobotStatusDebug,
   pickRawRobotFields,
-  resetRobotStatusDebug,
   telemetryDiagLog,
 } from '../utils/robotStatusDebug';
 
@@ -1373,7 +1372,6 @@ export function useRoverTelemetry(): UseRoverTelemetryResult {
             return;
           }
           resetTelemetry();
-          resetRobotStatusDebug();
           setConnectionState('disconnected');
           if (reason === 'io server disconnect') {
             socket.connect();

@@ -4,6 +4,8 @@ import { LegendList, LegendListRenderItemProps } from '@legendapp/list';
 import { colors } from '../../theme/colors';
 import { Waypoint } from './types';
 import MissionReportExport from './MissionReportExport';
+import type { WaypointUiStatus } from '../../types/missionWaypointStatus';
+import { getStatusPresentation } from '../../utils/missionStatusPresentation';
 
 // ── Pure helper functions (extracted for reuse in memoized rows) ──────────────
 
@@ -38,28 +40,20 @@ function getAccuracyDisplay(wpStatus: any): { text: string; color: string | unde
 }
 
 function getWaypointStatusDisplay(wpStatus: any): { statusDisplay: string; statusColor: string } {
-  const s = wpStatus?.status;
-  if (s === 'completed') return { statusDisplay: 'Completed', statusColor: '#10B981' };
-  if (s === 'skipped')  return { statusDisplay: 'Skipped', statusColor: '#94A3B8' };
-  if (s === 'marked')   return { statusDisplay: 'Marked', statusColor: '#3B82F6' };
-  if (s === 'reached')  return { statusDisplay: 'Reached', statusColor: '#F59E0B' };
-  if (s === 'loading')  return { statusDisplay: 'Loading', statusColor: '#FBBF24' };
-  if (s === 'spray_on') return { statusDisplay: 'Spray ON', statusColor: '#3B82F6' };
-  if (s === 'spray_off')return { statusDisplay: 'Spray OFF', statusColor: '#3B82F6' };
-  if (s === 'passed')   return { statusDisplay: 'Passed', statusColor: '#2DD4BF' };
-  if (s === 'mission_end') return { statusDisplay: 'Done', statusColor: '#10B981' };
-  return { statusDisplay: 'Pending', statusColor: '#94A3B8' };
+  const s = wpStatus?.status as WaypointUiStatus | undefined;
+  const p = getStatusPresentation(s);
+  return { statusDisplay: p.label, statusColor: p.color };
 }
 
 function getRemarkText(s: string | undefined, wpStatus: any, statusDisplay: string): string {
-  if (s === 'completed') return 'Completed';
-  if (s === 'skipped') return 'Skipped';
-  if (s === 'marked') return 'Marked';
-  if (s === 'reached') return 'Reached';
-  if (s === 'loading') return 'Loading';
-  if (s === 'spray_on' || s === 'spray_off' || s === 'passed' || s === 'mission_end') return wpStatus?.remark || statusDisplay;
-  if (wpStatus) return 'Pending';
-  return '';
+  if (!wpStatus) return '';
+  // For error/terminal-context statuses, prefer the backend reason/remark text.
+  const p = getStatusPresentation(s as WaypointUiStatus | undefined);
+  if (p.isError) return wpStatus?.remark || wpStatus?.reason || p.label;
+  if (s === 'spray_on' || s === 'spray_off' || s === 'passed' || s === 'mission_end') {
+    return wpStatus?.remark || statusDisplay;
+  }
+  return p.label;
 }
 
 // ── Memoized row component (recycled by LegendList) ───────────────────────────
@@ -133,7 +127,7 @@ interface Props {
   statusMap: Record<number, {
     reached?: boolean;
     marked?: boolean;
-    status?: 'completed' | 'loading' | 'skipped' | 'reached' | 'marked' | 'pending' | 'spray_on' | 'spray_off' | 'passed' | 'mission_end';
+    status?: WaypointUiStatus;
     timestamp?: string;
     pile?: string | number;
     rowNo?: string | number;

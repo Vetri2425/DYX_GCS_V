@@ -7,6 +7,7 @@
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Waypoint } from '../components/missionreport/types';
+import type { WaypointUiStatus } from '../types/missionWaypointStatus';
 
 // Storage keys
 const STORAGE_KEYS = {
@@ -32,6 +33,9 @@ const STORAGE_KEYS = {
   DASHBOARD_UI_STATE: '@dashboard/ui_state',
   // Skip audit history
   MISSION_SKIP_AUDIT: '@mission/skip_audit',
+  // Verified mission (4-wheel) — survives cold restarts
+  VERIFIED_MISSION_ID:   '@mission/verified_id',
+  VERIFIED_MISSION_NAME: '@mission/verified_name',
 } as const;
 
 export interface MissionMetadata {
@@ -48,7 +52,7 @@ export interface WaypointStatusMap {
   [waypointSn: number]: {
     reached?: boolean;
     marked?: boolean;
-    status?: 'completed' | 'loading' | 'skipped' | 'reached' | 'marked' | 'pending' | 'spray_on' | 'spray_off' | 'passed' | 'mission_end';
+    status?: WaypointUiStatus;
     timestamp?: string;
     pile?: string | number;
     rowNo?: string | number;
@@ -1019,6 +1023,72 @@ class PersistentStorageService {
     } catch (error) {
       console.error('[Storage] ❌ Failed to load map visualization settings:', error);
       return null;
+    }
+  }
+
+  // ==================== Verified Mission State ====================
+
+  /** Save the server-assigned mission_id for the loaded verified mission. */
+  async saveVerifiedMissionId(missionId: string | null): Promise<boolean> {
+    try {
+      if (missionId) {
+        await AsyncStorage.setItem(STORAGE_KEYS.VERIFIED_MISSION_ID, missionId);
+      } else {
+        await AsyncStorage.removeItem(STORAGE_KEYS.VERIFIED_MISSION_ID);
+      }
+      return true;
+    } catch (error) {
+      console.error('[Storage] ❌ Failed to save verified mission id:', error);
+      return false;
+    }
+  }
+
+  /** Load the saved verified mission_id (null if none). */
+  async loadVerifiedMissionId(): Promise<string | null> {
+    try {
+      return await AsyncStorage.getItem(STORAGE_KEYS.VERIFIED_MISSION_ID);
+    } catch (error) {
+      console.error('[Storage] ❌ Failed to load verified mission id:', error);
+      return null;
+    }
+  }
+
+  /** Save the display name for the loaded verified mission. */
+  async saveVerifiedMissionName(name: string | null): Promise<boolean> {
+    try {
+      if (name) {
+        await AsyncStorage.setItem(STORAGE_KEYS.VERIFIED_MISSION_NAME, name);
+      } else {
+        await AsyncStorage.removeItem(STORAGE_KEYS.VERIFIED_MISSION_NAME);
+      }
+      return true;
+    } catch (error) {
+      console.error('[Storage] ❌ Failed to save verified mission name:', error);
+      return false;
+    }
+  }
+
+  /** Load the saved verified mission name (null if none). */
+  async loadVerifiedMissionName(): Promise<string | null> {
+    try {
+      return await AsyncStorage.getItem(STORAGE_KEYS.VERIFIED_MISSION_NAME);
+    } catch (error) {
+      console.error('[Storage] ❌ Failed to load verified mission name:', error);
+      return null;
+    }
+  }
+
+  /** Clear both verified mission persistence keys atomically. */
+  async clearVerifiedMissionState(): Promise<boolean> {
+    try {
+      await AsyncStorage.multiRemove([
+        STORAGE_KEYS.VERIFIED_MISSION_ID,
+        STORAGE_KEYS.VERIFIED_MISSION_NAME,
+      ]);
+      return true;
+    } catch (error) {
+      console.error('[Storage] ❌ Failed to clear verified mission state:', error);
+      return false;
     }
   }
 }

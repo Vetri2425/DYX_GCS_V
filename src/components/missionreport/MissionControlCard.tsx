@@ -26,6 +26,8 @@ export type MissionControlCardProps = {
   missionMode?: string; // Backend mission mode (DGPS Mark, Dash, Continuous, etc.)
   isMissionActive?: boolean;
   waitingForManual?: boolean; // MANUAL mode: mission paused, user must press NEXT to continue
+  /** True when a verified mission has been uploaded and confirmed by the server. */
+  isMissionLoaded?: boolean;
 };
 
 const MissionControlCard: React.FC<MissionControlCardProps> = ({
@@ -42,6 +44,7 @@ const MissionControlCard: React.FC<MissionControlCardProps> = ({
   onSetMode,
   missionMode = 'DGPS Mark',
   waitingForManual = false,
+  isMissionLoaded = false,
 }) => {
   const { services, telemetry } = useRover();
   const [isLoadingMission, setIsLoadingMission] = React.useState(false);
@@ -285,7 +288,7 @@ const MissionControlCard: React.FC<MissionControlCardProps> = ({
                 showConfirmDialog('Start Mission', handleStart);
               }
             }}
-            disabled={isStarting || isStopping}
+            disabled={isStarting || isStopping || (!isRunning && !isMissionLoaded)}
           >
             <Text style={styles.buttonText}>
               {isStarting
@@ -294,7 +297,9 @@ const MissionControlCard: React.FC<MissionControlCardProps> = ({
                   ? '⏳ Stopping...'
                   : isRunning
                     ? 'STOP'
-                    : 'START'}
+                    : !isMissionLoaded
+                      ? 'NO MISSION'
+                      : 'START'}
             </Text>
           </TouchableOpacity>
 

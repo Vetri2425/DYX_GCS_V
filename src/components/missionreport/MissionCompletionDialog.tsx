@@ -3,6 +3,7 @@ import { View, StyleSheet, Modal, Text, TouchableOpacity, ScrollView } from 'rea
 import { MaterialIcons } from '@expo/vector-icons';
 import MissionReportExport from './MissionReportExport';
 import { Waypoint } from './types';
+import type { WaypointUiStatus } from '../../types/missionWaypointStatus';
 
 interface MissionCompletionDialogProps {
   visible: boolean;
@@ -20,7 +21,7 @@ interface MissionCompletionDialogProps {
   statusMap: Record<number, {
     reached?: boolean;
     marked?: boolean;
-    status?: 'completed' | 'loading' | 'skipped' | 'reached' | 'marked' | 'pending' | 'spray_on' | 'spray_off' | 'passed' | 'mission_end';
+    status?: WaypointUiStatus;
     timestamp?: string;
     pile?: string | number;
     rowNo?: string | number;

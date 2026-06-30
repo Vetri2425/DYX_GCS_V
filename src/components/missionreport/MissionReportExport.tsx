@@ -23,6 +23,9 @@ import {
   MissionStats,
 } from '../../utils/exportHelpers';
 import { downloadFileToDevice, getMimeType } from '../../utils/downloadHelper';
+import type { WaypointUiStatus } from '../../types/missionWaypointStatus';
+import { isErrorWaypointStatus } from '../../types/missionWaypointStatus';
+import { getStatusPresentation } from '../../utils/missionStatusPresentation';
 
 export type MissionReportExportProps = {
   waypoints: Waypoint[];
@@ -31,17 +34,7 @@ export type MissionReportExportProps = {
     {
       reached?: boolean;
       marked?: boolean;
-      status?:
-        | 'completed'
-        | 'loading'
-        | 'skipped'
-        | 'reached'
-        | 'marked'
-        | 'pending'
-        | 'spray_on'
-        | 'spray_off'
-        | 'passed'
-        | 'mission_end';
+      status?: WaypointUiStatus;
       timestamp?: string;
       pile?: string | number;
       rowNo?: string | number;
@@ -77,13 +70,18 @@ const MissionReportExport: React.FC<MissionReportExportProps> = ({
   // Calculate mission statistics
   const totalPoints = waypoints.length;
   const completedPoints = Object.values(statusMap).filter(
-    s => s.status === 'completed', // Only count actually completed waypoints, not skipped ones
+    s => s.status === 'completed', // Only count actually completed waypoints
   ).length;
   const pendingPoints = Object.values(statusMap).filter(
-    s => !s.status || s.status === 'pending',
+    s => !s.status || s.status === 'pending', // genuinely pending only
   ).length;
-  const errorPoints = Object.values(statusMap).filter(
+  // Operator-requested skips (distinct from failures).
+  const skippedPoints = Object.values(statusMap).filter(
     s => s.status === 'skipped',
+  ).length;
+  // Unsuccessful/interrupted terminal outcomes: failed + aborted + stopped.
+  const errorPoints = Object.values(statusMap).filter(
+    s => isErrorWaypointStatus(s.status),
   ).length;
   const successRate =
     totalPoints > 0 ? ((completedPoints / totalPoints) * 100).toFixed(1) : '0.0';
@@ -155,25 +153,15 @@ const MissionReportExport: React.FC<MissionReportExportProps> = ({
         const block = waypoint.block || '-';
         const pile = waypoint.pile || wpStatus?.pile || '-';
 
+        // Distinct, operator-facing label for every status (incl. failed/
+        // aborted/stopped). Falls back to Pending only when genuinely unset.
         let statusDisplay = 'Pending';
-        if (wpStatus?.status === 'completed') {
-          statusDisplay = 'Completed';
-        } else if (wpStatus?.status === 'spray_on') {
-          statusDisplay = 'Spray ON';
-        } else if (wpStatus?.status === 'spray_off') {
-          statusDisplay = 'Spray OFF';
-        } else if (wpStatus?.status === 'passed') {
-          statusDisplay = 'Passed';
-        } else if (wpStatus?.status === 'mission_end') {
-          statusDisplay = 'Done';
+        if (wpStatus?.status) {
+          statusDisplay = getStatusPresentation(wpStatus.status).exportLabel;
         } else if (wpStatus?.marked) {
           statusDisplay = 'Marked';
         } else if (wpStatus?.reached) {
           statusDisplay = 'Reached';
-        } else if (wpStatus?.status === 'loading') {
-          statusDisplay = 'Loading';
-        } else if (wpStatus?.status === 'skipped') {
-          statusDisplay = 'Skipped';
         }
 
         // Format accuracy display if available (in cm)
@@ -196,16 +184,19 @@ const MissionReportExport: React.FC<MissionReportExportProps> = ({
         };
       });
 
-      // Find error locations
+      // Find error / interrupted locations (failed, aborted, stopped) — each
+      // labelled distinctly. Operator skips are listed separately below.
       const errorLocations: string[] = [];
       waypoints.forEach((wp, idx) => {
         const wpStatus = statusMap[wp.sn];
-        if (wpStatus?.status === 'skipped') {
+        const s = wpStatus?.status;
+        if (s && (isErrorWaypointStatus(s) || s === 'skipped')) {
           const row = wp.row || wpStatus?.rowNo || '-';
           const block = wp.block || '-';
           const pile = wp.pile || wpStatus?.pile || '-';
+          const label = getStatusPresentation(s).exportLabel.toUpperCase();
           errorLocations.push(
-            `Row ${row}, Block ${block}, Pile ${pile} (WP #${idx + 1})`,
+            `[${label}] Row ${row}, Block ${block}, Pile ${pile} (WP #${idx + 1})`,
           );
         }
       });
@@ -449,6 +440,12 @@ const MissionReportExport: React.FC<MissionReportExportProps> = ({
                     <Text style={styles.previewLabel}>Errors:</Text>
                     <Text style={[styles.previewValue, styles.errorText]}>
                       {errorPoints}
+                    </Text>
+                  </View>
+                  <View style={styles.previewItem}>
+                    <Text style={styles.previewLabel}>Skipped:</Text>
+                    <Text style={[styles.previewValue, styles.warningText]}>
+                      {skippedPoints}
                     </Text>
                   </View>
                   <View style={styles.previewItem}>

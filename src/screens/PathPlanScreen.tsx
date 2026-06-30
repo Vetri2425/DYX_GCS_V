@@ -50,6 +50,8 @@ import { parseCSVChunked } from '../utils/chunkedParser';
 import { parseKML as coreParseKML } from '../core/parsers/kmlParser';
 import { convertToPathPlanWaypoints } from '../core/parsers/adapter';
 import { useWaypointHistory } from '../hooks/pathplan/useWaypointHistory';
+import { useVerifiedMissionUpload } from '../hooks/useVerifiedMissionUpload';
+import { buildValidationErrorMessage } from '../utils/pathplanToVerifiedWaypoints';
 
 // ─── Virtualized preview row (memoized for LegendList recycling) ────────────
 const PreviewRow = memo(({ item }: { item: PathPlanWaypoint }) => (
@@ -94,6 +96,10 @@ export default function PathPlanScreen({ isVisible = true }: PathPlanScreenProps
   } = useRover();
 
   const [globalServoEnabled, setGlobalServoEnabled] = useState(true);
+
+  // Verified mission upload hook — replaces the legacy loadMissionToController path
+  const { upload: uploadVerifiedMission, progress: verifiedUploadProgress } =
+    useVerifiedMissionUpload();
 
   // Component mounted flag to prevent state updates after unmount
   const mountedRef = useRef(true);
@@ -1431,66 +1437,34 @@ export default function PathPlanScreen({ isVisible = true }: PathPlanScreenProps
         return;
       }
 
-      console.log(`[PathPlan] Uploading ${waypoints.length} waypoints to controller...`);
+      console.log(`[PathPlan] Uploading ${waypoints.length} verified waypoints to controller...`);
 
-      // Validate waypoints before sending
-      const invalidWaypoints: number[] = [];
-      waypoints.forEach((wp, idx) => {
-        if (isNaN(wp.lat) || isNaN(wp.lon) || wp.lat === 0 || wp.lon === 0) {
-          invalidWaypoints.push(idx + 1);
-        }
-      });
-
-      if (invalidWaypoints.length > 0) {
-        Alert.alert(
-          'Invalid Marking Points',
-          `The following marking points have invalid coordinates: ${invalidWaypoints.join(', ')}\n\nPlease fix or remove them before uploading.`,
-          [{ text: 'OK' }]
-        );
-        return;
-      }
-
-      const controllerWaypoints = waypoints.map((wp, idx) => ({
-        command: '16',
-        param1: 0,
-        param2: 0,
-        param3: 0,
-        param4: 0,
-        lat: wp.lat,
-        lng: wp.lon,
-        alt: wp.alt,
-        frame: 3,
-        current: idx === 0 ? 1 : 0,
-        autocontinue: 1,
-        row: wp.row || '',
-        block: wp.block || '',
-        pile: wp.pile || String(idx + 1),
-        ...(wp.mark !== undefined && { mark: wp.mark }),
-      }));
-
-      // Show progress UI and subscribe to progress events
+      // Show progress bar before the async operation.
       setUploadProgress(0);
       setShowUploadProgress(true);
 
-      const unsubscribe = services.onUploadProgress((progress) => {
-        if (mountedRef.current) {
-          setUploadProgress(progress.percent);
-        }
-      });
-
       try {
-        const response = await services.loadMissionToController(controllerWaypoints);
+        // uploadVerifiedMission validates, uploads, and confirms in one call.
+        // Validation errors are returned as result.message (not thrown) so the
+        // user sees them in an Alert rather than hitting the outer catch block.
+        const result = await uploadVerifiedMission(waypoints, {
+          missionName,
+          requireMark: globalServoEnabled,
+          settings: { mode: missionMode },
+        });
 
-        // Check if still mounted before updating state
+        // Sync hook progress to local state for the progress bar.
+        setUploadProgress(result.success ? 100 : 0);
+
         if (!mountedRef.current) {
           console.warn('[PathPlan] Component unmounted during upload');
           return;
         }
 
-        if (response && response.success) {
-          console.log(`[PathPlan] Mission uploaded successfully: ${waypoints.length} waypoints`);
+        if (result.success) {
+          console.log(`[PathPlan] Mission uploaded (${result.total_targets} targets)`);
 
-          // Update context with waypoints in proper Waypoint format
+          // Update WaypointContext so MissionReportScreen can render the table.
           try {
             const contextWaypoints = waypoints.map((wp, idx) => ({
               sn: idx + 1,
@@ -1509,45 +1483,27 @@ export default function PathPlanScreen({ isVisible = true }: PathPlanScreenProps
             setMissionWaypoints(contextWaypoints);
           } catch (contextError) {
             console.error('[PathPlan] Failed to update context:', contextError);
-            // Non-fatal error - mission was uploaded successfully
           }
 
-          // BUGFIX: Clear mission runtime state when loading a new mission
-          // This prevents the Mission Progress tab from showing stale "mission active" state
-          // that was persisted from a previous mission session
-          try {
-            await Promise.all([
-              PersistentStorage.saveMissionActive(false),        // Reset mission active flag
-              PersistentStorage.saveStatusMap({}),               // Clear old waypoint statuses
-              PersistentStorage.saveMissionStartTime(null),      // Clear old start time
-              PersistentStorage.saveMissionEndTime(null),        // Clear old end time
-            ]);
-            console.log('[PathPlan] ✅ Cleared mission runtime state for new mission upload');
-          } catch (storageError) {
-            console.error('[PathPlan] ⚠️ Failed to clear mission runtime state:', storageError);
-            // Non-fatal error - mission was uploaded successfully
-          }
-
+          // PersistentStorage clearing is handled inside useVerifiedMissionUpload.
           Alert.alert(
             'Upload Successful',
-            `Mission loaded successfully!\n\n${waypoints.length} marking points sent to controller.`,
+            `Mission loaded successfully!\n\n${result.total_targets} marking points sent to controller.`,
             [{ text: 'OK' }]
           );
         } else {
-          const errorMsg = response?.message || 'Unknown error occurred';
-          throw new Error(errorMsg);
+          // Validation or server rejection — show the specific error message.
+          throw new Error(result.message ?? 'Upload failed');
         }
       } catch (uploadError) {
-        console.error('[PathPlan] loadMissionToController upload error:', uploadError);
+        console.error('[PathPlan] verifiedMissionUpload error:', uploadError);
         throw uploadError;
       } finally {
-        // Cleanup subscription and hide progress
-        unsubscribe();
         setShowUploadProgress(false);
         setUploadProgress(0);
       }
     } catch (err) {
-      console.error('[PathPlan] loadMissionToController error:', err);
+      console.error('[PathPlan] handleLoadMissionToController error:', err);
       const errorMessage = err instanceof Error ? err.message : String(err);
 
       Alert.alert(

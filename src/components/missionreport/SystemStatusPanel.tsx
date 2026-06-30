@@ -5,6 +5,7 @@ import { Mode, Waypoint } from './types';
 import MissionControlCard from './MissionControlCard';
 import { useRover } from '../../context/RoverContext';
 import { Ionicons } from '@expo/vector-icons';
+import { useVerifiedMissionContext } from '../../context/VerifiedMissionContext';
 
 interface Props {
   mode: Mode;
@@ -36,6 +37,7 @@ export const SystemStatusPanel: React.FC<Props> = ({
   waitingForManual = false,
 }) => {
   const { telemetry, connectionState, services } = useRover();
+  const { isLoaded: isMissionLoaded } = useVerifiedMissionContext();
 
   const handleStart = async () => {
     try {
@@ -206,6 +208,7 @@ export const SystemStatusPanel: React.FC<Props> = ({
         missionMode={missionMode}
         isMissionActive={isMissionActive}
         waitingForManual={waitingForManual}
+        isMissionLoaded={isMissionLoaded}
       />
     </View>
   );

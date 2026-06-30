@@ -8,6 +8,7 @@ import { WaypointProvider } from './src/context/WaypointContext';
 import { ComponentReadinessProvider } from './src/context/ComponentReadinessContext';
 import { AuthProvider } from './src/context/AuthContext';
 import { MissionStagingProvider } from './src/context/MissionStagingContext';
+import { VerifiedMissionProvider } from './src/context/VerifiedMissionContext';
 import { ErrorBoundary } from './src/components/shared/ErrorBoundary';
 import { useImmersiveMode } from './src/hooks/useImmersiveMode';
 import { useAuth } from './src/hooks/useAuth';
@@ -88,13 +89,15 @@ function AppContent() {
   return (
     <AuthGate>
       <WaypointProvider>
-        <MissionStagingProvider>
-          <RoverProvider>
-            <NavigationContainer>
-              <TabNavigator />
-            </NavigationContainer>
-          </RoverProvider>
-        </MissionStagingProvider>
+        <VerifiedMissionProvider>
+          <MissionStagingProvider>
+            <RoverProvider>
+              <NavigationContainer>
+                <TabNavigator />
+              </NavigationContainer>
+            </RoverProvider>
+          </MissionStagingProvider>
+        </VerifiedMissionProvider>
       </WaypointProvider>
     </AuthGate>
   );

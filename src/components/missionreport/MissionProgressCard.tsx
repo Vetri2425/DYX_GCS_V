@@ -3,6 +3,8 @@ import { View, Text, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { colors } from '../../theme/colors';
 import { Waypoint } from './types';
+import type { WaypointUiStatus } from '../../types/missionWaypointStatus';
+import { isTerminalWaypointStatus, isErrorWaypointStatus } from '../../types/missionWaypointStatus';
 // import { Geodesic } from 'geographiclib'; // COMMENTED OUT: Using backend distance_to_next_m instead
 
 interface Props {
@@ -12,7 +14,7 @@ interface Props {
   statusMap?: Record<number, {
     reached?: boolean;
     marked?: boolean;
-    status?: 'completed' | 'loading' | 'skipped' | 'reached' | 'marked' | 'pending' | 'spray_on' | 'spray_off' | 'passed' | 'mission_end';
+    status?: WaypointUiStatus;
     timestamp?: string;
     pile?: string | number;
     rowNo?: string | number;
@@ -52,13 +54,15 @@ export const MissionProgressCard: React.FC<Props> = ({
   // Show 0 when mission is not active
   const markedCount = isMissionActive ? (providedMarkedCount ?? 0) : 0;
 
-  // Check if mission is completed
+  // Check if mission is completed — a target in ANY terminal state (completed,
+  // skipped, failed, aborted, stopped) counts as resolved, so a mission that
+  // ended with a failure is treated as terminal, not still running/pending.
   const isMissionCompleted = waypoints.length > 0 && waypoints.every(wp => {
     const wpStatus = statusMap[wp.sn];
-    return wpStatus && (wpStatus.status === 'completed' || wpStatus.status === 'skipped');
+    return wpStatus && isTerminalWaypointStatus(wpStatus.status);
   }) && !isMissionActive;
 
-  // Calculate completion stats
+  // Calculate completion stats — each terminal category stays distinct.
   const completedCount = waypoints.filter(wp => {
     const wpStatus = statusMap[wp.sn];
     return wpStatus && wpStatus.status === 'completed';
@@ -67,6 +71,18 @@ export const MissionProgressCard: React.FC<Props> = ({
   const skippedCount = waypoints.filter(wp => {
     const wpStatus = statusMap[wp.sn];
     return wpStatus && wpStatus.status === 'skipped';
+  }).length;
+
+  // Failed / aborted / stopped — unsuccessful terminal targets.
+  const errorCount = waypoints.filter(wp => {
+    const wpStatus = statusMap[wp.sn];
+    return wpStatus && isErrorWaypointStatus(wpStatus.status);
+  }).length;
+
+  // Total resolved (any terminal status) — progress never undercounts terminals.
+  const terminalCount = waypoints.filter(wp => {
+    const wpStatus = statusMap[wp.sn];
+    return wpStatus && isTerminalWaypointStatus(wpStatus.status);
   }).length;
 
   const nextIndex = (currentIndex ?? -1) + 1;

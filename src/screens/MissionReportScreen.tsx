@@ -30,6 +30,11 @@ import {
   buildLegacyStatusMapFromPointMap,
   mergeLegacyStatusMap,
 } from '../adapters/px4PointStatusBridge';
+import { useVerifiedMissionUpload } from '../hooks/useVerifiedMissionUpload';
+import { useVerifiedMissionContext } from '../context/VerifiedMissionContext';
+import { useVerifiedMissionProgress } from '../hooks/useVerifiedMissionProgress';
+import { verifiedProgressToLegacy } from '../adapters/verifiedTargetBridge';
+import { startVerifiedMission, clearVerifiedMission } from '../services/verifiedMissionService';
 
 // Layout constants — change these to adjust the overall layout quickly
 const LEFT_PANEL_WIDTH = '21%';
@@ -44,7 +49,7 @@ const PANEL_PADDING_V = 8; // vertical padding for left/right panels
 type WpStatus = {
   reached?: boolean;
   marked?: boolean;
-  status?: 'completed' | 'loading' | 'skipped' | 'reached' | 'marked' | 'pending' | 'spray_on' | 'spray_off' | 'passed' | 'mission_end';
+  status?: 'completed' | 'loading' | 'skipped' | 'reached' | 'marked' | 'pending' | 'spray_on' | 'spray_off' | 'passed' | 'mission_end' | 'failed' | 'aborted' | 'stopped';
   timestamp?: string;
   pile?: string | number;
   rowNo?: string | number;
@@ -77,6 +82,19 @@ export default function MissionReportScreen({ isVisible = true }: MissionReportS
   };
   const { telemetry, roverPosition, onMissionEvent, socket } = useTelemetry();
   const { services, connectionState } = useConnection();
+
+  // 4WD verified mission hooks
+  const verifiedCtx = useVerifiedMissionContext();
+  const { upload: uploadVerifiedWaypoints } = useVerifiedMissionUpload();
+  const {
+    verifiedProgressMap,
+    currentTargetIndex: verifiedTargetIndex,
+    missionTerminal: verifiedTerminal,
+    waitingForContinue: verifiedWaiting,
+    resetProgress: resetVerifiedProgress,
+    clearMissionTerminal: clearVerifiedTerminal,
+  } = useVerifiedMissionProgress(socket, connectionState, verifiedCtx.missionId, verifiedCtx.totalTargets);
+
   const {
     statusMap: pointStatusMap,
     waitingForContinue: px4WaitingForContinue,
@@ -204,13 +222,19 @@ export default function MissionReportScreen({ isVisible = true }: MissionReportS
     [pointStatusMap, waypoints, telemetry.hrms, telemetry.vrms],
   );
 
-  const effectiveStatusMap = useMemo(
-    () =>
-      POINT_MISSION_ENABLED
-        ? mergeLegacyStatusMap(statusMap, px4LegacyStatusMap)
-        : statusMap,
-    [statusMap, px4LegacyStatusMap],
+  const verifiedLegacyMap = useMemo(
+    () => verifiedProgressToLegacy(verifiedProgressMap),
+    [verifiedProgressMap],
   );
+
+  const effectiveStatusMap = useMemo(() => {
+    const base = POINT_MISSION_ENABLED
+      ? mergeLegacyStatusMap(statusMap, px4LegacyStatusMap)
+      : statusMap;
+    return verifiedCtx.isLoaded
+      ? mergeLegacyStatusMap(base, verifiedLegacyMap)
+      : base;
+  }, [statusMap, px4LegacyStatusMap, verifiedLegacyMap, verifiedCtx.isLoaded]);
 
   const telemetryMissionActive = useMemo(() => {
     const ms = String(telemetry.mission?.status ?? '').toLowerCase();
@@ -220,13 +244,17 @@ export default function MissionReportScreen({ isVisible = true }: MissionReportS
   const effectiveMissionActive = isMissionActive || telemetryMissionActive;
 
   const effectiveCurrentIndex = useMemo(() => {
+    if (verifiedCtx.isLoaded && verifiedTargetIndex !== null) {
+      return verifiedTargetIndex;
+    }
     if (POINT_MISSION_ENABLED && px4CurrentPointIndex !== null) {
       return px4CurrentPointIndex;
     }
     return currentIndex;
-  }, [px4CurrentPointIndex, currentIndex]);
+  }, [verifiedCtx.isLoaded, verifiedTargetIndex, px4CurrentPointIndex, currentIndex]);
 
-  const effectiveWaitingForManual = waitingForManual || px4WaitingForContinue;
+  const effectiveWaitingForManual =
+    waitingForManual || px4WaitingForContinue || (verifiedCtx.isLoaded && verifiedWaiting);
 
   // Check if showing previous mission data
   const isShowingPreviousMission = previousMissionData && !isMissionActive && Object.keys(statusMap).length === 0;
@@ -345,45 +373,48 @@ export default function MissionReportScreen({ isVisible = true }: MissionReportS
     setShowWaypointPreviewDialog(true);
   };
 
-  // Confirm and upload mission to controller
+  // Confirm and upload mission to controller (verified 4WD flow)
   const handleConfirmUpload = async () => {
     setShowWaypointPreviewDialog(false);
     setIsUploadingMission(true);
 
     try {
-      console.log('[MissionReportScreen] Uploading mission to controller...');
+      console.log('[MissionReportScreen] Uploading verified mission...');
 
-      // Load waypoints to mission controller
-      const response = await services.loadMissionToController(waypoints as any);
+      // Map Waypoint[] → PathPlanWaypoint[] for the verified upload hook.
+      const pathPlanWps = waypoints.map(wp => ({
+        id: wp.sn,
+        lat: wp.lat,
+        lon: wp.lon,
+        alt: wp.alt,
+        row: wp.row,
+        block: wp.block,
+        pile: wp.pile,
+        distance: wp.distance,
+        mark: wp.mark,
+      }));
 
-      if (response.success) {
+      const result = await uploadVerifiedWaypoints(pathPlanWps, {
+        requireMark: true, // confirmed: 4WD_SERVER requires mark on every waypoint
+      });
+
+      if (result.success) {
         console.log('[MissionReportScreen] Mission uploaded successfully');
-
-        // BUGFIX: Clear mission runtime state when loading a new mission
-        // This prevents stale "mission active" state from showing incorrect button state
-        try {
-          await Promise.all([
-            PersistentStorage.saveMissionActive(false),        // Reset mission active flag
-            PersistentStorage.saveStatusMap({}),               // Clear old waypoint statuses
-            PersistentStorage.saveMissionStartTime(null),      // Clear old start time
-            PersistentStorage.saveMissionEndTime(null),        // Clear old end time
-          ]);
-          // Also update local state to match
-          setIsMissionActive(false);
-          setStatusMap({});
-          setMissionStartTime(null);
-          setMissionEndTime(null);
-          setCurrentIndex(null);
-          console.log('[MissionReportScreen] ✅ Cleared mission runtime state for new mission upload');
-        } catch (storageError) {
-          console.error('[MissionReportScreen] ⚠️ Failed to clear mission runtime state:', storageError);
-          // Non-fatal error - mission was uploaded successfully
-        }
-
+        // PersistentStorage clearing is handled inside useVerifiedMissionUpload.
+        setIsMissionActive(false);
+        setStatusMap({});
+        setMissionStartTime(null);
+        setMissionEndTime(null);
+        setCurrentIndex(null);
+        // Defensive redundancy: the progress hook also resets on mission-id
+        // change, but clear here too so a replacement upload can never show the
+        // previous mission's target progress.
+        resetVerifiedProgress();
+        clearVerifiedTerminal();
         showNotification('success', 'Success', 'Mission uploaded successfully!');
       } else {
-        console.error('[MissionReportScreen] Upload failed:', response.message);
-        showNotification('error', 'Error', response.message || 'Failed to upload mission');
+        console.error('[MissionReportScreen] Upload failed:', result.message);
+        showNotification('error', 'Upload Failed', result.message ?? 'Failed to upload mission');
       }
     } catch (error) {
       console.error('[MissionReportScreen] Upload Error:', error);
@@ -790,6 +821,10 @@ export default function MissionReportScreen({ isVisible = true }: MissionReportS
 
   // PX4 point journal terminal events (point_completed / point_failed / point_aborted)
   useEffect(() => {
+    // Flow isolation: when a verified GPS mission is loaded, the PX4 point
+    // terminal handler must NOT fire — the verified handler owns terminal state.
+    // This prevents duplicate completion dialogs across the two flows.
+    if (verifiedCtx.isLoaded) return;
     if (!POINT_MISSION_ENABLED || !px4MissionTerminal) return;
 
     const { outcome, event } = px4MissionTerminal;
@@ -817,7 +852,40 @@ export default function MissionReportScreen({ isVisible = true }: MissionReportS
     const detail = event.message || event.reason || `Mission ${outcome}`;
     showNotification('error', 'Mission Ended', detail);
     clearMissionTerminal();
-  }, [px4MissionTerminal, clearMissionTerminal]);
+  }, [px4MissionTerminal, clearMissionTerminal, verifiedCtx.isLoaded]);
+
+  // 4WD verified mission terminal handler
+  useEffect(() => {
+    // Flow isolation: only handle verified terminal state for a verified mission.
+    if (!verifiedCtx.isLoaded) return;
+    if (!verifiedTerminal) return;
+
+    setIsMissionActive(false);
+    preserveCurrentMission.current();
+
+    if (!missionEndTimeRef.current) {
+      const endTime = verifiedTerminal.event.timestamp
+        ? new Date(verifiedTerminal.event.timestamp)
+        : new Date();
+      setMissionEndTime(endTime);
+    }
+
+    if (verifiedTerminal.outcome === 'completed') {
+      showNotification('success', 'Mission Completed', 'All marking points processed!');
+      const t = setTimeout(() => {
+        if (mountedRef.current) setShowCompletionDialog(true);
+        clearVerifiedTerminal();
+      }, 1000);
+      return () => clearTimeout(t);
+    }
+
+    const detail =
+      verifiedTerminal.event.message ??
+      verifiedTerminal.event.reason ??
+      `Mission ${verifiedTerminal.outcome}`;
+    showNotification('error', 'Mission Ended', detail);
+    clearVerifiedTerminal();
+  }, [verifiedTerminal, clearVerifiedTerminal, verifiedCtx.isLoaded]);
 
   // Get mission data for display (current or previous) — memoized to avoid
   // creating new object references on every telemetry-driven re-render
@@ -964,23 +1032,47 @@ export default function MissionReportScreen({ isVisible = true }: MissionReportS
         return { success: false, message: msg };
       }
 
+      // Guard: a mission_id must be loaded before start is valid.
+      if (!verifiedCtx.missionId) {
+        const msg = 'No mission loaded — upload a mission first.';
+        showNotification('error', 'Not Ready', msg);
+        return { success: false, message: msg };
+      }
+
       // Clear previous mission data to start fresh
       clearCurrentMissionData();
+      resetVerifiedProgress();
 
-      // Call explicit start endpoint (mission will start with current mode selected by user)
-      const response = await services.startMission();
+      // Call explicit start endpoint by mission_id.
+      const response = await startVerifiedMission(verifiedCtx.missionId);
 
-      // Log full response for debugging when start fails
-      if (!response || response.success !== true) {
+      // Determine success from the REAL backend shape. The verified start
+      // endpoint returns { state, message } on HTTP 200 (no `success` field);
+      // HTTP failures (404/409/422/503) are thrown by apiClient and handled in
+      // the catch below. So a resolved response with a non-error MissionState is
+      // success — never treat a `{ state: "running" }` response as failure just
+      // because `success` is absent.
+      const startState = typeof response?.state === 'string'
+        ? response.state.toLowerCase()
+        : undefined;
+      const startAccepted =
+        !!response &&
+        response.success !== false &&
+        (response.success === true ||
+          (startState !== undefined &&
+            startState !== 'error' &&
+            startState !== 'idle' &&
+            startState !== 'aborted'));
+
+      if (!startAccepted) {
         console.error('[MissionReportScreen] Start failed - backend response:', response);
         const message = response?.message ?? (response ? JSON.stringify(response) : 'Unknown error');
         showNotification('error', 'Start Failed', message);
-        return response;
+        return { success: false, message };
       }
 
-      // Success
+      // Success — isMissionActive is driven by telemetry / terminal events, not set here.
       setCurrentIndex(0);
-      setIsMissionActive(true); // Mark mission as active immediately after successful start
       console.log('[MissionReportScreen] Mission started (backend acknowledged)');
       showNotification('success', 'Mission Started', 'Mission controller started successfully!');
       return response;
@@ -1078,6 +1170,19 @@ export default function MissionReportScreen({ isVisible = true }: MissionReportS
         console.error('[MissionReportScreen] Stop Error:', error);
         showNotification('error', 'Error', 'Failed to stop mission');
       }
+    }
+  };
+
+  const handleClearMission = async () => {
+    try {
+      console.log('[MissionReportScreen] Clearing verified mission...');
+      await clearVerifiedMission();
+      verifiedCtx.clearLoadedMission();
+      resetVerifiedProgress();
+      showNotification('success', 'Cleared', 'Mission cleared from controller');
+    } catch (err) {
+      console.error('[MissionReportScreen] Clear mission error:', err);
+      showNotification('error', 'Clear Failed', String(err));
     }
   };
 

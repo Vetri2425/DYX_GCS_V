@@ -6,6 +6,7 @@
 
 import type { PointMissionEvent } from '../types/px4/mission';
 import type { Waypoint } from '../components/missionreport/types';
+import type { WaypointUiStatus } from '../types/missionWaypointStatus';
 import {
   toStatusEntry,
   type WaypointStatusEntry,
@@ -15,17 +16,7 @@ import {
 export type LegacyWpStatus = {
   reached?: boolean;
   marked?: boolean;
-  status?:
-    | 'completed'
-    | 'loading'
-    | 'skipped'
-    | 'reached'
-    | 'marked'
-    | 'pending'
-    | 'spray_on'
-    | 'spray_off'
-    | 'passed'
-    | 'mission_end';
+  status?: WaypointUiStatus;
   timestamp?: string;
   pile?: string | number;
   rowNo?: string | number;
@@ -49,6 +40,10 @@ const STATUS_PRIORITY: Record<string, number> = {
   completed: 4,
   skipped: 4,
   mission_end: 4,
+  // 4-wheel distinct terminal statuses
+  failed: 4,
+  aborted: 4,
+  stopped: 4,
 };
 
 const ADAPTER_TO_UI: Record<WaypointStatusKey, LegacyWpStatus['status']> = {
