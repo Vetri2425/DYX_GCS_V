@@ -1,6 +1,6 @@
 // Mapbox GL JS configuration
-// Replace MAPBOX_ACCESS_TOKEN with your real token from https://account.mapbox.com
-export const MAPBOX_ACCESS_TOKEN = '***MAPBOX_TOKEN_REMOVED***';
+// Set EXPO_PUBLIC_MAPBOX_ACCESS_TOKEN in your .env file — get a token from https://account.mapbox.com
+export const MAPBOX_ACCESS_TOKEN = process.env.EXPO_PUBLIC_MAPBOX_ACCESS_TOKEN || '';
 
 export const MAPBOX_VERSION = '3.6.0';
 
