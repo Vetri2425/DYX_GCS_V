@@ -2,7 +2,7 @@ import React, { useState, useRef, useMemo, useEffect } from 'react';
 import { View, StyleSheet, TouchableOpacity, Text, Alert, PanResponder, Animated } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { WebView } from 'react-native-webview';
-import { Fontisto, MaterialCommunityIcons } from '@expo/vector-icons';
+import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { colors } from '../../theme/colors';
 import { PathPlanWaypoint, DrawingMode } from '../../types/pathplan';
 import { MAPBOX_JS_URL, MAPBOX_CSS_URL, MAPBOX_ACCESS_TOKEN, MAPBOX_STYLE_SATELLITE, MAPBOX_STYLE_DARK } from '../../config/mapboxConfig';
@@ -208,11 +208,8 @@ export const PathPlanMap: React.FC<Props> = ({
       will-change: transform, opacity;
     }
 
-    /* Marker GPU acceleration */
     .custom-marker {
-      will-change: transform;
-      transform: translateZ(0);
-      backface-visibility: hidden;
+      cursor: pointer;
     }
   </style>
 </head>
@@ -252,18 +249,15 @@ export const PathPlanMap: React.FC<Props> = ({
     function getWaypointElement(wp, index) {
       const fill = wp.isSelected ? '#3B82F6' : (wp.isStart ? '#16a34a' : '#f97316');
       const size = wp.isSelected ? 48 : 36;
-      const pulseClass = wp.isSelected ? 'wp-selected-pulse' : '';
-      const svgHtml = \`<div class="\${pulseClass}" style="display:inline-block;">
-        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="\${size}" height="\${size}" fill="\${fill}">
-          <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7z" style="stroke:rgba(0,0,0,0.3);stroke-width:0.5;"/>
-          <text x="12" y="10.5" font-family="sans-serif" font-size="12" font-weight="bold" fill="white" text-anchor="middle" dy=".3em">\${index + 1}</text>
-        </svg>
-      </div>\`;
+      const svgIcon = \`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="\${size}" height="\${size}" fill="\${fill}" style="display:block;">
+        <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7z" style="stroke:rgba(0,0,0,0.3);stroke-width:0.5;"/>
+        <text x="12" y="10.5" font-family="sans-serif" font-size="12" font-weight="bold" fill="white" text-anchor="middle" dy=".3em">\${index + 1}</text>
+      </svg>\`;
+      const svgHtml = wp.isSelected ? \`<div class="wp-selected-pulse" style="display:inline-block;">\${svgIcon}</div>\` : svgIcon;
       const el = document.createElement('div');
       el.innerHTML = svgHtml;
       el.style.width = size + 'px';
       el.style.height = size + 'px';
-      el.style.marginLeft = (-size / 2) + 'px';
       el.className = 'custom-marker';
       el.style.cursor = 'pointer';
       return el;
@@ -272,7 +266,12 @@ export const PathPlanMap: React.FC<Props> = ({
     function createMarker(wp, index) {
       const canDrag = window.isPointToolActive && !window.isManualConnectionMode;
       const el = getWaypointElement(wp, index);
-      const marker = new mapboxgl.Marker({ element: el, anchor: 'bottom', draggable: canDrag })
+      const size = wp.isSelected ? 48 : 36;
+      // Anchor the visual pin TIP (teardrop point sits at viewBox y=22/24, i.e.
+      // size*2/24 above the box bottom) onto the geo coord, so it lands exactly
+      // on the line vertex. offset is from the element's top-left (anchor).
+      // Measured delta confirmed box-bottom anchoring left the tip 3px high @ size 36.
+      const marker = new mapboxgl.Marker({ element: el, anchor: 'top-left', offset: [-size / 2, -size * 22 / 24], draggable: canDrag })
         .setLngLat([wp.lon, wp.lat])
         .addTo(map);
 
@@ -376,7 +375,6 @@ export const PathPlanMap: React.FC<Props> = ({
       const currentZoom = map.getZoom();
       const zoomScale = Math.max(0.3, Math.min(1.2, (currentZoom - 10) / 12));
       const size = Math.round(84 * zoomScale);
-      const half = Math.round(size / 2);
       const rotation = roverData.heading !== null ? roverData.heading : 0;
 
       const roverIconSVG = \`
@@ -406,7 +404,7 @@ export const PathPlanMap: React.FC<Props> = ({
       \`;
 
       const roverEl = document.createElement('div');
-      roverEl.style.cssText = \`width:\${size}px;height:\${size}px;margin-left:\${-half}px;margin-top:\${-half}px;\`;
+      roverEl.style.cssText = \`width:\${size}px;height:\${size}px;\`;
       roverEl.innerHTML = roverIconSVG;
       roverMarker = new mapboxgl.Marker({ element: roverEl, anchor: 'center' })
         .setLngLat([roverData.lon, roverData.lat])
@@ -878,7 +876,6 @@ export const PathPlanMap: React.FC<Props> = ({
             const currentZoom = map.getZoom();
             const zoomScale = Math.max(0.3, Math.min(1.2, (currentZoom - 10) / 12));
             const size = Math.round(84 * zoomScale);
-            const half = Math.round(size / 2);
             const rotation = ${heading || 0};
             const roverIconSVG = \`
               <svg width="\${size}" height="\${size}" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg" style="transform: rotate(\${rotation}deg); will-change: transform;">
@@ -888,7 +885,7 @@ export const PathPlanMap: React.FC<Props> = ({
               </svg>
             \`;
             const roverEl = document.createElement('div');
-            roverEl.style.cssText = \`width:\${size}px;height:\${size}px;margin-left:\${-half}px;margin-top:\${-half}px;\`;
+            roverEl.style.cssText = \`width:\${size}px;height:\${size}px;\`;
             roverEl.innerHTML = roverIconSVG;
             roverMarker = new mapboxgl.Marker({ element: roverEl, anchor: 'center' })
               .setLngLat([${roverPosition.lon}, ${roverPosition.lat}])
@@ -1066,7 +1063,7 @@ export const PathPlanMap: React.FC<Props> = ({
                 window.dragConnectionState.tempLine.remove();
               }
               const el = document.createElement('div');
-              el.style.cssText = 'width:24px;height:24px;margin-left:-12px;margin-top:-12px;border-radius:50%;background:rgba(96,165,250,0.5);border:2px solid #60A5FA;';
+              el.style.cssText = 'width:24px;height:24px;border-radius:50%;background:rgba(96,165,250,0.5);border:2px solid #60A5FA;';
               window.dragConnectionState.tempLine = new mapboxgl.Marker({ element:el, anchor:'center' })
                 .setLngLat([latlng.lng, latlng.lat]).addTo(map);
             }
@@ -1217,7 +1214,6 @@ export const PathPlanMap: React.FC<Props> = ({
               el.innerHTML = svgIcon;
               el.style.width = size + 'px';
               el.style.height = size + 'px';
-              el.style.marginLeft = (-size / 2) + 'px';
             }
           }
         }
@@ -1231,7 +1227,6 @@ export const PathPlanMap: React.FC<Props> = ({
               el.innerHTML = svgIcon;
               el.style.width = size + 'px';
               el.style.height = size + 'px';
-              el.style.marginLeft = (-size / 2) + 'px';
             }
           }
         }
@@ -1391,7 +1386,7 @@ export const PathPlanMap: React.FC<Props> = ({
 
         points.forEach(function(pt) {
           const el = document.createElement('div');
-          el.style.cssText = 'border:3px solid #f59e0b;border-radius:50%;width:30px;height:30px;box-shadow:0 0 8px rgba(245,158,11,0.8);background:rgba(245,158,11,0.15);margin-left:-15px;margin-top:-15px;pointer-events:none;';
+          el.style.cssText = 'border:3px solid #f59e0b;border-radius:50%;width:30px;height:30px;box-shadow:0 0 8px rgba(245,158,11,0.8);background:rgba(245,158,11,0.15);pointer-events:none;';
           const marker = new mapboxgl.Marker({ element:el, anchor:'center' }).setLngLat([pt.lon, pt.lat]).addTo(map);
           window.measureMarkers.push(marker);
         });
@@ -1425,38 +1420,6 @@ export const PathPlanMap: React.FC<Props> = ({
     saveMeasurePosition();
   }, [measureOverlayPos]);
 
-  const enableDragOnMarker = (id: number, index: number) => {
-    if (!webViewRef.current) return;
-    const script = `
-      (function() {
-        if (window._activeDragId !== null && markerRegistry.has(window._activeDragId)) {
-          markerRegistry.get(window._activeDragId).setDraggable(false);
-        }
-        var marker = markerRegistry.get(${id});
-        if (marker) {
-          marker.setDraggable(true);
-          window._activeDragId = ${id};
-          marker.on('dragend', function(e) {
-            clearDragPreview();
-            window.clearOrthoGuide();
-            var ll = marker.getLngLat();
-            window.ReactNativeWebView.postMessage(JSON.stringify({
-              type: 'waypointDragged',
-              id: ${id},
-              index: ${index},
-              lat: ll.lat,
-              lon: ll.lng
-            }));
-            marker.setDraggable(false);
-            window._activeDragId = null;
-          });
-        }
-      })();
-      true;
-    `;
-    webViewRef.current.injectJavaScript(script);
-  };
-
   return (
     <View style={styles.container}>
       <WebView
@@ -1478,18 +1441,18 @@ export const PathPlanMap: React.FC<Props> = ({
                 onMeasureWaypointSelect?.(message.id);
               } else {
                 onWaypointClick?.(message.id);
-                if (!isManualConnectionMode) {
-                  const idx = waypoints.findIndex(w => w.id === message.id);
-                  if (idx !== -1) enableDragOnMarker(message.id, idx);
-                }
+                // Drag is governed solely by the Points-tool effect (see the
+                // window.isPointToolActive effect): markers are draggable only
+                // while the Points tool is active. We deliberately do NOT enable
+                // drag on click, which previously let a marker be dragged with
+                // the tool off — the marker moved natively but handleWaypointDrag
+                // rejected the update, leaving the connecting line stale.
               }
               setContextMenu(null);
             } else if (message.type === 'waypointConnect') {
               onWaypointConnect?.(message.fromId, message.toId);
             } else if (message.type === 'waypointDrag') {
               onWaypointDrag?.(message.id, { latitude: message.lat, longitude: message.lng });
-            } else if (message.type === 'waypointDragged') {
-              onWaypointDrag?.(message.id, { latitude: message.lat, longitude: message.lon });
             } else if (message.type === 'waypointContextMenu') {
               if (activeDrawingTool === 'measure') return;
               if (!isManualConnectionMode || manualConnectionMode === 'pan') {
@@ -1696,16 +1659,16 @@ export const PathPlanMap: React.FC<Props> = ({
         </View>
       )}
 
-      {/* Sleek Rotating Compass Overlay */}
+      {/* Sleek Rotating Compass Overlay — fixed N, rotating heading needle */}
       <View style={styles.compassOverlay}>
-        <View style={[
-          styles.headingArrow,
-          { transform: [{ rotate: `${heading ?? 0}deg` }] }
-        ]} />
-        <View style={{ transform: [{ rotate: `${-(heading ?? 0)}deg` }] }}>
-          <Fontisto name="compass" color="#67e8f9" size={18} />
-        </View>
         <Text style={styles.compassN}>N</Text>
+        <View style={[
+          styles.headingNeedle,
+          { transform: [{ rotate: `${heading ?? 0}deg` }] }
+        ]}>
+          <MaterialCommunityIcons name="navigation" size={26} color="#67E8F9" />
+        </View>
+        <View style={styles.compassPivot} />
       </View>
 
       {contextMenu && (
@@ -1878,26 +1841,28 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.35,
     shadowRadius: 6,
   },
-  headingArrow: {
-    position: 'absolute',
-    top: 2,
-    width: 0,
-    height: 0,
-    borderLeftWidth: 4,
-    borderRightWidth: 4,
-    borderBottomWidth: 8,
-    borderLeftColor: 'transparent',
-    borderRightColor: 'transparent',
-    borderBottomColor: '#EF4444',
-    zIndex: 1,
+  headingNeedle: {
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   compassN: {
     position: 'absolute',
-    top: 0,
-    fontSize: 7,
+    top: 4,
+    fontSize: 9,
     fontWeight: '900',
-    color: '#67e8f9',
+    color: '#E5F1FF',
+    letterSpacing: 0.5,
     zIndex: 2,
+  },
+  compassPivot: {
+    position: 'absolute',
+    width: 4,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: '#0a1420',
+    borderWidth: 1,
+    borderColor: '#67E8F9',
+    zIndex: 3,
   },
   measureOverlay: {
     position: 'absolute',
