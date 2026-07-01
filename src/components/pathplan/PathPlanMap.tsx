@@ -5,7 +5,7 @@ import { WebView } from 'react-native-webview';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { colors } from '../../theme/colors';
 import { PathPlanWaypoint, DrawingMode } from '../../types/pathplan';
-import { MAPBOX_JS_URL, MAPBOX_CSS_URL, MAPBOX_ACCESS_TOKEN, MAPBOX_STYLE_SATELLITE, MAPBOX_STYLE_DARK } from '../../config/mapboxConfig';
+import { MAPBOX_JS_URL, MAPBOX_CSS_URL, MAPBOX_ACCESS_TOKEN, MAPBOX_STYLE_SATELLITE, MAPBOX_STYLE_STREETS, MAPBOX_STYLE_DARK } from '../../config/mapboxConfig';
 
 interface Props {
   waypoints: PathPlanWaypoint[];
@@ -119,7 +119,7 @@ export const PathPlanMap: React.FC<Props> = ({
 }) => {
   const webViewRef = useRef<WebView | null>(null);
   const [mapReady, setMapReady] = useState(false);
-  const [mapStyle, setMapStyle] = useState<'satellite' | 'dark'>('satellite');
+  const [mapStyle, setMapStyle] = useState<'satellite' | 'streets' | 'dark'>('satellite');
   const lastUpdateRef = useRef<number>(0);
   const UPDATE_THROTTLE_MS = 100;
 
@@ -574,7 +574,9 @@ export const PathPlanMap: React.FC<Props> = ({
     window.fitToMission = fitToMission;
 
     function setMapStyle(styleName) {
-      const styleUrl = styleName === 'dark' ? '${MAPBOX_STYLE_DARK}' : '${MAPBOX_STYLE_SATELLITE}';
+      const styleUrl = styleName === 'dark'
+        ? '${MAPBOX_STYLE_DARK}'
+        : (styleName === 'streets' ? '${MAPBOX_STYLE_STREETS}' : '${MAPBOX_STYLE_SATELLITE}');
       map.setStyle(styleUrl);
     }
     window.setMapStyle = setMapStyle;
@@ -1500,14 +1502,16 @@ export const PathPlanMap: React.FC<Props> = ({
         <TouchableOpacity 
           style={styles.bottomControlBtn} 
           onPress={() => {
-            const newStyle = mapStyle === 'satellite' ? 'dark' : 'satellite';
+            // Cycle: satellite (default) → streets → dark → satellite
+            const order: Array<'satellite' | 'streets' | 'dark'> = ['satellite', 'streets', 'dark'];
+            const newStyle = order[(order.indexOf(mapStyle) + 1) % order.length];
             setMapStyle(newStyle);
             webViewRef.current?.injectJavaScript(`window.setMapStyle('${newStyle}'); true;`);
           }}
           activeOpacity={0.7}
         >
           <MaterialCommunityIcons
-            name={mapStyle === 'satellite' ? "image-filter-hdr" : "earth"}
+            name={mapStyle === 'satellite' ? "image-filter-hdr" : mapStyle === 'streets' ? "road-variant" : "earth"}
             size={18}
             color="#E5F1FF"
           />
