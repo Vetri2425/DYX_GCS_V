@@ -4,6 +4,7 @@ import DashboardScreen from '../screens/DashboardScreen';
 import PathPlanScreen from '../screens/PathPlanScreen';
 import MissionReportScreen from '../screens/MissionReportScreen';
 import { AppHeader } from '../components/shared/AppHeader';
+import { MissionProgressOverlayProvider } from '../context/MissionProgressOverlayContext';
 import { ErrorBoundary } from '../components/shared/ErrorBoundary';
 import { colors } from '../theme/colors';
 import PersistentStorage from '../services/PersistentStorage';
@@ -93,6 +94,7 @@ export default function TabNavigator() {
   const isMissionProgressVisible = activeTab === 'Mission Progress';
 
   return (
+    <MissionProgressOverlayProvider>
     <View style={{ flex: 1, backgroundColor: colors.primary }}>
       {/* Custom Header with Integrated Tabs */}
       <AppHeader
@@ -133,5 +135,6 @@ export default function TabNavigator() {
         </View>
       )}
     </View>
+    </MissionProgressOverlayProvider>
   );
 }

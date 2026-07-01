@@ -38,26 +38,30 @@ export const RobotPositionPanel: React.FC<Props> = ({ roverPosition, heading, dr
                 </View>
             </GestureDetector>
 
-            {/* Single compact strip — Lat / Lon / Alt / Heading */}
-            <View style={styles.statsRow}>
-                <View style={styles.statItem}>
-                    <Text style={styles.statLabel}>LAT</Text>
-                    <Text style={styles.statValue} numberOfLines={1}>{latStr}</Text>
+            {/* Two rows — Lat/Lon, Alt/Heading */}
+            <View style={styles.statsContainer}>
+                <View style={styles.statsRow}>
+                    <View style={styles.statItem}>
+                        <Text style={styles.statLabel}>LAT</Text>
+                        <Text style={styles.statValue} numberOfLines={1}>{latStr}</Text>
+                    </View>
+                    <View style={styles.statDivider} />
+                    <View style={styles.statItem}>
+                        <Text style={styles.statLabel}>LON</Text>
+                        <Text style={styles.statValue} numberOfLines={1}>{lonStr}</Text>
+                    </View>
                 </View>
-                <View style={styles.statDivider} />
-                <View style={styles.statItem}>
-                    <Text style={styles.statLabel}>LON</Text>
-                    <Text style={styles.statValue} numberOfLines={1}>{lonStr}</Text>
-                </View>
-                <View style={styles.statDivider} />
-                <View style={styles.statItem}>
-                    <Text style={styles.statLabel}>ALT</Text>
-                    <Text style={styles.statValue} numberOfLines={1}>{altStr}</Text>
-                </View>
-                <View style={styles.statDivider} />
-                <View style={styles.statItem}>
-                    <Text style={styles.statLabel}>HDG</Text>
-                    <Text style={styles.statValue} numberOfLines={1}>{headingStr}</Text>
+                <View style={styles.rowDivider} />
+                <View style={styles.statsRow}>
+                    <View style={styles.statItem}>
+                        <Text style={styles.statLabel}>ALT</Text>
+                        <Text style={styles.statValue} numberOfLines={1}>{altStr}</Text>
+                    </View>
+                    <View style={styles.statDivider} />
+                    <View style={styles.statItem}>
+                        <Text style={styles.statLabel}>HDG</Text>
+                        <Text style={styles.statValue} numberOfLines={1}>{headingStr}</Text>
+                    </View>
                 </View>
             </View>
         </View>
@@ -105,15 +109,22 @@ const styles = StyleSheet.create({
         justifyContent: 'center',
         alignItems: 'center',
     },
-    statsRow: {
-        flexDirection: 'row',
-        alignItems: 'center',
+    statsContainer: {
         backgroundColor: '#08101a',
         borderRadius: 8,
         borderWidth: 1,
         borderColor: 'rgba(103, 232, 249, 0.1)',
-        paddingVertical: 6,
+        overflow: 'hidden',
+    },
+    statsRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        paddingVertical: 8,
         paddingHorizontal: 8,
+    },
+    rowDivider: {
+        height: 1,
+        backgroundColor: 'rgba(103, 232, 249, 0.1)',
     },
     statItem: {
         flex: 1,

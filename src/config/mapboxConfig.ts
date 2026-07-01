@@ -6,6 +6,7 @@ export const MAPBOX_VERSION = '3.6.0';
 
 // Map styles
 export const MAPBOX_STYLE_SATELLITE = 'mapbox://styles/mapbox/satellite-streets-v12';
+export const MAPBOX_STYLE_STREETS   = 'mapbox://styles/mapbox/streets-v12';
 export const MAPBOX_STYLE_DARK      = 'mapbox://styles/mapbox/dark-v11';
 
 // CDN URLs — loaded inside WebView HTML, no bundling needed

@@ -25,8 +25,6 @@ export interface UploadState {
   pathAssignmentMode: 'auto' | 'manual';
   manualPathConnections: number[];
   isConnectingPath: boolean;
-  showConnectionChoice: boolean;
-  useMapForConnection: boolean;
   showReverseDialog: boolean;
 }
 
@@ -42,8 +40,6 @@ const initialUploadState: UploadState = {
   pathAssignmentMode: 'auto',
   manualPathConnections: [],
   isConnectingPath: false,
-  showConnectionChoice: false,
-  useMapForConnection: false,
   showReverseDialog: false,
 };
 
@@ -60,8 +56,6 @@ export type UploadAction =
   | { type: 'SET_PATH_MODE'; mode: 'auto' | 'manual' }
   | { type: 'SET_MANUAL_CONNECTIONS'; indices: number[] }
   | { type: 'SET_CONNECTING_PATH'; connecting: boolean }
-  | { type: 'SET_SHOW_CONNECTION_CHOICE'; visible: boolean }
-  | { type: 'SET_USE_MAP_CONNECTION'; useMap: boolean }
   | { type: 'SET_SHOW_REVERSE_DIALOG'; visible: boolean }
   | { type: 'RESET_UPLOAD' };
 
@@ -102,12 +96,6 @@ function uploadReducer(state: UploadState, action: UploadAction): UploadState {
 
     case 'SET_CONNECTING_PATH':
       return { ...state, isConnectingPath: action.connecting };
-
-    case 'SET_SHOW_CONNECTION_CHOICE':
-      return { ...state, showConnectionChoice: action.visible };
-
-    case 'SET_USE_MAP_CONNECTION':
-      return { ...state, useMapForConnection: action.useMap };
 
     case 'SET_SHOW_REVERSE_DIALOG':
       return { ...state, showReverseDialog: action.visible };

@@ -1,7 +1,9 @@
 import React from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Modal, ActivityIndicator, TextInput, Image } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
+import { GestureDetector } from 'react-native-gesture-handler';
+import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { colors } from '../../theme/colors';
+import { PATH_PLAN_GLASS, PATH_PLAN_HEADER } from '../../constants/pathPlanGlass';
 import { useRover } from '../../context/RoverContext';
 import { Waypoint } from './types';
 import { Toast } from '../shared/Toast';
@@ -28,6 +30,9 @@ export type MissionControlCardProps = {
   waitingForManual?: boolean; // MANUAL mode: mission paused, user must press NEXT to continue
   /** True when a verified mission has been uploaded and confirmed by the server. */
   isMissionLoaded?: boolean;
+  dragGesture?: any;
+  isDraggingActive?: boolean;
+  onClose?: () => void;
 };
 
 const MissionControlCard: React.FC<MissionControlCardProps> = ({
@@ -45,6 +50,9 @@ const MissionControlCard: React.FC<MissionControlCardProps> = ({
   missionMode = 'DGPS Mark',
   waitingForManual = false,
   isMissionLoaded = false,
+  dragGesture,
+  isDraggingActive,
+  onClose,
 }) => {
   const { services, telemetry } = useRover();
   const [isLoadingMission, setIsLoadingMission] = React.useState(false);
@@ -273,6 +281,23 @@ const MissionControlCard: React.FC<MissionControlCardProps> = ({
 
   return (
     <View style={styles.container}>
+      <GestureDetector gesture={dragGesture}>
+        <View style={[styles.panelHeader, isDraggingActive && styles.panelHeaderDragging]}>
+          <View style={styles.panelHeaderLeft}>
+            <View style={styles.panelHeaderIconWrap}>
+              <Ionicons name="rocket" size={14} color={PATH_PLAN_GLASS.cyan} />
+            </View>
+            <Text style={styles.panelHeaderTitle}>MISSION CONTROLS</Text>
+          </View>
+          <View style={styles.panelHeaderRight}>
+            {onClose && (
+              <TouchableOpacity style={styles.panelHeaderCloseBtn} onPress={onClose} activeOpacity={0.7}>
+                <MaterialCommunityIcons name="close" size={14} color="#94A3B8" />
+              </TouchableOpacity>
+            )}
+          </View>
+        </View>
+      </GestureDetector>
       <View style={styles.cardPadding}>
         {/* Control Buttons */}
         <View style={styles.buttonsContainer}>
@@ -734,13 +759,42 @@ const MissionControlCard: React.FC<MissionControlCardProps> = ({
 
 const styles = StyleSheet.create({
   container: {
-    backgroundColor: colors.panelBg,
-    borderRadius: 12,
+    backgroundColor: PATH_PLAN_GLASS.panelBg,
+    borderRadius: PATH_PLAN_GLASS.borderRadius,
     borderWidth: 1,
-    borderColor: colors.border,
+    borderColor: PATH_PLAN_GLASS.border,
+    overflow: 'hidden',
   },
+  panelHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingTop: 10,
+    paddingBottom: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: PATH_PLAN_GLASS.borderSubtle,
+  },
+  panelHeaderDragging: {
+    borderBottomColor: PATH_PLAN_GLASS.dragBorder,
+    backgroundColor: PATH_PLAN_GLASS.dragBg,
+  },
+  panelHeaderLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  panelHeaderRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  panelHeaderCloseBtn: PATH_PLAN_HEADER.closeBtn,
+  panelHeaderIconWrap: PATH_PLAN_HEADER.iconWrap,
+  panelHeaderTitle: PATH_PLAN_HEADER.title,
   cardPadding: {
-    padding: 10,
+    padding: 16,
+    gap: 14,
   },
   emergencyButton: {
     backgroundColor: '#DC2626',

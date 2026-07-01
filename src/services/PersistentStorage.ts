@@ -561,9 +561,19 @@ class PersistentStorageService {
     isActive: boolean;
     mode: string | null;
     uiState: {
-      isMapFullscreen?: boolean;
       currentIndex?: number | null;
       mode?: 'AUTO' | 'MANUAL' | 'CONTINUOUS' | 'DASH';
+      isRobotStatusVisible?: boolean;
+      isMissionProgressVisible?: boolean;
+      isDistanceToTargetVisible?: boolean;
+      isSystemStatusVisible?: boolean;
+      isMissionControlsVisible?: boolean;
+      isBottomTableVisible?: boolean;
+      isBottomTableExpanded?: boolean;
+      /** @deprecated legacy — migrated to split panels on load */
+      isLeftPanelVisible?: boolean;
+      /** @deprecated legacy — migrated to split panels on load */
+      isRightPanelVisible?: boolean;
     } | null;
   } | null> {
     try {
@@ -591,9 +601,12 @@ class PersistentStorageService {
         isActive: false,
         mode: null as string | null,
         uiState: null as {
-          isMapFullscreen?: boolean;
           currentIndex?: number | null;
           mode?: 'AUTO' | 'MANUAL' | 'CONTINUOUS' | 'DASH';
+          isLeftPanelVisible?: boolean;
+          isRightPanelVisible?: boolean;
+          isBottomTableVisible?: boolean;
+          isBottomTableExpanded?: boolean;
         } | null,
       };
 
@@ -903,9 +916,19 @@ class PersistentStorageService {
    * Save Mission Report screen UI state
    */
   async saveMissionReportUIState(state: {
-    isMapFullscreen?: boolean;
     currentIndex?: number | null;
     mode?: 'AUTO' | 'MANUAL' | 'CONTINUOUS' | 'DASH';
+    isRobotStatusVisible?: boolean;
+    isMissionProgressVisible?: boolean;
+    isDistanceToTargetVisible?: boolean;
+    isSystemStatusVisible?: boolean;
+    isMissionControlsVisible?: boolean;
+    isBottomTableVisible?: boolean;
+    isBottomTableExpanded?: boolean;
+    /** @deprecated legacy — migrated to split panels on load */
+    isLeftPanelVisible?: boolean;
+    /** @deprecated legacy — migrated to split panels on load */
+    isRightPanelVisible?: boolean;
   }): Promise<boolean> {
     this.invalidateMissionReportCache();
     try {
@@ -922,9 +945,19 @@ class PersistentStorageService {
    * Load Mission Report screen UI state
    */
   async loadMissionReportUIState(): Promise<{
-    isMapFullscreen?: boolean;
     currentIndex?: number | null;
     mode?: 'AUTO' | 'MANUAL' | 'CONTINUOUS' | 'DASH';
+    isRobotStatusVisible?: boolean;
+    isMissionProgressVisible?: boolean;
+    isDistanceToTargetVisible?: boolean;
+    isSystemStatusVisible?: boolean;
+    isMissionControlsVisible?: boolean;
+    isBottomTableVisible?: boolean;
+    isBottomTableExpanded?: boolean;
+    /** @deprecated legacy — migrated to split panels on load */
+    isLeftPanelVisible?: boolean;
+    /** @deprecated legacy — migrated to split panels on load */
+    isRightPanelVisible?: boolean;
   } | null> {
     try {
       const data = await AsyncStorage.getItem(STORAGE_KEYS.MISSION_REPORT_UI_STATE);

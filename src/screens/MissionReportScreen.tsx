@@ -1,13 +1,29 @@
-import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
-import { TouchableOpacity } from 'react-native';
-import { View, StyleSheet, ScrollView, SafeAreaView, StatusBar, Text, Alert } from 'react-native';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
+import { TouchableOpacity, View, StyleSheet, StatusBar, Text, Alert } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { colors } from '../theme/colors';
 import { Toast } from '../components/shared/Toast';
 import { VehicleStatusCard } from '../components/missionreport/VehicleStatusCard';
 import { MissionProgressCard } from '../components/missionreport/MissionProgressCard';
+import { DistanceToTargetCard } from '../components/missionreport/DistanceToTargetCard';
 import { SystemStatusPanel } from '../components/missionreport/SystemStatusPanel';
+import { QuickNtripStartCard } from '../components/missionreport/QuickNtripStartCard';
+import { ManualDrivePanel } from '../components/manual/ManualDrivePanel';
+import MissionControlCard from '../components/missionreport/MissionControlCard';
 import { WaypointsTable } from '../components/missionreport/WaypointsTable';
 import { MissionMap } from '../components/missionreport/MissionMap';
+import { DraggableCard } from '../components/shared/DraggableCard';
+import { MissionTableHeader } from '../components/missionreport/MissionTableHeader';
+import { MissionTableToolbarActions } from '../components/missionreport/MissionTableToolbarActions';
+import {
+  useMissionProgressOverlay,
+  migrateLegacyPanelVisibility,
+} from '../context/MissionProgressOverlayContext';
+import {
+  MISSION_PROGRESS_LAYOUT,
+  getMissionProgressBottomTableInsets,
+} from '../constants/missionProgressLayout';
+import { PATH_PLAN_GLASS } from '../constants/pathPlanGlass';
 import { Mode, VehicleStatus, Waypoint } from '../components/missionreport/types';
 import { RTKInjectionScreen } from '../components/missionreport/RTKInjectionScreen';
 import { useTelemetry } from '../context/TelemetryContext';
@@ -19,6 +35,10 @@ import { MissionCompletionDialog } from '../components/missionreport/MissionComp
 import { LogClearDialog } from '../components/missionreport/LogClearDialog';
 import { useScreenReadiness } from '../hooks/useComponentReadiness';
 import PersistentStorage from '../services/PersistentStorage';
+import { getAllProfiles } from '../services/ntripProfileStorage';
+import { getRtkStatus, startNtripStream, stopAllRtk } from '../services/rtkService';
+import { armVehicle, setManualMode } from '../services/vehicleControlService';
+import type { NTRIPProfile } from '../types/ntrip';
 // NOTE: calculateAccuracy and formatAccuracyDisplay commented out - now using backend wp_dist_cm
 // import { calculateAccuracy, formatAccuracyDisplay } from '../utils/accuracyCalculation';
 import { getAccuracyLevel } from '../utils/accuracyCalculation';
@@ -36,15 +56,6 @@ import { useVerifiedMissionProgress } from '../hooks/useVerifiedMissionProgress'
 import { verifiedProgressToLegacy } from '../adapters/verifiedTargetBridge';
 import { startVerifiedMission, clearVerifiedMission } from '../services/verifiedMissionService';
 
-// Layout constants — change these to adjust the overall layout quickly
-const LEFT_PANEL_WIDTH = '21%';
-const RIGHT_PANEL_WIDTH = '23%';
-const TOP_ROW_FLEX = 0.7; // fraction for top (columns) vs bottom table
-const BOTTOM_ROW_FLEX = 0.29;
-const COLUMN_GAP = 5; // horizontal gap between columns
-const PANEL_PADDING_H = 3; // horizontal padding for left/right panels
-const PANEL_PADDING_V = 8; // vertical padding for left/right panels
-
 // Status map type matching web application
 type WpStatus = {
   reached?: boolean;
@@ -61,6 +72,25 @@ type WpStatus = {
   lon_achieved?: number;   // Actual rover lon when reached
   accuracy_level?: string; // 'excellent' | 'good' | 'fair' | 'poor'
   position_error_cm?: number; // Distance error in cm (was position_error_mm)
+};
+
+const getRtkFailureMessage = (err: unknown, fallback: string) => {
+  if (err instanceof Error) {
+    const responseBody = 'responseBody' in err ? String((err as { responseBody?: unknown }).responseBody ?? '') : '';
+    if (responseBody) {
+      try {
+        const parsed = JSON.parse(responseBody);
+        const detail = parsed?.detail;
+        if (typeof detail === 'string') {
+          return `${err.message}: ${detail}`;
+        }
+      } catch {
+        return `${err.message}: ${responseBody}`;
+      }
+    }
+    return err.message;
+  }
+  return fallback;
 };
 
 interface MissionReportScreenProps {
@@ -187,16 +217,30 @@ export default function MissionReportScreen({ isVisible = true }: MissionReportS
   const [undoPrompt, setUndoPrompt] = useState<{ visible: boolean; id?: string | null }>({ visible: false, id: null });
   const undoTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Full screen map state
-  const [isMapFullscreen, setIsMapFullscreen] = useState(false);
+  const [isBottomTableExpanded, setIsBottomTableExpanded] = useState(false);
+  const [robotPanelHeight, setRobotPanelHeight] = useState(0);
+  const [missionProgressPanelHeight, setMissionProgressPanelHeight] = useState(0);
+  const [systemPanelHeight, setSystemPanelHeight] = useState(0);
+  const {
+    panelVisibility,
+    setPanelVisibility,
+    setPanelVisible,
+  } = useMissionProgressOverlay();
+  const {
+    robotStatus: isRobotStatusVisible,
+    missionProgress: isMissionProgressVisible,
+    distanceToTarget: isDistanceToTargetVisible,
+    systemStatus: isSystemStatusVisible,
+    missionControls: isMissionControlsVisible,
+    bottom: isBottomTableVisible,
+  } = panelVisibility;
 
   // RTK Injection overlay
   const [showRTKInjection, setShowRTKInjection] = useState(false);
-
-  // Toggle full screen map mode
-  const toggleMapFullscreen = useCallback(() => {
-    setIsMapFullscreen(prev => !prev);
-  }, []);
+  const [isQuickNtripStarting, setIsQuickNtripStarting] = useState(false);
+  const [isQuickNtripConnected, setIsQuickNtripConnected] = useState(false);
+  const [isManualPreparing, setIsManualPreparing] = useState(false);
+  const [isManualDriveVisible, setIsManualDriveVisible] = useState(false);
 
   const openRTKInjection = () => setShowRTKInjection(true);
   const closeRTKInjection = () => setShowRTKInjection(false);
@@ -315,6 +359,153 @@ export default function MissionReportScreen({ isVisible = true }: MissionReportS
       }
       notificationTimeoutRef.current = null;
     }, duration);
+  };
+
+  const getLatestNtripProfile = async (): Promise<NTRIPProfile | null> => {
+    const profiles = await getAllProfiles();
+    if (profiles.length === 0) return null;
+    return [...profiles].sort((a, b) => {
+      const bTime = Date.parse(b.updatedAt || b.createdAt || '');
+      const aTime = Date.parse(a.updatedAt || a.createdAt || '');
+      return (Number.isFinite(bTime) ? bTime : 0) - (Number.isFinite(aTime) ? aTime : 0);
+    })[0];
+  };
+
+  const refreshQuickNtripStatus = async () => {
+    try {
+      const status = await getRtkStatus();
+      const source = String(status.active_source ?? status.desired_source ?? status.mode ?? '').toLowerCase();
+      setIsQuickNtripConnected(Boolean(status.running && source.includes('ntrip')));
+    } catch (err) {
+      console.warn('[RTK] Quick status check failed', err);
+      setIsQuickNtripConnected(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!isVisible) return;
+    refreshQuickNtripStatus();
+    const timer = setInterval(refreshQuickNtripStatus, 3000);
+    return () => clearInterval(timer);
+  }, [isVisible]);
+
+  const handleQuickStartNtrip = async () => {
+    if (isQuickNtripStarting || isQuickNtripConnected) return;
+
+    setIsQuickNtripStarting(true);
+    try {
+      const profile = await getLatestNtripProfile();
+      if (!profile) {
+        Alert.alert('No NTRIP Profile', 'Create an NTRIP profile in Settings before using quick start.');
+        return;
+      }
+
+      const host = profile.casterAddress.trim();
+      const port = Number.parseInt(profile.port || '2101', 10);
+      const mountpoint = profile.mountpoint.trim();
+      const user = profile.username.trim();
+      const pass = profile.password.trim();
+
+      if (!host || !mountpoint || !user || !pass || !Number.isFinite(port) || port < 1 || port > 65535) {
+        Alert.alert('Profile Incomplete', 'NTRIP profile requires host, valid port, mountpoint, username, and password.');
+        return;
+      }
+
+      const currentStatus = await getRtkStatus().catch(() => null);
+      const activeSource = String(currentStatus?.active_source ?? currentStatus?.mode ?? '').toLowerCase();
+      if (currentStatus?.running && activeSource.includes('lora')) {
+        await stopAllRtk();
+      }
+
+      console.log('[RTK] Quick NTRIP start', {
+        profile: profile.name,
+        host,
+        port,
+        mountpoint,
+        user,
+        pass: '<redacted>',
+      });
+
+      const status = await startNtripStream({
+        host,
+        port,
+        mountpoint,
+        user,
+        pass,
+      });
+
+      console.log('[RTK] Quick NTRIP response', {
+        mode: status.mode,
+        running: status.running,
+        healthy: status.healthy,
+        active_source: status.active_source,
+        desired_source: status.desired_source,
+        lifecycle_state: status.lifecycle_state,
+        last_error: status.last_error,
+        last_process_error: status.last_process_error,
+      });
+
+      if (status.running) {
+        setIsQuickNtripConnected(true);
+        showNotification(
+          'success',
+          'NTRIP Started',
+          `${profile.name} • ${status.healthy ? 'healthy' : status.lifecycle_state ?? 'starting'}`,
+        );
+      } else {
+        setIsQuickNtripConnected(false);
+        const message = status.last_error || status.last_process_error || `NTRIP did not start (${status.lifecycle_state ?? status.source_state ?? 'unknown'})`;
+        showNotification('error', 'NTRIP Failed', message, 5000);
+        Alert.alert('NTRIP Failed', message);
+      }
+    } catch (err) {
+      console.error('[RTK] Quick NTRIP start failed', err);
+      const message = getRtkFailureMessage(err, 'Failed to start NTRIP stream.');
+      showNotification('error', 'NTRIP Failed', message, 5000);
+      Alert.alert('NTRIP Failed', message);
+    } finally {
+      setIsQuickNtripStarting(false);
+      refreshQuickNtripStatus();
+    }
+  };
+
+  const handleOpenManualDrive = async () => {
+    if (isManualPreparing) return;
+
+    setIsManualPreparing(true);
+    try {
+      const currentMode = String(telemetry.state?.mode || '').toUpperCase();
+      if (currentMode !== 'MANUAL') {
+        console.log('[ManualDrive] Setting mode to MANUAL from', currentMode || 'UNKNOWN');
+        const modeResponse = await setManualMode();
+        if (!modeResponse.success) {
+          const message = modeResponse.message || 'Unable to switch vehicle to MANUAL mode.';
+          showNotification('error', 'Manual Mode Failed', message, 5000);
+          Alert.alert('Manual Mode Failed', message);
+          return;
+        }
+      }
+
+      if (!telemetry.state?.armed) {
+        console.log('[ManualDrive] Arming vehicle before opening joystick');
+        const armResponse = await armVehicle();
+        if (!armResponse.success) {
+          const message = armResponse.message || 'Unable to arm vehicle.';
+          showNotification('error', 'Arm Failed', message, 5000);
+          Alert.alert('Arm Failed', message);
+          return;
+        }
+      }
+
+      setIsManualDriveVisible(true);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unable to prepare manual control.';
+      console.error('[ManualDrive] Prepare failed', err);
+      showNotification('error', 'Manual Control Failed', message, 5000);
+      Alert.alert('Manual Control Failed', message);
+    } finally {
+      setIsManualPreparing(false);
+    }
   };
 
   // Check for missing Block/Row/Pile fields in waypoints
@@ -1478,10 +1669,6 @@ export default function MissionReportScreen({ isVisible = true }: MissionReportS
 
         // Restore UI state
         if (data.uiState) {
-          if (data.uiState.isMapFullscreen !== undefined) {
-            setIsMapFullscreen(data.uiState.isMapFullscreen);
-            console.log('[MissionReportScreen] 📂 Restored map fullscreen state:', data.uiState.isMapFullscreen);
-          }
           if (data.uiState.currentIndex !== undefined) {
             setCurrentIndex(data.uiState.currentIndex);
             console.log('[MissionReportScreen] 📂 Restored current waypoint index:', data.uiState.currentIndex);
@@ -1489,6 +1676,13 @@ export default function MissionReportScreen({ isVisible = true }: MissionReportS
           if (data.uiState.mode) {
             setMode(data.uiState.mode);
             console.log('[MissionReportScreen] 📂 Restored mode:', data.uiState.mode);
+          }
+          const migratedPanels = migrateLegacyPanelVisibility(data.uiState);
+          if (Object.keys(migratedPanels).length > 0) {
+            setPanelVisibility((prev) => ({ ...prev, ...migratedPanels }));
+          }
+          if (data.uiState.isBottomTableExpanded !== undefined) {
+            setIsBottomTableExpanded(data.uiState.isBottomTableExpanded);
           }
         }
       } catch (error) {
@@ -1539,18 +1733,32 @@ export default function MissionReportScreen({ isVisible = true }: MissionReportS
     }
   }, [missionMode]);
 
-  // Auto-save UI state changes (map fullscreen, current index, mode)
+  // Auto-save UI state changes
   useEffect(() => {
     PersistentStorage.saveMissionReportUIState({
-      isMapFullscreen,
       currentIndex,
       mode,
+      isRobotStatusVisible,
+      isMissionProgressVisible,
+      isDistanceToTargetVisible,
+      isSystemStatusVisible,
+      isMissionControlsVisible,
+      isBottomTableVisible,
+      isBottomTableExpanded,
     }).catch(error => {
       console.error('[MissionReportScreen] Failed to persist UI state:', error);
     });
-  }, [isMapFullscreen, currentIndex, mode]);
-
-  // Mission event handler for real-time status updates
+  }, [
+    currentIndex,
+    mode,
+    isRobotStatusVisible,
+    isMissionProgressVisible,
+    isDistanceToTargetVisible,
+    isSystemStatusVisible,
+    isMissionControlsVisible,
+    isBottomTableVisible,
+    isBottomTableExpanded,
+  ]);
   useEffect(() => {
     // Subscribe to mission events from backend
     const unsubscribe = onMissionEvent((event: any) => {
@@ -2339,105 +2547,191 @@ export default function MissionReportScreen({ isVisible = true }: MissionReportS
   // No need to fetch from backend as PathPlan handles upload and syncs to context
 
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaView style={styles.container} edges={['left', 'right', 'bottom']}>
       <StatusBar backgroundColor={colors.headerBlue} barStyle="light-content" />
 
-      <View style={styles.mainContent}>
-        {isMapFullscreen ? (
-          /* Full Screen Map Mode */
-          <View style={styles.fullscreenMap}>
-            <MissionMap
-              waypoints={displayData.waypoints}
-              roverLat={mapProps.roverLat}
-              roverLon={mapProps.roverLon}
-              heading={mapProps.heading}
-              activeWaypointIndex={effectiveCurrentIndex}
-              statusMap={displayData.statusMap}
-              armed={mapProps.armed}
-              rtkFixType={mapProps.rtkFixType}
-              onToggleFullscreen={toggleMapFullscreen}
-              isVisible={isVisible}
-            />
-          </View>
-        ) : (
-          <>
-            <View style={styles.leftPanel}>
-              <VehicleStatusCard
-                status={vehicleStatus}
-                telemetry={telemetry}
-                isConnected={
-                  connectionState === 'connected' &&
-                  telemetry.fcu_connected !== false
-                }
-              />
-              <MissionProgressCard
-                waypoints={displayData.waypoints}
-                currentIndex={effectiveCurrentIndex}
-                markedCount={markedCount}
-                statusMap={displayData.statusMap}
-                isMissionActive={effectiveMissionActive}
-                wpDistCm={telemetry.wp_dist_cm}
-                distanceToNextM={telemetry.distance_to_next_m}
-                currentRoverPosition={
-                  roverPosition && roverPosition.lat && roverPosition.lng
-                    ? {
-                      latitude: roverPosition.lat,
-                      longitude: roverPosition.lng,
-                    }
-                    : undefined
-                }
-              />
-            </View>
-            <View style={styles.centerPanel}>
-              <View style={styles.mapWrapper}>
-                <MissionMap
-                  waypoints={displayData.waypoints}
-                  roverLat={mapProps.roverLat}
-                  roverLon={mapProps.roverLon}
-                  heading={mapProps.heading}
-                  activeWaypointIndex={effectiveCurrentIndex}
-                  // TRAIL DISABLED: trailPoints prop commented out
-                  // trailPoints={trailPoints}
-                  armed={mapProps.armed}
-                  rtkFixType={mapProps.rtkFixType}
-                  onToggleFullscreen={toggleMapFullscreen}
-                  isVisible={isVisible}
-                />
-              </View>
-            </View>
-            <View style={styles.rightPanel}>
-              <SystemStatusPanel
-                mode={mode}
-                onSetMode={setMode}
-                onStart={handleStart}
-                onPause={handlePause}
-                onResume={handleResume}
-                onStop={handleStop}
-                onNext={handleNext}
-                onSkip={handleSkip}
-                waypoints={waypoints}
-                missionMode={missionMode}
-                isMissionActive={effectiveMissionActive}
-                waitingForManual={effectiveWaitingForManual}
-              />
-            </View>
-          </>
-        )}
-      </View>
-      {/* Bottom full-width waypoints table */}
-      <View style={styles.bottomTableContainer}>
-        <WaypointsTable
+      <View style={styles.absoluteMapContainer}>
+        <MissionMap
           waypoints={displayData.waypoints}
-          onExport={handleExport}
-          onExportComplete={handleExportComplete}
-          onClear={() => setShowClearLogsDialog(true)}
+          roverLat={mapProps.roverLat}
+          roverLon={mapProps.roverLon}
+          heading={mapProps.heading}
+          activeWaypointIndex={effectiveCurrentIndex}
           statusMap={displayData.statusMap}
-          missionMode={displayData.missionMode}
-          currentIndex={effectiveCurrentIndex}
-          pinnedCount={PINNED_COUNT}
-          onReorder={handleReorder}
+          armed={mapProps.armed}
+          rtkFixType={mapProps.rtkFixType}
+          edgeToEdge
+          isVisible={isVisible}
         />
       </View>
+
+      {isRobotStatusVisible && (
+        <DraggableCard
+          style={styles.floatingRobotStatusPanel}
+          handleType="custom"
+          onLayout={(e) => setRobotPanelHeight(e.nativeEvent.layout.height)}
+        >
+          <VehicleStatusCard
+            status={vehicleStatus}
+            telemetry={telemetry}
+            isConnected={
+              connectionState === 'connected' &&
+              telemetry.fcu_connected !== false
+            }
+            onClose={() => setPanelVisible('robotStatus', false)}
+          />
+        </DraggableCard>
+      )}
+
+      {isMissionProgressVisible && (
+        <DraggableCard
+          style={[
+            styles.floatingMissionProgressPanel,
+            {
+              top:
+                robotPanelHeight > 0
+                  ? MISSION_PROGRESS_LAYOUT.HEADER_CLEARANCE +
+                    robotPanelHeight +
+                    MISSION_PROGRESS_LAYOUT.PANEL_GAP
+                  : MISSION_PROGRESS_LAYOUT.MISSION_PROGRESS_STACK_FALLBACK,
+            },
+          ]}
+          handleType="custom"
+          onLayout={(e) => setMissionProgressPanelHeight(e.nativeEvent.layout.height)}
+        >
+          <MissionProgressCard
+            waypoints={displayData.waypoints}
+            currentIndex={effectiveCurrentIndex}
+            markedCount={markedCount}
+            statusMap={displayData.statusMap}
+            isMissionActive={effectiveMissionActive}
+            onClose={() => setPanelVisible('missionProgress', false)}
+          />
+        </DraggableCard>
+      )}
+
+      {isMissionProgressVisible && (
+        <View
+          style={[
+            styles.floatingQuickNtripPanel,
+            {
+              top:
+                (robotPanelHeight > 0
+                  ? MISSION_PROGRESS_LAYOUT.HEADER_CLEARANCE +
+                    robotPanelHeight +
+                    MISSION_PROGRESS_LAYOUT.PANEL_GAP
+                  : MISSION_PROGRESS_LAYOUT.MISSION_PROGRESS_STACK_FALLBACK) +
+                (missionProgressPanelHeight || 142) +
+                MISSION_PROGRESS_LAYOUT.PANEL_GAP,
+            },
+          ]}
+        >
+          <QuickNtripStartCard
+            onPress={handleQuickStartNtrip}
+            onManualPress={handleOpenManualDrive}
+            manualLoading={isManualPreparing}
+            loading={isQuickNtripStarting}
+            connected={isQuickNtripConnected}
+          />
+        </View>
+      )}
+
+      <ManualDrivePanel
+        visible={isManualDriveVisible}
+        onClose={() => setIsManualDriveVisible(false)}
+      />
+
+      {isDistanceToTargetVisible && (
+        <DraggableCard
+          style={styles.floatingDistanceToTargetPanel}
+          handleType="custom"
+        >
+          <DistanceToTargetCard
+            isMissionActive={effectiveMissionActive}
+            distanceToNextM={telemetry.distance_to_next_m}
+          />
+        </DraggableCard>
+      )}
+
+      {isSystemStatusVisible && (
+        <DraggableCard
+          style={styles.floatingSystemStatusPanel}
+          handleType="custom"
+          onLayout={(e) => setSystemPanelHeight(e.nativeEvent.layout.height)}
+        >
+          <SystemStatusPanel onClose={() => setPanelVisible('systemStatus', false)} />
+        </DraggableCard>
+      )}
+
+      {isMissionControlsVisible && (
+        <DraggableCard
+          style={[
+            styles.floatingMissionControlsPanel,
+            {
+              top:
+                systemPanelHeight > 0
+                  ? MISSION_PROGRESS_LAYOUT.HEADER_CLEARANCE +
+                    systemPanelHeight +
+                    MISSION_PROGRESS_LAYOUT.PANEL_GAP
+                  : MISSION_PROGRESS_LAYOUT.MISSION_CONTROLS_STACK_FALLBACK,
+            },
+          ]}
+          handleType="custom"
+        >
+          <MissionControlCard
+            waypoints={waypoints}
+            mode={mode}
+            onSetMode={setMode}
+            onStart={handleStart}
+            onPause={handlePause}
+            onResume={handleResume}
+            onStop={handleStop}
+            onNext={handleNext}
+            onSkip={handleSkip}
+            missionMode={missionMode}
+            isMissionActive={effectiveMissionActive}
+            waitingForManual={effectiveWaitingForManual}
+            isMissionLoaded={verifiedCtx.isLoaded}
+            onClose={() => setPanelVisible('missionControls', false)}
+          />
+        </DraggableCard>
+      )}
+
+      {isBottomTableVisible && (
+        <DraggableCard style={styles.floatingBottomTable} handleType="custom">
+          <MissionTableHeader
+            waypointCount={displayData.waypoints.length}
+            isExpanded={isBottomTableExpanded}
+            onToggleExpand={() => setIsBottomTableExpanded(prev => !prev)}
+            onClose={() => setPanelVisible('bottom', false)}
+            toolbarActions={
+              <MissionTableToolbarActions
+                onClear={() => setShowClearLogsDialog(true)}
+                exportProps={{
+                  waypoints: displayData.waypoints,
+                  statusMap: displayData.statusMap,
+                  missionMode: displayData.missionMode,
+                  onExport: handleExport,
+                  onExportComplete: handleExportComplete,
+                }}
+              />
+            }
+          />
+          {isBottomTableExpanded && (
+            <View style={styles.floatingBottomTableBody}>
+              <WaypointsTable
+                embedded
+                waypoints={displayData.waypoints}
+                statusMap={displayData.statusMap}
+                missionMode={displayData.missionMode}
+                currentIndex={effectiveCurrentIndex}
+                pinnedCount={PINNED_COUNT}
+                onReorder={handleReorder}
+              />
+            </View>
+          )}
+        </DraggableCard>
+      )}
 
       <Toast
         visible={notification.visible}
@@ -2557,55 +2851,80 @@ function getFixTypeLabel(fixType: number): string {
   return labels[fixType] || 'Unknown';
 }
 
+const bottomTableInsets = getMissionProgressBottomTableInsets();
+
 const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: colors.primary,
+    position: 'relative',
   },
-  mainContent: {
-    flex: TOP_ROW_FLEX,
-    flexDirection: 'row',
-    backgroundColor: colors.primary,
-    paddingTop: COLUMN_GAP / 2,
-    gap: COLUMN_GAP,
+  absoluteMapContainer: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
   },
-  leftPanel: {
-    width: LEFT_PANEL_WIDTH,
-    paddingHorizontal: PANEL_PADDING_H,
-    paddingVertical: PANEL_PADDING_V,
-    backgroundColor: colors.primary,
+  floatingRobotStatusPanel: {
+    position: 'absolute',
+    top: MISSION_PROGRESS_LAYOUT.HEADER_CLEARANCE,
+    left: MISSION_PROGRESS_LAYOUT.EDGE,
+    width: MISSION_PROGRESS_LAYOUT.LEFT_PANEL_WIDTH,
+    zIndex: 1000,
   },
-  centerPanel: {
-    flex: 1,
-    paddingHorizontal: PANEL_PADDING_H,
-    paddingVertical: PANEL_PADDING_V,
-    backgroundColor: colors.primary,
+  floatingMissionProgressPanel: {
+    position: 'absolute',
+    left: MISSION_PROGRESS_LAYOUT.EDGE,
+    width: MISSION_PROGRESS_LAYOUT.LEFT_PANEL_WIDTH,
+    zIndex: 1000,
   },
-  mapWrapper: {
-    flex: 1,
-    backgroundColor: colors.panelBg,
-    borderRadius: 16,
-    overflow: 'hidden',
+  floatingQuickNtripPanel: {
+    position: 'absolute',
+    left: MISSION_PROGRESS_LAYOUT.EDGE,
+    width: MISSION_PROGRESS_LAYOUT.LEFT_PANEL_WIDTH,
+    zIndex: 999,
+  },
+  floatingDistanceToTargetPanel: {
+    position: 'absolute',
+    left: MISSION_PROGRESS_LAYOUT.EDGE,
+    width: MISSION_PROGRESS_LAYOUT.LEFT_PANEL_WIDTH,
+    bottom: MISSION_PROGRESS_LAYOUT.BOTTOM_INSET,
+    zIndex: 1000,
+  },
+  floatingSystemStatusPanel: {
+    position: 'absolute',
+    top: MISSION_PROGRESS_LAYOUT.HEADER_CLEARANCE,
+    right: MISSION_PROGRESS_LAYOUT.EDGE,
+    width: MISSION_PROGRESS_LAYOUT.RIGHT_PANEL_WIDTH,
+    zIndex: 1000,
+  },
+  floatingMissionControlsPanel: {
+    position: 'absolute',
+    right: MISSION_PROGRESS_LAYOUT.EDGE,
+    width: MISSION_PROGRESS_LAYOUT.RIGHT_PANEL_WIDTH,
+    zIndex: 1000,
+  },
+  floatingBottomTable: {
+    position: 'absolute',
+    bottom: MISSION_PROGRESS_LAYOUT.BOTTOM_INSET,
+    left: bottomTableInsets.left,
+    right: bottomTableInsets.right,
+    zIndex: 1000,
+    elevation: 6,
+    backgroundColor: PATH_PLAN_GLASS.panelBg,
+    borderRadius: PATH_PLAN_GLASS.borderRadius,
     borderWidth: 1,
-    borderColor: colors.border,
+    borderColor: PATH_PLAN_GLASS.border,
+    overflow: 'hidden',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
+    shadowOpacity: 0.35,
     shadowRadius: 8,
-    elevation: 8,
   },
-  rightPanel: {
-    width: RIGHT_PANEL_WIDTH,
-    paddingHorizontal: PANEL_PADDING_H,
-    paddingVertical: PANEL_PADDING_V,
-    backgroundColor: colors.primary,
-  },
-  bottomTableContainer: {
-    flex: BOTTOM_ROW_FLEX,
-    backgroundColor: colors.primary,
-    paddingHorizontal: PANEL_PADDING_H + 2,
-    paddingTop: COLUMN_GAP / 2,
-    paddingBottom: PANEL_PADDING_V,
+  floatingBottomTableBody: {
+    height: MISSION_PROGRESS_LAYOUT.BOTTOM_TABLE_BODY_HEIGHT,
+    overflow: 'hidden',
   },
   previousMissionBanner: {
     backgroundColor: '#FFF3CD',
@@ -2619,10 +2938,6 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '500',
     textAlign: 'center',
-  },
-  fullscreenMap: {
-    flex: 1,
-    backgroundColor: '#0A1628',
   },
   undoBanner: {
     position: 'absolute',

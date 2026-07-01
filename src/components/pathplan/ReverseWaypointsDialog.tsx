@@ -1,7 +1,7 @@
 import React from 'react';
-import { Modal, Alert, StyleSheet, View, Text, TouchableOpacity } from 'react-native';
-import { MaterialCommunityIcons, Ionicons } from '@expo/vector-icons';
-import { colors } from '../../theme/colors';
+import { Modal, StyleSheet, View, Text, TouchableOpacity } from 'react-native';
+import { MaterialCommunityIcons } from '@expo/vector-icons';
+import { PATH_PLAN_GLASS } from '../../constants/pathPlanGlass';
 
 interface ReverseWaypointsDialogProps {
   visible: boolean;
@@ -17,21 +17,9 @@ export const ReverseWaypointsDialog: React.FC<ReverseWaypointsDialogProps> = ({
   onClose,
 }) => {
   const handleReverse = () => {
-    Alert.alert(
-      'Confirm Reverse',
-      `Reverse all ${waypointCount} waypoints? This will reverse the order of all waypoints in the mission.`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Reverse',
-          style: 'destructive',
-          onPress: () => {
-            onReverse();
-            onClose();
-          },
-        },
-      ]
-    );
+    if (waypointCount < 2) return;
+    onReverse();
+    onClose();
   };
 
   return (
@@ -43,28 +31,37 @@ export const ReverseWaypointsDialog: React.FC<ReverseWaypointsDialogProps> = ({
     >
       <View style={styles.overlay}>
         <View style={styles.dialog}>
-          {/* Header */}
           <View style={styles.header}>
             <View style={styles.headerIconWrap}>
-              <MaterialCommunityIcons name="swap-vertical" size={24} color={colors.accent} />
+              <MaterialCommunityIcons name="swap-vertical" size={18} color={PATH_PLAN_GLASS.cyan} />
             </View>
-            <Text style={styles.headerTitle}>REVERSE WAYPOINTS</Text>
+            <View style={styles.headerTextWrap}>
+              <Text style={styles.headerTitle}>REVERSE PATH</Text>
+              <Text style={styles.headerSubtitle}>{waypointCount} marking points</Text>
+            </View>
+            <TouchableOpacity style={styles.closeButton} onPress={onClose} activeOpacity={0.75}>
+              <MaterialCommunityIcons name="close" size={16} color={PATH_PLAN_GLASS.muted} />
+            </TouchableOpacity>
           </View>
 
-          {/* Content */}
           <View style={styles.content}>
-            <View style={styles.infoCard}>
-              <Ionicons name="information-circle-outline" size={20} color={colors.warning} />
-              <Text style={styles.infoText}>
-                This will reverse the order of all <Text style={styles.countText}>{waypointCount}</Text> waypoints in the mission.
-              </Text>
+            <View style={styles.summaryRow}>
+              <View style={styles.summaryTile}>
+                <Text style={styles.summaryValue}>1</Text>
+                <Text style={styles.summaryLabel}>becomes last</Text>
+              </View>
+              <MaterialCommunityIcons name="arrow-left-right" size={18} color={PATH_PLAN_GLASS.cyan} />
+              <View style={styles.summaryTile}>
+                <Text style={styles.summaryValue}>{waypointCount || '-'}</Text>
+                <Text style={styles.summaryLabel}>becomes first</Text>
+              </View>
             </View>
+
             <Text style={styles.description}>
-              The first waypoint will become the last, and the last will become the first. All distances will be recalculated.
+              Reverse the mission order and recalculate segment distances. Existing coordinates and waypoint details stay unchanged.
             </Text>
           </View>
 
-          {/* Actions */}
           <View style={styles.actions}>
             <TouchableOpacity
               style={[styles.button, styles.cancelButton]}
@@ -74,12 +71,19 @@ export const ReverseWaypointsDialog: React.FC<ReverseWaypointsDialogProps> = ({
               <Text style={styles.cancelButtonText}>Cancel</Text>
             </TouchableOpacity>
             <TouchableOpacity
-              style={[styles.button, styles.reverseButton]}
+              style={[styles.button, styles.reverseButton, waypointCount < 2 && styles.reverseButtonDisabled]}
               onPress={handleReverse}
+              disabled={waypointCount < 2}
               activeOpacity={0.7}
             >
-              <MaterialCommunityIcons name="swap-vertical" size={18} color="#fff" />
-              <Text style={styles.reverseButtonText}>Reverse {waypointCount} Waypoints</Text>
+              <MaterialCommunityIcons
+                name="swap-vertical"
+                size={17}
+                color={waypointCount < 2 ? '#64748B' : '#052E2B'}
+              />
+              <Text style={[styles.reverseButtonText, waypointCount < 2 && styles.reverseButtonTextDisabled]}>
+                Reverse
+              </Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -91,107 +95,146 @@ export const ReverseWaypointsDialog: React.FC<ReverseWaypointsDialogProps> = ({
 const styles = StyleSheet.create({
   overlay: {
     flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.7)',
+    backgroundColor: 'rgba(0, 0, 0, 0.68)',
     justifyContent: 'center',
     alignItems: 'center',
+    padding: 16,
   },
   dialog: {
-    width: '85%',
-    maxWidth: 400,
-    backgroundColor: colors.panelBg,
-    borderRadius: 16,
+    width: '100%',
+    maxWidth: 380,
+    backgroundColor: PATH_PLAN_GLASS.panelBg,
+    borderRadius: PATH_PLAN_GLASS.borderRadius,
     borderWidth: 1,
-    borderColor: colors.border,
+    borderColor: PATH_PLAN_GLASS.border,
     overflow: 'hidden',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 14 },
+    shadowOpacity: 0.35,
+    shadowRadius: 24,
+    elevation: 12,
   },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 12,
-    paddingHorizontal: 20,
-    paddingTop: 20,
-    paddingBottom: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: PATH_PLAN_GLASS.borderSubtle,
+    gap: 10,
   },
   headerIconWrap: {
-    width: 44,
-    height: 44,
-    borderRadius: 14,
-    backgroundColor: 'rgba(59, 130, 246, 0.15)',
+    width: 30,
+    height: 30,
+    borderRadius: 8,
+    backgroundColor: PATH_PLAN_GLASS.iconWrapBg,
     borderWidth: 1,
-    borderColor: 'rgba(59, 130, 246, 0.3)',
+    borderColor: PATH_PLAN_GLASS.border,
     justifyContent: 'center',
     alignItems: 'center',
   },
+  headerTextWrap: {
+    flex: 1,
+    minWidth: 0,
+  },
   headerTitle: {
-    color: '#ffffff',
-    fontSize: 16,
+    color: PATH_PLAN_GLASS.title,
+    fontSize: 13,
     fontWeight: '700',
-    letterSpacing: 2,
+    letterSpacing: 1.2,
+  },
+  headerSubtitle: {
+    color: PATH_PLAN_GLASS.muted,
+    fontSize: 10,
+    fontWeight: '600',
+    marginTop: 2,
+  },
+  closeButton: {
+    width: 28,
+    height: 28,
+    borderRadius: 7,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255, 255, 255, 0.04)',
   },
   content: {
-    paddingHorizontal: 20,
-    paddingTop: 8,
-    paddingBottom: 16,
-    gap: 12,
+    paddingHorizontal: 14,
+    paddingTop: 14,
+    paddingBottom: 12,
   },
-  infoCard: {
+  summaryRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 10,
-    backgroundColor: colors.warning + '12',
-    padding: 12,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: colors.warning + '30',
+    gap: 8,
+    marginBottom: 12,
   },
-  infoText: {
+  summaryTile: {
     flex: 1,
-    color: colors.textSecondary,
-    fontSize: 13,
-    lineHeight: 18,
+    minHeight: 58,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(103, 232, 249, 0.14)',
+    backgroundColor: 'rgba(8, 16, 26, 0.72)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 8,
   },
-  countText: {
-    color: colors.accent,
-    fontSize: 14,
+  summaryValue: {
+    color: PATH_PLAN_GLASS.title,
+    fontSize: 18,
+    fontWeight: '800',
+  },
+  summaryLabel: {
+    color: PATH_PLAN_GLASS.muted,
+    fontSize: 9,
     fontWeight: '700',
+    marginTop: 3,
+    textTransform: 'uppercase',
   },
   description: {
-    color: colors.textMuted,
+    color: PATH_PLAN_GLASS.label,
     fontSize: 12,
-    lineHeight: 17,
+    lineHeight: 18,
   },
   actions: {
     flexDirection: 'row',
-    gap: 10,
-    paddingHorizontal: 20,
-    paddingBottom: 20,
+    gap: 8,
+    paddingHorizontal: 14,
+    paddingBottom: 14,
   },
   button: {
     flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 8,
-    paddingVertical: 14,
-    borderRadius: 12,
+    gap: 6,
+    height: 36,
+    borderRadius: 8,
     borderWidth: 1,
   },
   cancelButton: {
-    backgroundColor: colors.cardBg,
-    borderColor: colors.border,
+    backgroundColor: PATH_PLAN_GLASS.innerBg,
+    borderColor: 'rgba(148, 163, 184, 0.2)',
   },
   cancelButtonText: {
-    color: colors.textSecondary,
-    fontSize: 14,
-    fontWeight: '600',
+    color: PATH_PLAN_GLASS.label,
+    fontSize: 12,
+    fontWeight: '700',
   },
   reverseButton: {
-    backgroundColor: colors.accent,
-    borderColor: 'rgba(59, 130, 246, 0.5)',
+    backgroundColor: PATH_PLAN_GLASS.cyan,
+    borderColor: PATH_PLAN_GLASS.cyan,
+  },
+  reverseButtonDisabled: {
+    backgroundColor: 'rgba(100, 116, 139, 0.16)',
+    borderColor: 'rgba(100, 116, 139, 0.24)',
   },
   reverseButtonText: {
-    color: '#ffffff',
-    fontSize: 14,
-    fontWeight: '700',
+    color: '#052E2B',
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  reverseButtonTextDisabled: {
+    color: '#64748B',
   },
 });

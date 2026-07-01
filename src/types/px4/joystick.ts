@@ -23,11 +23,13 @@ export interface JoystickAcquirePayload {
 
 /** Server → Client: lease granted. */
 export interface JoystickAcquiredPayload {
+  type?: 'joystick_acquired';
   lease_id: string;
   command_rate_hz: number;
   max_throttle: number;
   max_steering: number;
   server_stop_timeout_ms: number;
+  gateway_stop_timeout_ms?: number;
 }
 
 /** Client → Server: control command (sent ≤ command_rate_hz). */
@@ -50,12 +52,24 @@ export interface JoystickReleasePayload {
 // ── Error types ───────────────────────────────────────────────────────────────
 
 export type JoystickErrorCode =
-  | 'not_armed'
-  | 'lease_inactive'
+  | 'manual_control_disabled'
+  | 'malformed'
+  | 'mode_unavailable'
   | 'fcu_disconnected'
-  | 'joystick_disabled'
-  | 'acquire_failed'
+  | 'not_armed'
+  | 'not_owner'
+  | 'mission_active'
+  | 'joystick_active'
+  | 'acquire_cancelled'
+  | 'unavailable'
+  | 'lease_inactive'
+  | 'transport_unavailable'
+  | 'out_of_order'
+  | 'replay'
   | 'rate_exceeded'
+  | 'nan_value'
+  | 'out_of_range'
+  | 'auth_failed'
   | 'unknown';
 
 export interface JoystickErrorPayload {
@@ -72,4 +86,5 @@ export interface JoystickLeaseInfo {
   maxThrottle: number;
   maxSteering: number;
   serverStopTimeoutMs: number;
+  gatewayStopTimeoutMs?: number;
 }

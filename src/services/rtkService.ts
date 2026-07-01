@@ -19,14 +19,29 @@ import { PX4_RTK } from '../config/px4Endpoints';
 /** Mirrors 4WD_SERVER/server/routes/rtk.py RTKStatusResponse. */
 export interface RtkStatusResponse {
   mode: string;
+  pid?: number | null;
   running: boolean;
   healthy: boolean;
   active_source?: string | null;
+  desired_source?: string | null;
+  source_state?: string;
+  lifecycle_state?: string;
   serial_open?: boolean;
   stream_healthy?: boolean;
+  last_error?: string | null;
+  last_process_error?: string | null;
+  transport_reason?: string | null;
+  stop_reason?: string | null;
   gps_fix_type?: number | null;
   last_valid_rtcm_age_s?: number | null;
   last_frame_age_s?: number | null;
+  bytes?: number;
+  frames?: number;
+  bytes_injected?: number;
+  valid_frames?: number;
+  reconnecting?: boolean;
+  restart_count?: number;
+  user_requested?: boolean | null;
   // Legacy / simplified aliases (older backends)
   active?: boolean;
   source?: 'ntrip' | 'lora' | null;
@@ -52,19 +67,14 @@ export interface NtripStartRequest {
   pass?: string;
 }
 
-export interface NtripStartResponse {
-  success: boolean;
-  message?: string;
-}
-
 /**
  * Start NTRIP RTK stream.
  * Note: field is `pass` not `password` — matches PX4 backend contract.
  */
 export async function startNtripStream(
   request: NtripStartRequest,
-): Promise<NtripStartResponse> {
-  return apiPost<NtripStartResponse>(PX4_RTK.NTRIP_START, request);
+): Promise<RtkStatusResponse> {
+  return apiPost<RtkStatusResponse>(PX4_RTK.NTRIP_START, request);
 }
 
 // ── LoRa RTK ──────────────────────────────────────────────────────────────────
@@ -76,23 +86,18 @@ export interface LoraStartRequest {
   baudrate?: number;
 }
 
-export interface LoraStartResponse {
-  success: boolean;
-  message?: string;
-}
-
 /**
  * Start LoRa RTK stream.
  * Requires `serial_port` — backend will reject empty body.
  */
 export async function startLoraStream(
   request: LoraStartRequest,
-): Promise<LoraStartResponse> {
-  return apiPost<LoraStartResponse>(PX4_RTK.LORA_START, request);
+): Promise<RtkStatusResponse> {
+  return apiPost<RtkStatusResponse>(PX4_RTK.LORA_START, request);
 }
 
-export async function stopLoraStream(): Promise<{ success: boolean }> {
-  return apiPost(PX4_RTK.LORA_STOP);
+export async function stopLoraStream(): Promise<RtkStatusResponse> {
+  return apiPost<RtkStatusResponse>(PX4_RTK.LORA_STOP);
 }
 
 // ── Stop all RTK ──────────────────────────────────────────────────────────────
@@ -101,8 +106,8 @@ export async function stopLoraStream(): Promise<{ success: boolean }> {
  * Stop all RTK streams (NTRIP + LoRa).
  * Used for both NTRIP stop and LoRa stop in PX4 backend.
  */
-export async function stopAllRtk(): Promise<{ success: boolean }> {
-  return apiPost(PX4_RTK.STOP);
+export async function stopAllRtk(): Promise<RtkStatusResponse> {
+  return apiPost<RtkStatusResponse>(PX4_RTK.STOP);
 }
 
 // Alias for NTRIP stop

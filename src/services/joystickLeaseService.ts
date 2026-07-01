@@ -63,6 +63,7 @@ function handleAcquired(raw: unknown): void {
     maxThrottle: data.max_throttle,
     maxSteering: data.max_steering,
     serverStopTimeoutMs: data.server_stop_timeout_ms,
+    gatewayStopTimeoutMs: data.gateway_stop_timeout_ms,
   };
   _state = 'active';
   startCommandLoop(_lease.commandRateHz);
@@ -185,8 +186,8 @@ export function setCommand(
   steering: number,
   deadman: boolean,
 ): void {
-  _currentThrottle = throttle;
-  _currentSteering = steering;
+  _currentThrottle = deadman ? throttle : 0;
+  _currentSteering = deadman ? steering : 0;
   _deadman = deadman;
 }
 

@@ -795,6 +795,15 @@ export const PathPlanMap: React.FC<Props> = ({
       map.addLayer({ id:'mission-line', type:'line', source:'mission-path',
         paint:{'line-color':'#f97316','line-width':2.5,'line-opacity':0.9},
         layout:{'line-cap':'round','line-join':'round'} });
+      // Emlid-style black waypoint dots — a circle layer renders one dot at every
+      // vertex of the existing mission-path LineString (no new source/data needed).
+      map.addLayer({ id:'mission-points', type:'circle', source:'mission-path',
+        paint:{
+          'circle-radius':['interpolate',['linear'],['zoom'],12,3,18,6],
+          'circle-color':'#000000',
+          'circle-stroke-width':1.5,
+          'circle-stroke-color':'#ffffff'
+        } });
 
       map.addSource('ortho-guide', { type:'geojson', data:emptyLine() });
       map.addLayer({ id:'ortho-guide-line', type:'line', source:'ortho-guide',
@@ -833,6 +842,14 @@ export const PathPlanMap: React.FC<Props> = ({
         map.addLayer({ id:'mission-line', type:'line', source:'mission-path',
           paint:{'line-color':'#f97316','line-width':2.5,'line-opacity':0.9},
           layout:{'line-cap':'round','line-join':'round'} });
+        // Emlid-style black waypoint dots (re-added on style switch)
+        map.addLayer({ id:'mission-points', type:'circle', source:'mission-path',
+          paint:{
+            'circle-radius':['interpolate',['linear'],['zoom'],12,3,18,6],
+            'circle-color':'#000000',
+            'circle-stroke-width':1.5,
+            'circle-stroke-color':'#ffffff'
+          } });
 
         map.addSource('ortho-guide', { type:'geojson', data:emptyLine() });
         map.addLayer({ id:'ortho-guide-line', type:'line', source:'ortho-guide',

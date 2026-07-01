@@ -23,8 +23,6 @@ import { CornerExtensionDialog } from '../components/pathplan/CornerExtensionDia
 import { SolarTableDialog } from '../components/pathplan/SolarTableDialog';
 import { TemplateManagerDialog } from '../components/pathplan/TemplateManagerDialog';
 import { detectCorners, generateCornerExtensionWaypoints, DEFAULT_EXTENSION_OPTIONS, CornerExtensionOptions } from '../utils/cornerExtension';
-import { ManualMapConnection } from '../components/pathplan/ManualMapConnection';
-import { ManualConnectionChoice } from '../components/pathplan/ManualConnectionChoice';
 import { DraggableCard } from '../components/shared/DraggableCard';
 import { GestureDetector } from 'react-native-gesture-handler';
 import { ManualControlPanel } from '../components/pathplan/ManualControlPanel';
@@ -383,8 +381,6 @@ export default function PathPlanScreen({
   const [pathAssignmentMode, setPathAssignmentMode] = useState<'auto' | 'manual'>('auto');
   const [manualPathConnections, setManualPathConnections] = useState<number[]>([]);
   const [isConnectingPath, setIsConnectingPath] = useState<boolean>(false);
-  const [showConnectionChoice, setShowConnectionChoice] = useState<boolean>(false);
-  const [useMapForConnection, setUseMapForConnection] = useState<boolean>(false);
 
   // Drawing tools state
   const [activeDrawingTool, setActiveDrawingTool] = useState<string | null>(null);
@@ -728,6 +724,60 @@ export default function PathPlanScreen({
     // Add waypoint to the connection sequence
     setManualPathConnections(prev => [...prev, id]);
   };
+
+  const openManualConnection = useCallback(() => {
+    if (waypoints.length < 2) {
+      Alert.alert('Manual Connect', 'Add at least 2 marking points before connecting a path.');
+      return;
+    }
+    setActiveDrawingTool(null);
+    setManualPathConnections([]);
+    setIsConnectingPath(false);
+    setShowManualConnectionCanvas(true);
+  }, [setShowManualConnectionCanvas, waypoints.length]);
+
+  const handleManualConnectionsComplete = useCallback((connectedWaypointIds: number[]) => {
+    const orderedIds = Array.from(new Set(connectedWaypointIds));
+    const orderedWaypoints = orderedIds
+      .map(id => waypoints.find(wp => wp.id === id))
+      .filter(Boolean) as PathPlanWaypoint[];
+
+    if (orderedWaypoints.length < 2) {
+      Alert.alert('Connection Required', 'Please connect at least 2 marking points.');
+      return;
+    }
+
+    const reordered = recalculateWaypointDistances(
+      orderedWaypoints.map((wp, index) => ({
+        ...wp,
+        id: index + 1,
+        pile: wp.pile || String(index + 1),
+      })),
+    );
+
+    recordAndApply(reordered);
+    setManualPathConnections([]);
+    setIsConnectingPath(false);
+    setShowManualConnectionCanvas(false);
+    Alert.alert('Manual Connect Complete', `Connected ${reordered.length} marking points.`);
+  }, [recordAndApply, setShowManualConnectionCanvas, waypoints]);
+
+  const handleManualConnectionCancel = useCallback(() => {
+    setManualPathConnections([]);
+    setIsConnectingPath(false);
+    setShowManualConnectionCanvas(false);
+  }, [setShowManualConnectionCanvas]);
+
+  const handleManualConnectionDelete = useCallback((deletedWaypointIds: number[]) => {
+    if (deletedWaypointIds.length === 0) return;
+    const deleted = new Set(deletedWaypointIds);
+    const remaining = waypoints.filter(wp => !deleted.has(wp.id)).map((wp, index) => ({
+      ...wp,
+      id: index + 1,
+      pile: wp.pile || String(index + 1),
+    }));
+    recordAndApply(recalculateWaypointDistances(remaining));
+  }, [recordAndApply, waypoints]);
 
   const handleWaypointDrag = (id: number, coord: { latitude: number; longitude: number }) => {
     // Point tool validation: Only allow dragging if point tool is active
@@ -1878,11 +1928,11 @@ export default function PathPlanScreen({
     if (pathAssignmentMode === 'manual') {
       recordAndApply(waypoints);
       setManualPathConnections([]);
-      setShowConnectionChoice(true);
+      setShowManualConnectionCanvas(true);
       Alert.alert(
         '✏️ Manual Path Mode',
-        `${waypoints.length} marking points imported from CAD. Choose your connection method.`,
-        [{ text: 'Choose Method' }]
+        `${waypoints.length} marking points imported from CAD. Connect them on the canvas.`,
+        [{ text: 'OK' }]
       );
     } else {
       recordAndApply(waypoints);
@@ -2288,12 +2338,10 @@ export default function PathPlanScreen({
                   onShowCircleTool={() => setShowCircleDialog(true)}
                   onShowTextTool={() => setShowTextDialog(true)}
                   onShowCADDrawing={() => setShowCADCanvas(true)}
-                  onShowManualConnection={() => {
-                    setActiveDrawingTool(null);
-                    setShowManualConnectionCanvas(true);
-                  }}
+                  onShowManualConnection={openManualConnection}
                   onShowReverseTool={() => setShowReverseDialog(true)}
                   onShowCornerExtension={() => setShowCornerExtensionDialog(true)}
+                  onShowSurveyGrid={() => setShowSurveyGridDialog(true)}
                   onShowSolarTableTool={() => setShowSolarTableDialog(true)}
                   onShowTemplateManager={() => setShowTemplateManager(true)}
                   canUndo={canUndo}
@@ -2565,12 +2613,12 @@ export default function PathPlanScreen({
                               requestAnimationFrame(() => {
                                 recordAndApply(sanitized);
                                 setManualPathConnections([]);
-                                setShowConnectionChoice(true);
+                                setShowManualConnectionCanvas(true);
                               });
                               Alert.alert(
                                 '✏️ Manual Path Mode',
-                                `${sanitized.length} marking points imported. Choose your preferred connection method.`,
-                                [{ text: 'Choose Method' }]
+                                `${sanitized.length} marking points imported. Connect them on the canvas.`,
+                                [{ text: 'OK' }]
                               );
                             } else {
                               // Auto mode: Sequential import as usual
@@ -2596,12 +2644,12 @@ export default function PathPlanScreen({
                       requestAnimationFrame(() => {
                         recordAndApply(sanitized);
                         setManualPathConnections([]);
-                        setShowConnectionChoice(true);
+                        setShowManualConnectionCanvas(true);
                       });
                       Alert.alert(
                         '✏️ Manual Path Mode',
-                        `${sanitized.length} marking points imported. Choose your preferred connection method.`,
-                        [{ text: 'Choose Method' }]
+                        `${sanitized.length} marking points imported. Connect them on the canvas.`,
+                        [{ text: 'OK' }]
                       );
                     } else {
                       // Auto mode: Sequential import as usual
@@ -2744,6 +2792,24 @@ export default function PathPlanScreen({
         waypointCount={waypoints.length}
         cornersDetected={cornerDetectionResult.count}
         shortSegmentWarnings={cornerDetectionResult.shortWarnings}
+      />
+
+      {/* Manual Connect — Canvas Mode */}
+      <ManualPathConnectionCanvas
+        visible={showManualConnectionCanvas}
+        waypoints={waypoints}
+        onConnectionsComplete={handleManualConnectionsComplete}
+        onDeleteWaypoints={handleManualConnectionDelete}
+        onCancel={handleManualConnectionCancel}
+        roverPosition={
+          roverPosition
+            ? {
+              lat: roverPosition.lat,
+              lng: roverPosition.lng,
+              heading: telemetry.attitude?.yaw_deg ?? undefined,
+            }
+            : null
+        }
       />
 
       {/* Manual Control Modal */}

@@ -1,9 +1,10 @@
 import React, { useCallback } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
+import { View, Text, StyleSheet } from 'react-native';
 import { LegendList, LegendListRenderItemProps } from '@legendapp/list';
 import { colors } from '../../theme/colors';
+import { PATH_PLAN_GLASS } from '../../constants/pathPlanGlass';
 import { Waypoint } from './types';
-import MissionReportExport from './MissionReportExport';
+import { MissionTableToolbarActions } from './MissionTableToolbarActions';
 import type { WaypointUiStatus } from '../../types/missionWaypointStatus';
 import { getStatusPresentation } from '../../utils/missionStatusPresentation';
 
@@ -63,9 +64,10 @@ interface RowProps {
   index: number;
   wpStatus: any;
   isCurrentWaypoint: boolean;
+  embedded?: boolean;
 }
 
-const WaypointRow = React.memo(({ wp, index, wpStatus, isCurrentWaypoint }: RowProps) => {
+const WaypointRow = React.memo(({ wp, index, wpStatus, isCurrentWaypoint, embedded = false }: RowProps) => {
   const { statusDisplay, statusColor } = getWaypointStatusDisplay(wpStatus);
   const isSkipped = wpStatus?.status === 'skipped';
   const s = wpStatus?.status;
@@ -73,6 +75,7 @@ const WaypointRow = React.memo(({ wp, index, wpStatus, isCurrentWaypoint }: RowP
   return (
     <View style={[
       styles.tableRow,
+      embedded && styles.tableRowEmbedded,
       index % 2 === 0 && styles.tableRowAlt,
       isCurrentWaypoint && styles.currentWaypointRow,
       isSkipped && styles.skippedRow,
@@ -83,7 +86,6 @@ const WaypointRow = React.memo(({ wp, index, wpStatus, isCurrentWaypoint }: RowP
       <Text style={[styles.cell, styles.colPile, isCurrentWaypoint && styles.currentWaypointText, isSkipped && styles.skippedText]}>{wp.pile}</Text>
       <Text style={[styles.cell, styles.colLat, isCurrentWaypoint && styles.currentWaypointText, isSkipped && styles.skippedText]}>{wp.lat.toFixed(7)}</Text>
       <Text style={[styles.cell, styles.colLon, isCurrentWaypoint && styles.currentWaypointText, isSkipped && styles.skippedText]}>{wp.lon.toFixed(7)}</Text>
-      <Text style={[styles.cell, styles.colAlt, isCurrentWaypoint && styles.currentWaypointText, isSkipped && styles.skippedText]}>{wp.alt.toFixed(2)}</Text>
       <View style={[styles.colStatus, isSkipped && styles.skippedStatusCell]}>
         <Text style={[styles.cell, { color: statusColor }, isCurrentWaypoint && styles.currentWaypointText, isSkipped && styles.skippedText]}>
           {statusDisplay} {isCurrentWaypoint ? '◄' : ''}
@@ -121,7 +123,7 @@ const WaypointRow = React.memo(({ wp, index, wpStatus, isCurrentWaypoint }: RowP
 
 interface Props {
   waypoints: Waypoint[];
-  onExport: () => void;
+  onExport?: () => void;
   onExportComplete?: () => void;
   onClear?: () => void;
   statusMap: Record<number, {
@@ -143,11 +145,24 @@ interface Props {
   currentIndex?: number | null;
   pinnedCount?: number;
   onReorder?: (fromIndex: number, direction: 'up' | 'down') => void;
+  /** Floating overlay mode — hides duplicate outer chrome; MissionTableHeader owns the title row. */
+  embedded?: boolean;
 }
 
 const ROW_HEIGHT = 46;
 
-export const WaypointsTable = React.memo<Props>(({ waypoints, onExport, onExportComplete, onClear, statusMap, missionMode, currentIndex, pinnedCount = 4, onReorder }) => {
+export const WaypointsTable = React.memo<Props>(({
+  waypoints,
+  onExport,
+  onExportComplete,
+  onClear,
+  statusMap,
+  missionMode,
+  currentIndex,
+  pinnedCount = 4,
+  onReorder,
+  embedded = false,
+}) => {
   const currentWaypointNumber = currentIndex != null ? currentIndex + 1 : null;
 
   // Force LegendList to re-render rows when status or active waypoint changes.
@@ -165,50 +180,46 @@ export const WaypointsTable = React.memo<Props>(({ waypoints, onExport, onExport
         index={props.index}
         wpStatus={statusMap[props.item.sn]}
         isCurrentWaypoint={currentWaypointNumber !== null && props.item.sn === currentWaypointNumber}
+        embedded={embedded}
       />
     ),
-    [statusMap, currentWaypointNumber],
+    [statusMap, currentWaypointNumber, embedded],
   );
 
   const keyExtractor = useCallback((item: Waypoint) => `wp-${item.sn}`, []);
 
   return (
-    <View style={styles.container}>
+    <View style={[styles.container, embedded && styles.containerEmbedded]}>
       <View style={styles.cardPadding}>
-        {/* Header Row */}
-        <View style={styles.headerRow}>
-          <Text style={styles.title}>MISSION MARKING POINTS</Text>
-          <View style={styles.headerButtons}>
-            {onClear && (
-              <TouchableOpacity style={styles.clearButton} onPress={onClear}>
-                <Text style={styles.clearIcon}>🗑️</Text>
-                <Text style={styles.clearButtonText}>Clear</Text>
-              </TouchableOpacity>
-            )}
-            <MissionReportExport
-              waypoints={waypoints}
-              statusMap={statusMap}
-              missionMode={missionMode}
-              onExport={onExport}
-              onExportComplete={onExportComplete}
+        {!embedded && (
+          <View style={styles.headerRow}>
+            <Text style={styles.title}>MISSION MARKING POINTS</Text>
+            <MissionTableToolbarActions
+              onClear={onClear}
+              exportProps={{
+                waypoints,
+                statusMap,
+                missionMode,
+                onExport: onExport ?? (() => {}),
+                onExportComplete,
+              }}
             />
           </View>
-        </View>
+        )}
 
         {/* Table */}
         <View style={styles.tableWrapper}>
           {/* Fixed Table Header */}
-          <View style={styles.tableHeader}>
-            <Text style={[styles.headerCell, styles.colSN]}>S/N</Text>
-            <Text style={[styles.headerCell, styles.colBlock]}>BLOCK</Text>
-            <Text style={[styles.headerCell, styles.colRow]}>ROW</Text>
-            <Text style={[styles.headerCell, styles.colPile]}>PILE</Text>
-            <Text style={[styles.headerCell, styles.colLat]}>LATITUDE</Text>
-            <Text style={[styles.headerCell, styles.colLon]}>LONGITUDE</Text>
-            <Text style={[styles.headerCell, styles.colAlt]}>ALTITUDE</Text>
-            <Text style={[styles.headerCell, styles.colStatus]}>STATUS</Text>
-            <Text style={[styles.headerCell, styles.colTime]}>TIMESTAMP</Text>
-            <Text style={[styles.headerCell, styles.colRemark]}>REMARK</Text>
+          <View style={[styles.tableHeader, embedded && styles.tableHeaderEmbedded]}>
+            <Text style={[styles.headerCell, styles.colSN, embedded && styles.headerCellEmbedded]}>S/N</Text>
+            <Text style={[styles.headerCell, styles.colBlock, embedded && styles.headerCellEmbedded]}>BLOCK</Text>
+            <Text style={[styles.headerCell, styles.colRow, embedded && styles.headerCellEmbedded]}>ROW</Text>
+            <Text style={[styles.headerCell, styles.colPile, embedded && styles.headerCellEmbedded]}>PILE</Text>
+            <Text style={[styles.headerCell, styles.colLat, embedded && styles.headerCellEmbedded]}>LATITUDE</Text>
+            <Text style={[styles.headerCell, styles.colLon, embedded && styles.headerCellEmbedded]}>LONGITUDE</Text>
+            <Text style={[styles.headerCell, styles.colStatus, embedded && styles.headerCellEmbedded]}>STATUS</Text>
+            <Text style={[styles.headerCell, styles.colTime, embedded && styles.headerCellEmbedded]}>TIMESTAMP</Text>
+            <Text style={[styles.headerCell, styles.colRemark, embedded && styles.headerCellEmbedded]}>REMARK</Text>
           </View>
 
           {/* Virtualized table body — only visible rows are mounted */}
@@ -219,7 +230,7 @@ export const WaypointsTable = React.memo<Props>(({ waypoints, onExport, onExport
             recycleItems={true}
             estimatedItemSize={ROW_HEIGHT}
             getFixedItemSize={() => ROW_HEIGHT}
-            style={styles.scrollableTableBody}
+            style={[styles.scrollableTableBody, embedded && styles.scrollableTableBodyEmbedded]}
             showsVerticalScrollIndicator
             extraData={listExtraData}
           />
@@ -241,6 +252,13 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.1,
     shadowRadius: 4,
     elevation: 3,
+  },
+  containerEmbedded: {
+    backgroundColor: 'transparent',
+    borderWidth: 0,
+    borderRadius: 0,
+    shadowOpacity: 0,
+    elevation: 0,
   },
   cardPadding: {
     flex: 1,
@@ -271,15 +289,31 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
     paddingHorizontal: 16,
   },
+  tableHeaderEmbedded: {
+    backgroundColor: 'rgba(0, 0, 0, 0.15)',
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(255, 255, 255, 0.05)',
+  },
   headerCell: {
     color: '#07daf6ff',
     fontSize: 12,
     fontWeight: '600',
     textAlign: 'left',
   },
+  headerCellEmbedded: {
+    color: PATH_PLAN_GLASS.muted,
+    fontSize: 9,
+    fontWeight: '700',
+    letterSpacing: 0.5,
+  },
   scrollableTableBody: {
     flex: 1,
     maxHeight: 200,
+  },
+  scrollableTableBodyEmbedded: {
+    maxHeight: undefined,
   },
   tableRow: {
     flexDirection: 'row',
@@ -289,6 +323,11 @@ const styles = StyleSheet.create({
     borderTopColor: 'rgba(34, 211, 238, 0.3)',
     minHeight: ROW_HEIGHT,
     alignItems: 'center',
+  },
+  tableRowEmbedded: {
+    borderTopColor: 'rgba(255, 255, 255, 0.03)',
+    paddingVertical: 8,
+    paddingHorizontal: 12,
   },
   tableRowAlt: {
     backgroundColor: 'transparent',
@@ -302,12 +341,12 @@ const styles = StyleSheet.create({
     color: colors.textSecondary,
   },
   currentWaypointRow: {
-    backgroundColor: 'rgba(34, 211, 238, 0.1)',
+    backgroundColor: 'rgba(103, 232, 249, 0.08)',
     borderLeftWidth: 3,
-    borderLeftColor: '#22D3EE',
+    borderLeftColor: PATH_PLAN_GLASS.cyan,
   },
   currentWaypointText: {
-    color: '#22D3EE',
+    color: PATH_PLAN_GLASS.cyan,
     fontWeight: '600',
   },
   skippedRow: {
@@ -335,16 +374,15 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
   },
-  colSN: { flex: 0.7, textAlign: 'center' },
-  colBlock: { flex: 0.9 },
-  colRow: { flex: 0.8 },
-  colPile: { flex: 0.8 },
-  colLat: { flex: 1.2 },
-  colLon: { flex: 1.2 },
-  colAlt: { flex: 0.9 },
-  colStatus: { flex: 1.0 },
+  colSN: { flex: 0.55, textAlign: 'center' },
+  colBlock: { flex: 0.85 },
+  colRow: { flex: 0.75 },
+  colPile: { flex: 0.75 },
+  colLat: { flex: 1.35 },
+  colLon: { flex: 1.35 },
+  colStatus: { flex: 1.15 },
   colTime: { flex: 1.2 },
-  colRemark: { flex: 1.6 },
+  colRemark: { flex: 1.7 },
   remarkCell: {
     flexDirection: 'column',
     justifyContent: 'center',
@@ -353,27 +391,5 @@ const styles = StyleSheet.create({
     fontSize: 12,
     marginTop: 2,
     opacity: 0.8,
-  },
-  headerButtons: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  clearButton: {
-    flexDirection: 'row',
-    backgroundColor: '#EF4444',
-    paddingVertical: 10,
-    paddingHorizontal: 12,
-    borderRadius: 10,
-    alignItems: 'center',
-    gap: 6,
-  },
-  clearIcon: {
-    fontSize: 14,
-  },
-  clearButtonText: {
-    color: '#FFFFFF',
-    fontSize: 12,
-    fontWeight: '600',
   },
 });

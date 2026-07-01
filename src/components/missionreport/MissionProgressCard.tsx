@@ -1,7 +1,8 @@
-import React, { useMemo } from 'react';
-import { View, Text, StyleSheet } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
-import { colors } from '../../theme/colors';
+import React from 'react';
+import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
+import { GestureDetector } from 'react-native-gesture-handler';
+import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
+import { PATH_PLAN_GLASS, PATH_PLAN_HEADER } from '../../constants/pathPlanGlass';
 import { Waypoint } from './types';
 import type { WaypointUiStatus } from '../../types/missionWaypointStatus';
 import { isTerminalWaypointStatus, isErrorWaypointStatus } from '../../types/missionWaypointStatus';
@@ -21,19 +22,13 @@ interface Props {
     remark?: string;
   }>;
   isMissionActive?: boolean;
-  wpDistCm?: number; // DEPRECATED: Legacy backend distance, kept for backward compatibility
-  distanceToNextM?: number; // Backend mission distance to next waypoint in meters (20Hz)
-
-  // COMMENTED OUT: Frontend geodesic calculation replaced by backend distance_to_next_m
-  currentRoverPosition?: {
-    latitude: number;
-    longitude: number;
-  };
+  dragGesture?: any;
+  isDraggingActive?: boolean;
+  onClose?: () => void;
 }
 
 // Layout constants for quick adjustments
-const PROGRESS_CARD_LAYOUT: { height?: number | string; minHeight?: number; width?: number | string; flex?: number } = {
-  height: 200, // px or percentage string like '25%' (192 * 1.1 = 10% increase)
+const PROGRESS_CARD_LAYOUT: { minHeight?: number; width?: number | string; flex?: number } = {
   minHeight: 100,
   width: '100%',
 };
@@ -44,9 +39,9 @@ export const MissionProgressCard: React.FC<Props> = ({
   markedCount: providedMarkedCount,
   statusMap = {},
   isMissionActive = false,
-  wpDistCm, // DEPRECATED: Legacy backend distance
-  distanceToNextM, // Backend mission distance to next waypoint in meters
-  currentRoverPosition, // COMMENTED OUT: Frontend geodesic calculation replaced by backend
+  dragGesture,
+  isDraggingActive,
+  onClose,
 }) => {
   const totalWaypoints = waypoints.length;
 
@@ -89,80 +84,48 @@ export const MissionProgressCard: React.FC<Props> = ({
   const currentWp = isMissionActive && currentIndex !== null && currentIndex >= 0 ? waypoints[currentIndex] : null;
   const nextWp = isMissionActive && nextIndex < totalWaypoints ? waypoints[nextIndex] : null;
 
-  // COMMENTED OUT: Frontend geodesic distance calculation
-  // Now using backend distance_to_next_m (20Hz from mission_status events)
-  // const calculateGeodesicDistance = (...) => { ... };
-  // const distanceToCurrent = useMemo(() => { ... }, [isMissionActive, currentIndex, waypoints, currentRoverPosition]);
-
-  /**
-   * Format distance for display using backend distance_to_next_m
-   *
-   * Source: Backend mission_status events at 20Hz
-   * Field: distance_to_next_m (meters)
-   * Display: Converted to centimeters with 1 decimal place
-   */
-  const distanceText = useMemo(() => {
-    if (!isMissionActive) {
-      return '—';
-    }
-
-    if (distanceToNextM == null || distanceToNextM < 0) {
-      return '—';
-    }
-
-    // Convert meters to centimeters for display
-    const distanceCm = distanceToNextM * 100;
-    return `${distanceCm.toFixed(1)}cm`;
-  }, [isMissionActive, distanceToNextM]);
-
   return (
-    <View style={styles.card}>
-      {/* Header */}
-      <View style={styles.header}>
-        <View style={styles.headerLeft}>
-          <View style={styles.headerIconWrap}>
-            <Ionicons name="analytics" size={14} color={colors.accent} />
-          </View>
-          <Text style={styles.headerTitle}>PROGRESS</Text>
-        </View>
-        <View style={[styles.distanceBadge, { backgroundColor: 'rgba(103, 232, 249, 0.12)', borderColor: colors.accent }]}>
-          <Text style={[styles.distanceBadgeText, { color: colors.accent }]}>
-            {currentWp ? currentWp.sn : 0}/{totalWaypoints}
-          </Text>
-        </View>
-      </View>
-
-      {/* Distance Card */}
-      <View style={styles.distanceCard}>
-        <View style={[styles.distanceAccent, { backgroundColor: colors.accent }]} />
-        <View style={styles.distanceCardInner}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-            <View style={[styles.distanceIconWrap, { borderColor: 'rgba(103, 232, 249, 0.3)' }]}>
-              <Ionicons name="navigate-circle-outline" size={16} color={colors.accent} />
+    <View style={styles.container}>
+      <GestureDetector gesture={dragGesture}>
+        <View style={[styles.header, isDraggingActive && styles.headerDragging]}>
+          <View style={styles.headerLeft}>
+            <View style={styles.headerIconWrap}>
+              <Ionicons name="analytics" size={14} color={PATH_PLAN_GLASS.cyan} />
             </View>
-            <Text style={styles.distanceCardLabel}>DISTANCE TO TARGET</Text>
+            <Text style={styles.headerTitle}>MISSION PROGRESS</Text>
           </View>
-          <Text style={styles.distanceCardValue}>{distanceText}</Text>
+          <View style={styles.headerRight}>
+            <View style={[styles.distanceBadge, { backgroundColor: PATH_PLAN_GLASS.badgeBg, borderColor: PATH_PLAN_GLASS.border }]}>
+              <Text style={[styles.distanceBadgeText, { color: PATH_PLAN_GLASS.cyan }]}>
+                {currentWp ? currentWp.sn : 0}/{totalWaypoints}
+              </Text>
+            </View>
+            {onClose && (
+              <TouchableOpacity style={styles.headerCloseBtn} onPress={onClose} activeOpacity={0.7}>
+                <MaterialCommunityIcons name="close" size={14} color="#94A3B8" />
+              </TouchableOpacity>
+            )}
+          </View>
         </View>
-      </View>
+      </GestureDetector>
 
       {/* Counters Row */}
       <View style={styles.counterRow}>
         {/* Last Marked */}
         <View style={[styles.counter, styles.markedCounter]}>
-          <View style={[styles.counterAccent, { backgroundColor: colors.accent }]} />
+          <View style={[styles.counterAccent, { backgroundColor: PATH_PLAN_GLASS.cyan }]} />
           <View style={styles.counterInner}>
-              <Text style={[styles.counterLabel, { color: 'rgba(103, 232, 249, 0.8)' }]}>LAST</Text>
-            <Text style={[styles.counterValue, { color: colors.accent }]}>{markedCount}</Text>
+              <Text style={styles.counterLabel}>LAST</Text>
+            <Text style={[styles.counterValue, { color: PATH_PLAN_GLASS.cyan }]}>{markedCount}</Text>
           </View>
         </View>
 
         {/* Current */}
         <View style={[styles.counter, styles.currentCounter]}>
-          <View style={[styles.counterAccent, { backgroundColor: colors.accent }]} />
+          <View style={[styles.counterAccent, { backgroundColor: PATH_PLAN_GLASS.cyan }]} />
           <View style={styles.counterInner}>
-              <Text style={[styles.counterLabel, { color: 'rgba(103, 232, 249, 0.8)' }]}>CURRENT</Text>
-            <Text style={[styles.counterValue, { color: colors.accent }]}>
+              <Text style={styles.counterLabel}>CURRENT</Text>
+            <Text style={[styles.counterValue, { color: PATH_PLAN_GLASS.cyan }]}>
               {currentWp ? currentWp.sn : '0'}
             </Text>
           </View>
@@ -170,10 +133,10 @@ export const MissionProgressCard: React.FC<Props> = ({
 
         {/* Next */}
         <View style={[styles.counter, styles.nextCounter]}>
-          <View style={[styles.counterAccent, { backgroundColor: colors.accent }]} />
+          <View style={[styles.counterAccent, { backgroundColor: PATH_PLAN_GLASS.cyan }]} />
           <View style={styles.counterInner}>
-              <Text style={[styles.counterLabel, { color: 'rgba(103, 232, 249, 0.8)' }]}>NEXT</Text>
-            <Text style={[styles.counterValue, { color: colors.accent }]}>
+              <Text style={styles.counterLabel}>NEXT</Text>
+            <Text style={[styles.counterValue, { color: PATH_PLAN_GLASS.cyan }]}>
               {nextWp ? nextWp.sn : '0'}
             </Text>
           </View>
@@ -184,15 +147,14 @@ export const MissionProgressCard: React.FC<Props> = ({
 };
 
 const styles = StyleSheet.create({
-  card: {
+  container: {
     ...(PROGRESS_CARD_LAYOUT as any),
-    backgroundColor: colors.panelBg,
-    borderRadius: 12,
+    backgroundColor: PATH_PLAN_GLASS.panelBg,
+    borderRadius: PATH_PLAN_GLASS.borderRadius,
     borderWidth: 1,
-    borderColor: colors.border,
+    borderColor: PATH_PLAN_GLASS.border,
     padding: 16,
-    gap: 9,
-    marginBottom: 12,
+    gap: 12,
   },
 
   // ── HEADER ──
@@ -200,31 +162,28 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingBottom: 12,
+    paddingBottom: 10,
     borderBottomWidth: 1,
-    borderBottomColor: colors.border,
+    borderBottomColor: PATH_PLAN_GLASS.borderSubtle,
   },
+  headerDragging: {
+    borderBottomColor: PATH_PLAN_GLASS.dragBorder,
+    backgroundColor: PATH_PLAN_GLASS.dragBg,
+  },
+  headerRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  headerCloseBtn: PATH_PLAN_HEADER.closeBtn,
   headerLeft: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 10,
+    gap: 8,
+    flexShrink: 1,
   },
-  headerIconWrap: {
-    width: 32,
-    height: 32,
-    borderRadius: 10,
-    backgroundColor: 'rgba(59, 130, 246, 0.15)',
-    borderWidth: 1,
-    borderColor: 'rgba(59, 130, 246, 0.3)',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  headerTitle: {
-    color: colors.accent,
-    fontSize: 14,
-    fontWeight: '700',
-    letterSpacing: 3,
-  },
+  headerIconWrap: PATH_PLAN_HEADER.iconWrap,
+  headerTitle: PATH_PLAN_HEADER.title,
   headerBadge: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -234,60 +193,13 @@ const styles = StyleSheet.create({
     paddingHorizontal: 8,
     paddingVertical: 3,
   },
-
-  // ── DISTANCE CARD ──
-  distanceCard: {
-    flexDirection: 'row',
-    backgroundColor: colors.cardBg,
-    borderRadius: 10,
-    overflow: 'hidden',
-    borderWidth: 1,
-    borderColor: colors.border,
-  },
-  distanceAccent: {
-    width: 2.5,
-    backgroundColor: colors.accent,
-    alignSelf: 'stretch',
-  },
-  distanceCardInner: {
-    flex: 1,
-    padding: 10,
-    gap: 6,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  distanceIconWrap: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    borderWidth: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
   distanceBadge: {
     borderWidth: 1,
     borderRadius: 5,
     paddingHorizontal: 8,
     paddingVertical: 3,
   },
-  distanceBadgeText: {
-    fontSize: 11,
-    fontWeight: '700',
-    letterSpacing: 1,
-  },
-  distanceCardLabel: {
-    color: 'rgba(103, 232, 249, 0.8)',
-    fontSize: 9,
-    fontWeight: '700',
-    letterSpacing: 2,
-    textTransform: 'uppercase',
-  },
-  distanceCardValue: {
-    color: '#ffffff',
-    fontSize: 13,
-    fontWeight: '700',
-  },
+  distanceBadgeText: PATH_PLAN_HEADER.badgeText,
 
   // ── COUNTERS ──
   counterRow: {
@@ -326,15 +238,15 @@ const styles = StyleSheet.create({
     gap: 4,
   },
   counterLabel: {
-    fontSize: 8,
-    fontWeight: '700',
-    letterSpacing: 1,
-    color: colors.textSecondary,
+    fontSize: 7,
+    fontWeight: '600',
+    letterSpacing: 0.5,
+    color: PATH_PLAN_GLASS.label,
     marginBottom: 0.2,
   },
   counterValue: {
-    fontSize: 15,
-    fontWeight: '800',
+    fontSize: 12,
+    fontWeight: '700',
   },
   completedStatus: {
     flexDirection: 'row',

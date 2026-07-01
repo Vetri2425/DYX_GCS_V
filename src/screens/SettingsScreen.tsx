@@ -17,14 +17,40 @@ import { FailsafeModeSelector } from '../components/pathplan/FailsafeModeSelecto
 import { ServoConfigModal } from '../components/settings/ServoConfigModal';
 import { ParamBrowserModal } from '../components/settings/ParamBrowserModal';
 import { NTRIPProfile } from '../types/ntrip';
-import { LoraRTKStatus } from '../types/rtk';
 import { NTRIPProfileList } from '../components/missionreport/NTRIPProfileList';
 import { NTRIPProfileEditor } from '../components/missionreport/NTRIPProfileEditor';
+import {
+  getRtkStatus,
+  startLoraStream,
+  startNtripStream,
+  stopAllRtk,
+  stopLoraStream,
+  type RtkStatusResponse,
+} from '../services/rtkService';
 
 interface SettingsScreenProps {
   visible: boolean;
   onClose: () => void;
 }
+
+const getRtkFailureMessage = (err: unknown, fallback: string) => {
+  if (err instanceof Error) {
+    const responseBody = 'responseBody' in err ? String((err as { responseBody?: unknown }).responseBody ?? '') : '';
+    if (responseBody) {
+      try {
+        const parsed = JSON.parse(responseBody);
+        const detail = parsed?.detail;
+        if (typeof detail === 'string') {
+          return `${err.message}: ${detail}`;
+        }
+      } catch {
+        return `${err.message}: ${responseBody}`;
+      }
+    }
+    return err.message;
+  }
+  return fallback;
+};
 
 const SettingsScreenComponent: React.FC<SettingsScreenProps> = ({ visible, onClose }) => {
   const { gpsFailsafeMode, setGpsFailsafeMode, telemetry, services, connectionState, onMissionEvent } = useRover();
@@ -69,13 +95,9 @@ const SettingsScreenComponent: React.FC<SettingsScreenProps> = ({ visible, onClo
   const [isRTKSubmitting, setIsRTKSubmitting] = useState(false);
   const [rtkFeedback, setRtkFeedback] = useState<string | null>(null);
   const [rtkError, setRtkError] = useState<string | null>(null);
-  const [rtkConfig, setRtkConfig] = useState({
-    casterAddress: '',
-    port: '2101',
-    mountpoint: '',
-    username: '',
-    password: '',
-  });
+  const [rtkHealthy, setRtkHealthy] = useState(false);
+  const [rtkActiveSource, setRtkActiveSource] = useState<string | null>(null);
+  const [rtkStatusMessage, setRtkStatusMessage] = useState('Idle');
   const rtkMonitorRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // LoRa RTK State
@@ -85,15 +107,8 @@ const SettingsScreenComponent: React.FC<SettingsScreenProps> = ({ visible, onClo
   const [rtkSource, setRtkSource] = useState<'ntrip' | 'lora'>('ntrip');
   const [loraRunning, setLoraRunning] = useState(false);
   const [loraConnected, setLoraConnected] = useState(false);
-  const [loraStatus, setLoraStatus] = useState<LoraRTKStatus>({
-    status: 'disconnected',
-    message: 'Idle',
-    messages_received: 0,
-    bytes_received: 0,
-    error_count: 0,
-    is_connected: false,
-    is_running: false,
-  });
+  const [loraSerialPort, setLoraSerialPort] = useState('/dev/ttyUSB0');
+  const [loraBaudrate, setLoraBaudrate] = useState('115200');
   const [loraFeedback, setLoraFeedback] = useState<string | null>(null);
   const [loraError, setLoraError] = useState<string | null>(null);
 
@@ -108,36 +123,57 @@ const SettingsScreenComponent: React.FC<SettingsScreenProps> = ({ visible, onClo
     }
   }, []);
 
+  const applyRtkStatus = useCallback((status: RtkStatusResponse) => {
+    const source = (status.active_source ?? status.source ?? status.mode ?? '').toLowerCase();
+    const running = Boolean(status.running ?? status.active);
+    const healthy = Boolean(status.stream_healthy ?? status.healthy ?? status.connected);
+    const bytesReceived = status.bytes_received ?? 0;
+    const sourceIsLora = running && (source.includes('lora') || Boolean(status.serial_open));
+    const sourceIsNtrip = running && !sourceIsLora;
+    const sourceLabel = status.active_source ?? status.source ?? status.mode ?? null;
+
+    setRtkTotalBytes(bytesReceived);
+    setRtkHealthy(healthy);
+    setRtkActiveSource(sourceLabel);
+    setIsRTKStreamRunning(sourceIsNtrip);
+    setLoraRunning(sourceIsLora);
+    setLoraConnected(sourceIsLora && (Boolean(status.serial_open) || healthy));
+
+    if (!running) {
+      setRtkStatusMessage('Idle');
+      return false;
+    }
+
+    const age = status.last_valid_rtcm_age_s ?? status.last_frame_age_s;
+    const ageLabel = typeof age === 'number' ? ` • RTCM age ${age.toFixed(1)}s` : '';
+    setRtkStatusMessage(`${healthy ? 'Healthy' : 'Running'}${ageLabel}`);
+    return true;
+  }, []);
+
   const startRTKMonitor = useCallback(() => {
-    if (rtkMonitorRef.current || !services) return;
+    if (rtkMonitorRef.current) return;
     rtkMonitorRef.current = setInterval(async () => {
       try {
-        const rtkStatus = await services.getRTKStatus();
-        if (rtkStatus.success) {
-          setRtkTotalBytes(rtkStatus.ntrip?.total_bytes ?? 0);
-          setIsRTKStreamRunning(Boolean(rtkStatus.ntrip?.running));
-          if (!rtkStatus.ntrip?.running) {
-            stopRTKMonitor();
-          }
+        const rtkStatus = await getRtkStatus();
+        const running = applyRtkStatus(rtkStatus);
+        if (!running) {
+          stopRTKMonitor();
         }
       } catch (e) {
         console.error('RTK monitor error:', e);
       }
     }, 250);
-  }, [services, stopRTKMonitor]);
+  }, [applyRtkStatus, stopRTKMonitor]);
 
   // Check RTK status on component mount and modal open
   useEffect(() => {
-    if (visible && services) {
+    if (visible) {
       const checkRTKStatus = async () => {
         try {
-          const rtkStatus = await services.getRTKStatus();
-          if (rtkStatus.success) {
-            setIsRTKStreamRunning(rtkStatus.ntrip?.running || false);
-            setRtkTotalBytes(rtkStatus.ntrip?.total_bytes || 0);
-            if (rtkStatus.ntrip?.running) {
-              startRTKMonitor();
-            }
+          const rtkStatus = await getRtkStatus();
+          const running = applyRtkStatus(rtkStatus);
+          if (running) {
+            startRTKMonitor();
           }
         } catch (err) {
           console.error('Failed to get initial RTK status:', err);
@@ -148,7 +184,7 @@ const SettingsScreenComponent: React.FC<SettingsScreenProps> = ({ visible, onClo
     return () => {
       stopRTKMonitor();
     };
-  }, [visible, services, startRTKMonitor, stopRTKMonitor]);
+  }, [visible, applyRtkStatus, startRTKMonitor, stopRTKMonitor]);
 
   // RTK Button Handlers
   const handleOpenRTKModal = () => {
@@ -162,51 +198,100 @@ const SettingsScreenComponent: React.FC<SettingsScreenProps> = ({ visible, onClo
   };
 
   const handleSelectRTKProfile = async (profile: NTRIPProfile) => {
-    if (!services) {
-      Alert.alert('Error', 'RTK services not available');
-      return;
-    }
-
     setIsRTKSubmitting(true);
     setRtkFeedback(null);
     setRtkError(null);
 
     try {
-      // NRP_ROS LEGACY DISABLED — injectRTK (POST /api/rtk/inject). Use RTKInjectionScreen + rtkService.
-      console.warn('[RTK] NRP_ROS injectRTK disabled — use RTK Injection screen (PX4 /api/rtk/ntrip/start)');
-      const response = { success: false, message: 'NRP_ROS RTK inject disabled — use RTK Injection screen' };
-      // const response = await services.injectRTK(ntripUrl.trim());
+      const host = profile.casterAddress.trim();
+      const port = Number.parseInt(profile.port || '2101', 10);
+      const mountpoint = profile.mountpoint.trim();
+      const user = profile.username.trim();
+      const pass = profile.password.trim();
 
-      if (response.success) {
-        setRtkFeedback(response.message ?? 'RTK stream started successfully.');
+      if (!host || !mountpoint || !user || !pass || !Number.isFinite(port) || port < 1 || port > 65535) {
+        const message = 'NTRIP profile requires host, valid port, mountpoint, username, and password.';
+        setRtkError(message);
+        Alert.alert('Profile Incomplete', message);
+        return;
+      }
+
+      // Stop LoRa first if it is active; the backend has one RTK injection source at a time.
+      if (loraRunning) {
+        await stopLoraStream().catch(() => undefined);
+        setLoraRunning(false);
+        setLoraConnected(false);
+      }
+
+      console.log('[RTK] Starting NTRIP stream', {
+        host,
+        port,
+        mountpoint,
+        user,
+        pass: '<redacted>',
+      });
+
+      const response = await startNtripStream({
+        host,
+        port,
+        mountpoint,
+        user,
+        pass,
+      });
+      console.log('[RTK] NTRIP start response', {
+        mode: response.mode,
+        running: response.running,
+        healthy: response.healthy,
+        active_source: response.active_source,
+        desired_source: response.desired_source,
+        lifecycle_state: response.lifecycle_state,
+        last_error: response.last_error,
+        last_process_error: response.last_process_error,
+      });
+
+      if (applyRtkStatus(response)) {
+        setRtkFeedback('RTK stream started successfully.');
         setIsRTKStreamRunning(true);
         setActiveProfileId(profile.id);
         startRTKMonitor();
 
         setTimeout(async () => {
           try {
-            const status = await services.getRTKStatus();
-            if (status.success) {
-              if (status.ntrip?.running) {
-                Alert.alert('Success', `Connected to ${profile.name}`);
-              } else {
-                setRtkError('Stream started but connection failed. Check credentials and network.');
-                setIsRTKStreamRunning(false);
-                setActiveProfileId(null);
-                stopRTKMonitor();
-                Alert.alert('Connection Failed', 'Stream started but backend connection failed.\n\nCheck:\n• NTRIP credentials\n• Network connectivity\n• Caster availability');
-              }
+            const status = await getRtkStatus();
+            console.log('[RTK] NTRIP verify status', {
+              mode: status.mode,
+              running: status.running,
+              healthy: status.healthy,
+              active_source: status.active_source,
+              desired_source: status.desired_source,
+              lifecycle_state: status.lifecycle_state,
+              last_error: status.last_error,
+              last_process_error: status.last_process_error,
+            });
+            const running = applyRtkStatus(status);
+            if (running) {
+              Alert.alert('Success', `Connected to ${profile.name}`);
+            } else {
+              const message = status.last_error || status.last_process_error || 'Stream started but connection failed. Check credentials and network.';
+              setRtkError(message);
+              setIsRTKStreamRunning(false);
+              setActiveProfileId(null);
+              stopRTKMonitor();
+              Alert.alert('Connection Failed', message);
             }
           } catch (err) {
             console.warn('[RTK] Failed to verify connection status:', err);
           }
         }, 1000);
       } else {
-        setRtkError(response.message ?? 'Failed to start RTK stream.');
-        Alert.alert('Connection Failed', response.message ?? 'Failed to start RTK stream.');
+        const message = response.last_error || response.last_process_error || `NTRIP did not start (state: ${response.lifecycle_state ?? response.source_state ?? 'unknown'}).`;
+        console.warn('[RTK] NTRIP start returned non-running status', response);
+        setRtkError(message);
+        Alert.alert('Connection Failed', message);
       }
     } catch (err) {
-      const errorMsg = err instanceof Error ? err.message : 'Failed to start RTK stream.';
+      console.error('[RTK] NTRIP start failed', err);
+      const errorMsg = getRtkFailureMessage(err, 'Failed to start RTK stream.');
       setRtkError(errorMsg);
       Alert.alert('Error', errorMsg);
     } finally {
@@ -215,28 +300,31 @@ const SettingsScreenComponent: React.FC<SettingsScreenProps> = ({ visible, onClo
   };
 
   const handleStopRTKStream = async () => {
-    if (!services) {
-      Alert.alert('Error', 'RTK services not available');
-      return;
-    }
-
     setIsRTKSubmitting(true);
     setRtkFeedback(null);
     setRtkError(null);
 
     try {
-      const response = await services.stopRTK();
-
-      if (response.success) {
-        setRtkFeedback(response.message ?? 'RTK stream stopped successfully.');
-        setIsRTKStreamRunning(false);
-        setActiveProfileId(null);
-        stopRTKMonitor();
-      } else {
-        setRtkError(response.message ?? 'Failed to stop RTK stream.');
-      }
+      const response = await stopAllRtk();
+      console.log('[RTK] Stop all response', {
+        mode: response.mode,
+        running: response.running,
+        lifecycle_state: response.lifecycle_state,
+        last_error: response.last_error,
+      });
+      applyRtkStatus(response);
+      setRtkFeedback('RTK stream stopped successfully.');
+      setIsRTKStreamRunning(false);
+      setLoraRunning(false);
+      setLoraConnected(false);
+      setRtkHealthy(false);
+      setRtkActiveSource(null);
+      setRtkStatusMessage('Idle');
+      setActiveProfileId(null);
+      stopRTKMonitor();
     } catch (err) {
-      setRtkError(err instanceof Error ? err.message : 'Failed to stop RTK stream.');
+      console.error('[RTK] Stop all failed', err);
+      setRtkError(getRtkFailureMessage(err, 'Failed to stop RTK stream.'));
     } finally {
       setIsRTKSubmitting(false);
     }
@@ -262,83 +350,83 @@ const SettingsScreenComponent: React.FC<SettingsScreenProps> = ({ visible, onClo
     setSelectedProfile(null);
   };
 
-  // LoRa real-time status subscription when RTK modal is open
-  useEffect(() => {
-    if (!showRTKModal || !services?.onLoraRTKStatus) return;
-
-    const unsubscribe = services.onLoraRTKStatus((payload: LoraRTKStatus) => {
-      setLoraStatus((prev) => ({ ...prev, ...payload }));
-      const connected = Boolean(payload.is_connected) || payload.status === 'connected' || payload.status === 'streaming';
-      const running = Boolean(payload.is_running) || payload.status === 'streaming';
-      setLoraConnected(connected);
-      setLoraRunning(running);
-    });
-
-    // Get initial LoRa status
-    const initLoraStatus = async () => {
-      try {
-        const status = await services.getRTKStatus();
-        if (status.success && status.lora) {
-          setLoraRunning(Boolean(status.lora.running));
-          setLoraConnected(Boolean(status.lora.status?.is_connected));
-          if (status.lora.status) {
-            setLoraStatus((prev) => ({ ...prev, ...status.lora.status }));
-          }
-        }
-      } catch (err) {
-        console.error('[Settings] Failed to get initial LoRa status:', err);
-      }
-    };
-    initLoraStatus();
-    services.getLoraRTKStatus?.();
-
-    return unsubscribe;
-  }, [showRTKModal, services]);
-
   // LoRa Handlers
   const handleStartLora = async () => {
+    setIsRTKSubmitting(true);
     setLoraFeedback(null);
     setLoraError(null);
 
     try {
+      const serialPort = loraSerialPort.trim();
+      const baudrate = Number.parseInt(loraBaudrate || '115200', 10);
+
+      if (!serialPort || !Number.isFinite(baudrate) || baudrate <= 0) {
+        const message = 'LoRa requires a serial port and a valid baud rate.';
+        setLoraError(message);
+        Alert.alert('LoRa Config Incomplete', message);
+        return;
+      }
+
       // Stop NTRIP first if running
       if (isRTKStreamRunning) {
-        await services.stopRTK();
+        await stopAllRtk();
         setIsRTKStreamRunning(false);
         setActiveProfileId(null);
         stopRTKMonitor();
       }
 
-      const response = await services.startLoRaStream();
-      if (response.success) {
-        setLoraFeedback(response.message ?? 'LoRa stream started successfully.');
+      console.log('[RTK] Starting LoRa stream', { serial_port: serialPort, baudrate });
+      const response = await startLoraStream({ serial_port: serialPort, baudrate });
+      console.log('[RTK] LoRa start response', {
+        mode: response.mode,
+        running: response.running,
+        healthy: response.healthy,
+        active_source: response.active_source,
+        desired_source: response.desired_source,
+        lifecycle_state: response.lifecycle_state,
+        last_error: response.last_error,
+      });
+      if (applyRtkStatus(response)) {
+        setLoraFeedback('LoRa stream started successfully.');
         setLoraRunning(true);
-        if (response.status) {
-          setLoraStatus((prev) => ({ ...prev, ...response.status }));
-        }
+        startRTKMonitor();
       } else {
-        setLoraError(response.message ?? 'Failed to start LoRa stream.');
+        setLoraError(response.last_error || `LoRa did not start (state: ${response.lifecycle_state ?? response.source_state ?? 'unknown'}).`);
       }
     } catch (err) {
-      setLoraError(err instanceof Error ? err.message : 'Failed to start LoRa stream.');
+      console.error('[RTK] LoRa start failed', err);
+      setLoraError(getRtkFailureMessage(err, 'Failed to start LoRa stream.'));
+    } finally {
+      setIsRTKSubmitting(false);
     }
   };
 
   const handleStopLora = async () => {
+    setIsRTKSubmitting(true);
     setLoraFeedback(null);
     setLoraError(null);
 
     try {
-      const response = await services.stopLoRaStream();
-      if (response.success) {
-        setLoraFeedback(response.message ?? 'LoRa stream stopped successfully.');
-        setLoraRunning(false);
-        setLoraConnected(false);
-      } else {
-        setLoraError(response.message ?? 'Failed to stop LoRa stream.');
-      }
+      const response = await stopLoraStream();
+      console.log('[RTK] LoRa stop response', {
+        mode: response.mode,
+        running: response.running,
+        lifecycle_state: response.lifecycle_state,
+        last_error: response.last_error,
+      });
+      applyRtkStatus(response);
+      setLoraFeedback('LoRa stream stopped successfully.');
+      setLoraRunning(false);
+      setLoraConnected(false);
+      setRtkHealthy(false);
+      setRtkActiveSource(null);
+      setRtkStatusMessage('Idle');
+      stopRTKMonitor();
     } catch (err) {
-      setLoraError(err instanceof Error ? err.message : 'Failed to stop LoRa stream.');
+      console.error('[RTK] LoRa stop failed', err);
+      setLoraError(getRtkFailureMessage(err, 'Failed to stop LoRa stream.'));
+    } finally {
+      setIsRTKSubmitting(false);
     }
   };
 
@@ -346,10 +434,10 @@ const SettingsScreenComponent: React.FC<SettingsScreenProps> = ({ visible, onClo
     if (source === rtkSource) return;
     // Stop the other source if active
     if (source === 'ntrip' && loraRunning) {
-      await services.stopLoRaStream().catch(() => undefined);
+      await stopLoraStream().catch(() => undefined);
       setLoraRunning(false);
     } else if (source === 'lora' && isRTKStreamRunning) {
-      await services.stopNTRIPStream().catch(() => undefined);
+      await stopAllRtk().catch(() => undefined);
       setIsRTKStreamRunning(false);
       stopRTKMonitor();
     }
@@ -891,7 +979,7 @@ const SettingsScreenComponent: React.FC<SettingsScreenProps> = ({ visible, onClo
             {/* 1. RTK Injection Section */}
             <View style={styles.section}>
               <View style={styles.sectionHeader}>
-                <Text style={styles.sectionIcon}>�</Text>
+                <Text style={styles.sectionIcon}>📡</Text>
                 <Text style={styles.sectionTitle}>RTK Injection</Text>
               </View>
 
@@ -902,15 +990,15 @@ const SettingsScreenComponent: React.FC<SettingsScreenProps> = ({ visible, onClo
                   </Text>
                   <Text style={styles.settingDescription}>
                     {isRTKStreamRunning
-                      ? `NTRIP Connected • ${rtkTotalBytes} bytes received`
+                      ? `NTRIP Connected • ${rtkTotalBytes} bytes received • ${rtkStatusMessage}`
                       : loraRunning
-                        ? `LoRa Connected • ${loraStatus.bytes_received ?? 0} bytes received`
+                        ? `LoRa Connected • ${rtkTotalBytes} bytes received • ${rtkStatusMessage}`
                         : 'Not connected - Configure NTRIP or LoRa'}
                   </Text>
                 </View>
                 <View style={[styles.statusBadge, (isRTKStreamRunning || loraRunning) ? styles.statusBadgeOn : styles.statusBadgeOff]}>
                   <Text style={styles.statusBadgeText}>
-                    {(isRTKStreamRunning || loraRunning) ? 'ACTIVE' : 'INACTIVE'}
+                    {(isRTKStreamRunning || loraRunning) ? (rtkHealthy ? 'HEALTHY' : 'ACTIVE') : 'INACTIVE'}
                   </Text>
                 </View>
               </View>
@@ -1363,6 +1451,27 @@ const SettingsScreenComponent: React.FC<SettingsScreenProps> = ({ visible, onClo
                       </View>
                     </View>
 
+                    <View style={rtkModalStyles.manualEntrySection}>
+                      <Text style={rtkModalStyles.manualEntryTitle}>Receiver Port</Text>
+                      <TextInput
+                        style={rtkModalStyles.input}
+                        placeholder="/dev/ttyUSB0"
+                        placeholderTextColor="#94a3b8"
+                        value={loraSerialPort}
+                        onChangeText={setLoraSerialPort}
+                        autoCapitalize="none"
+                        autoCorrect={false}
+                      />
+                      <TextInput
+                        style={rtkModalStyles.input}
+                        placeholder="115200"
+                        placeholderTextColor="#94a3b8"
+                        value={loraBaudrate}
+                        onChangeText={setLoraBaudrate}
+                        keyboardType="numeric"
+                      />
+                    </View>
+
                     {/* LoRa Stats Grid */}
                     <View style={rtkModalStyles.loraStatsGrid}>
                       <View style={rtkModalStyles.loraStatBox}>
@@ -1372,19 +1481,19 @@ const SettingsScreenComponent: React.FC<SettingsScreenProps> = ({ visible, onClo
                         </Text>
                       </View>
                       <View style={rtkModalStyles.loraStatBox}>
-                        <Text style={rtkModalStyles.loraStatLabel}>Messages</Text>
-                        <Text style={rtkModalStyles.loraStatValue}>{loraStatus.messages_received ?? 0}</Text>
+                        <Text style={rtkModalStyles.loraStatLabel}>Source</Text>
+                        <Text style={rtkModalStyles.loraStatValue}>{rtkActiveSource ?? 'None'}</Text>
                       </View>
                       <View style={rtkModalStyles.loraStatBox}>
                         <Text style={rtkModalStyles.loraStatLabel}>Bytes</Text>
                         <Text style={rtkModalStyles.loraStatValue}>
-                          {((loraStatus.bytes_received ?? 0) / 1024).toFixed(2)} KB
+                          {(rtkTotalBytes / 1024).toFixed(2)} KB
                         </Text>
                       </View>
                       <View style={rtkModalStyles.loraStatBox}>
-                        <Text style={rtkModalStyles.loraStatLabel}>Errors</Text>
-                        <Text style={[rtkModalStyles.loraStatValue, (loraStatus.error_count ?? 0) > 0 ? { color: '#ef4444' } : {}]}>
-                          {loraStatus.error_count ?? 0}
+                        <Text style={rtkModalStyles.loraStatLabel}>Health</Text>
+                        <Text style={[rtkModalStyles.loraStatValue, { color: rtkHealthy ? '#10b981' : '#f59e0b' }]}>
+                          {rtkHealthy ? 'Healthy' : loraRunning ? 'Running' : 'Idle'}
                         </Text>
                       </View>
                     </View>
@@ -1393,7 +1502,7 @@ const SettingsScreenComponent: React.FC<SettingsScreenProps> = ({ visible, onClo
                     <View style={rtkModalStyles.loraMessageBox}>
                       <Text style={rtkModalStyles.loraMessageLabel}>Status</Text>
                       <Text style={rtkModalStyles.loraMessageValue}>
-                        {loraStatus.message || 'Waiting for status...'}
+                        {rtkStatusMessage}
                       </Text>
                     </View>
 
@@ -1402,14 +1511,14 @@ const SettingsScreenComponent: React.FC<SettingsScreenProps> = ({ visible, onClo
                       <TouchableOpacity
                         style={[rtkModalStyles.loraButton, rtkModalStyles.loraButtonStart, loraRunning && rtkModalStyles.loraButtonDisabled]}
                         onPress={handleStartLora}
-                        disabled={loraRunning}
+                        disabled={loraRunning || isRTKSubmitting}
                       >
                         <Text style={rtkModalStyles.loraButtonText}>▶ Start Stream</Text>
                       </TouchableOpacity>
                       <TouchableOpacity
                         style={[rtkModalStyles.loraButton, rtkModalStyles.loraButtonStop, !loraRunning && rtkModalStyles.loraButtonDisabled]}
                         onPress={handleStopLora}
-                        disabled={!loraRunning}
+                        disabled={!loraRunning || isRTKSubmitting}
                       >
                         <Text style={rtkModalStyles.loraButtonText}>⏹ Stop Stream</Text>
                       </TouchableOpacity>

@@ -122,7 +122,7 @@ export function useJoystickLease(
 
   const leaseInfo = leaseState === 'active' ? getLeaseInfo() : null;
   const isDisabled =
-    leaseError?.code === 'joystick_disabled' || !JOYSTICK_V2_ENABLED;
+    leaseError?.code === 'manual_control_disabled' || !JOYSTICK_V2_ENABLED;
 
   return {
     leaseState,

@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { MaterialCommunityIcons } from '@expo/vector-icons';
 import {
   View,
   Text,
@@ -15,6 +16,7 @@ import * as FileSystem from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
 import * as Print from 'expo-print';
 import { colors } from '../../theme/colors';
+import { PATH_PLAN_GLASS, PATH_PLAN_HEADER } from '../../constants/pathPlanGlass';
 import { Waypoint } from './types';
 import {
   generateExcel,
@@ -51,6 +53,8 @@ export type MissionReportExportProps = {
   missionMode?: string | null;
   onExport: () => void;
   onExportComplete?: () => void;
+  /** `glass` — compact HUD toolbar; `default` — legacy filled button */
+  variant?: 'default' | 'glass';
 };
 
 const MissionReportExport: React.FC<MissionReportExportProps> = ({
@@ -59,6 +63,7 @@ const MissionReportExport: React.FC<MissionReportExportProps> = ({
   missionMode,
   onExport,
   onExportComplete,
+  variant = 'default',
 }) => {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [exportFormat, setExportFormat] = useState<'excel' | 'pdf'>('excel');
@@ -387,11 +392,22 @@ const MissionReportExport: React.FC<MissionReportExportProps> = ({
     <>
       {/* Export Button */}
       <TouchableOpacity
-        style={styles.exportButton}
+        style={variant === 'glass' ? styles.exportButtonGlass : styles.exportButton}
         onPress={() => setIsModalOpen(true)}
+        activeOpacity={0.7}
+        accessibilityLabel="Export mission report"
       >
-        <Text style={styles.exportIcon}>📊</Text>
-        <Text style={styles.exportButtonText}>Export Report</Text>
+        {variant === 'glass' ? (
+          <>
+            <MaterialCommunityIcons name="file-export-outline" size={14} color={PATH_PLAN_GLASS.cyan} />
+            <Text style={styles.exportButtonTextGlass}>Export</Text>
+          </>
+        ) : (
+          <>
+            <Text style={styles.exportIcon}>📊</Text>
+            <Text style={styles.exportButtonText}>Export Report</Text>
+          </>
+        )}
       </TouchableOpacity>
       
 
@@ -663,6 +679,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 8,
   },
+  exportButtonGlass: {
+    ...PATH_PLAN_HEADER.actionBtn,
+    ...PATH_PLAN_HEADER.actionBtnAccent,
+  },
   exportIcon: {
     fontSize: 14,
   },
@@ -670,6 +690,10 @@ const styles = StyleSheet.create({
     color: colors.text,
     fontSize: 12,
     fontWeight: '600',
+  },
+  exportButtonTextGlass: {
+    ...PATH_PLAN_HEADER.actionBtnText,
+    ...PATH_PLAN_HEADER.actionBtnTextAccent,
   },
   modalOverlay: {
     flex: 1,
