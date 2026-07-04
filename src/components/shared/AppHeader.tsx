@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Image } from 'react-native';
+import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { colors } from '../../theme/colors';
 import { SettingsScreen } from '../../screens/SettingsScreen';
 import { useRover } from '../../context/RoverContext';
@@ -8,23 +9,27 @@ import { DashConfigDialog } from '../pathplan/DashConfigDialog';
 import { setMissionMode as setBackendMissionMode } from '../../services/missionModeService';
 
 interface Props {
-  activeTab: 'Dashboard' | 'Marking Plan' | 'Mission Progress' | 'Analytics';
-  onTabChange: (tab: 'Dashboard' | 'Marking Plan' | 'Mission Progress' | 'Analytics') => void;
+  activeTab: 'Dashboard' | 'Marking Plan' | 'Mission Progress';
+  onTabChange: (tab: 'Dashboard' | 'Marking Plan' | 'Mission Progress') => void;
 }
 
-export const AppHeader: React.FC<Props> = ({
+const AppHeaderInner: React.FC<Props> = ({
   activeTab,
   onTabChange,
 }) => {
+  // Only destructure what AppHeader actually uses — not telemetry.
+  // Note: useRover() still triggers re-renders on every telemetry tick because
+  // it subscribes to the full context. Phase 2 (context split) will fix this.
+  const { missionMode, setMissionMode } = useRover();
+
   const [showSettings, setShowSettings] = useState(false);
   const [showModeDialog, setShowModeDialog] = useState(false);
   const [showDashConfigDialog, setShowDashConfigDialog] = useState(false);
-  const { telemetry, missionMode, setMissionMode } = useRover();
-  
+
   const getModeIcon = (mode: string): string => {
     switch (mode.toLowerCase()) {
       case 'dgps mark':
-        return '📍';
+        return 'star-three-points-outline';
       case 'interval spray':
         return '💧';
       case 'survey':
@@ -133,15 +138,6 @@ export const AppHeader: React.FC<Props> = ({
             </Text>
           </TouchableOpacity>
 
-          <TouchableOpacity
-            style={[styles.tab, activeTab === 'Analytics' && styles.tabActive]}
-            onPress={() => onTabChange('Analytics')}
-            activeOpacity={0.7}
-          >
-            <Text style={[styles.tabText, activeTab === 'Analytics' && styles.tabTextActive]}>
-              Analytics
-            </Text>
-          </TouchableOpacity>
         </View>
       </View>
 
@@ -163,7 +159,16 @@ export const AppHeader: React.FC<Props> = ({
           accessibilityLabel="Change mission mode"
           accessibilityRole="button"
         >
-          <Text style={styles.modeIcon}>{getModeIcon(missionMode)}</Text>
+          {getModeIcon(missionMode) === 'star-three-points-outline' ? (
+            <MaterialCommunityIcons
+              name="star-three-points-outline"
+              size={14}
+              color="#67E8F9"
+              style={styles.modeIconMdi}
+            />
+          ) : (
+            <Text style={styles.modeIcon}>{getModeIcon(missionMode)}</Text>
+          )}
           <View>
             <Text style={styles.modeLabel}>MODE</Text>
             <Text style={styles.modeValue}>{missionMode}</Text>
@@ -288,6 +293,9 @@ const styles = StyleSheet.create({
     fontSize: 14,
     marginRight: 6,
   },
+  modeIconMdi: {
+    marginRight: 6,
+  },
   modeLabel: {
     color: '#94A3B8',
     fontSize: 9,
@@ -317,3 +325,8 @@ const styles = StyleSheet.create({
     color: '#ffffff',
   },
 });
+
+// Memoize AppHeader to prevent unnecessary re-renders from parent.
+// Note: This cannot prevent context-driven re-renders from useRover().
+// Phase 2 (context split) is needed to fully isolate AppHeader from 20Hz telemetry.
+export const AppHeader = React.memo(AppHeaderInner);

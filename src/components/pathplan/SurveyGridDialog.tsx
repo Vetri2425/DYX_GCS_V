@@ -111,7 +111,7 @@ export const SurveyGridDialog: React.FC<SurveyGridDialogProps> = ({
             {/* Header */}
             <View style={styles.header}>
               <Text style={styles.headerIcon}>📐</Text>
-              <Text style={styles.title}>Survey Grid Generator</Text>
+              <Text style={styles.title}>SURVEY GRID GENERATOR</Text>
               <View style={styles.badge}>
                 <Text style={styles.badgeText}>Lawnmower</Text>
               </View>
@@ -319,9 +319,11 @@ const styles = StyleSheet.create({
     fontSize: 24,
   },
   title: {
-    fontSize: 18,
+    fontSize: 13,
     fontWeight: '700',
-    color: colors.text,
+    color: colors.accent,
+    letterSpacing: 1,
+    textAlign: 'center',
     flex: 1,
   },
   badge: {

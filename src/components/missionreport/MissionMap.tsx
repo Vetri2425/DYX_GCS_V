@@ -2,6 +2,7 @@ import React, { useMemo, useRef, useState, useEffect } from 'react';
 import { View, StyleSheet, Text } from 'react-native';
 import { WebView } from 'react-native-webview';
 import { Fontisto } from '@expo/vector-icons';
+import { LEAFLET_JS, LEAFLET_CSS } from '../../assets/leafletBundle';
 import type { Waypoint } from './types';
 
 interface Props {
@@ -15,9 +16,12 @@ interface Props {
   armed?: boolean;        // For dynamic color: armed = green
   rtkFixType?: number;    // For dynamic color: RTK (5,6) = blue
   onToggleFullscreen?: () => void;
+  isVisible?: boolean;     // When false, pauses Leaflet rendering to save GPU/CPU
+  // Status map keyed by waypoint.sn → drives completion color on markers
+  statusMap?: Record<number, { status?: string } & Record<string, any>>;
 }
 
-export const MissionMap: React.FC<Props> = ({
+const MissionMapBase: React.FC<Props> = ({
   roverLat = 0.0,
   roverLon = 0.0,
   waypoints = [],
@@ -28,21 +32,16 @@ export const MissionMap: React.FC<Props> = ({
   armed = false,
   rtkFixType = 0,
   onToggleFullscreen,
+  isVisible = true,
+  statusMap,
 }) => {
   const webViewRef = useRef<WebView | null>(null);
   const [mapReady, setMapReady] = useState(false);
-  const lastUpdateRef = useRef<number>(0);
-  const UPDATE_THROTTLE_MS = 100; // Throttle position updates to 100ms (10 Hz) to match web app
   const mapInitializedRef = useRef(false);
-  // TRAIL DISABLED: lastTrailLengthRef commented out
-  // const lastTrailLengthRef = useRef<number>(0); // Track trail length for incremental updates
 
-  // Stable mission key to detect actual waypoint changes (not just ref changes)
-  // Use index to avoid duplicate key issues when sn values are duplicated
-  const missionKey = useMemo(
-    () => waypoints.map((wp, idx) => `${idx}-${wp.sn}-${wp.lat.toFixed(7)}-${wp.lon.toFixed(7)}`).join('|'),
-    [waypoints]
-  );
+  // Ref so waypoints injection reads latest active index without re-triggering a full reload
+  const activeWaypointIndexRef = useRef(activeWaypointIndex);
+  useEffect(() => { activeWaypointIndexRef.current = activeWaypointIndex; }, [activeWaypointIndex]);
 
   // Store initial rover data for one-time HTML generation
   const initialRoverData = useRef({
@@ -53,20 +52,10 @@ export const MissionMap: React.FC<Props> = ({
   });
 
   // Generate HTML with Leaflet map - ONLY ONCE on mount
+  // WAYPOINTS DEFERRED: HTML shell has empty waypoints; data injected after WebView loads.
+  // This avoids blocking the JS thread with JSON.stringify on 400+ waypoints during render.
   const mapHTML = useMemo(() => {
-    console.log('[MissionMap] Generating map HTML (ONE-TIME ONLY)');
-    const waypointsJSON = JSON.stringify(waypoints.map((wp, idx) => ({
-      id: wp.sn,
-      uniqueId: `wp-${idx}-${wp.sn}`, // Unique key combining index and sn
-      lat: wp.lat,
-      lon: wp.lon,
-      block: wp.block,
-      row: wp.row,
-      pile: wp.pile,
-      isActive: idx === activeWaypointIndex,
-      isStart: idx === 0,
-      isEnd: idx === waypoints.length - 1,
-    })));
+    console.log('[MissionMap] Generating map HTML shell (waypoints deferred to injectedJavaScript)');
 
     const roverData = JSON.stringify(initialRoverData.current);
 
@@ -75,8 +64,8 @@ export const MissionMap: React.FC<Props> = ({
 <html>
 <head>
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <style>${LEAFLET_CSS}</style>
+  <script>${LEAFLET_JS}</script>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     html, body, #map { width: 100%; height: 100%; }
@@ -158,13 +147,34 @@ export const MissionMap: React.FC<Props> = ({
       color: rgba(148, 163, 184, 1);
     }
 
+    /* ── Marker GPU acceleration ── */
+    .custom-marker {
+      will-change: transform;
+      transform: translateZ(0);
+      backface-visibility: hidden;
+      pointer-events: none;  /* READ-ONLY: No interactions needed */
+    }
+    
+    /* READ-ONLY OPTIMIZATION: Freeze marker pane for maximum performance */
+    .leaflet-marker-pane {
+      will-change: transform;
+      transform: translateZ(0);
+      backface-visibility: hidden;
+    }
+    
+    /* Optimize polyline rendering */
+    .leaflet-overlay-pane {
+      will-change: transform;
+      transform: translateZ(0);
+    }
+
   </style>
 </head>
 <body>
   <div id="map"></div>
 
   <div class="custom-controls">
-    <button class="control-btn" onclick="centerOnRover()">📍</button>
+    <button class="control-btn" onclick="centerOnRover()">✦</button>
     <button class="control-btn" onclick="fitToMission()">🗺️</button>
     <button class="control-btn" onclick="toggleFullscreen()">⛶</button>
   </div>
@@ -182,7 +192,10 @@ export const MissionMap: React.FC<Props> = ({
 
 
   <script>
-    const waypoints = ${waypointsJSON};
+    // Waypoints loaded AFTER WebView init via injectedJavaScript
+    // This avoids blocking JS thread with JSON.stringify during HTML generation
+    // Waypoints are injected as a global variable, then loaded into the map
+    const waypoints = [];
     const roverData = ${roverData};
 
     // Initialize map
@@ -195,6 +208,22 @@ export const MissionMap: React.FC<Props> = ({
       maxZoom: 26,
       zoomControl: false,
       attributionControl: false,
+      zoomAnimation: false,        // Disable zoom animation
+      markerZoomAnimation: false,  // Disable marker animation during zoom
+      updateWhenZooming: false,    // CRITICAL: Don't update layers during zoom
+      updateWhenIdle: true,        // Only update after zoom completes
+      preferCanvas: false,         // Keep SVG for better quality
+      fadeAnimation: false,        // Disable fade animations
+      zoomSnap: 1,                 // Snap to integer zoom levels for faster rendering
+      zoomDelta: 1,                // Zoom by 1 level at a time
+      trackResize: true,           // Track container resize
+      boxZoom: true,               // Enable box zoom
+      doubleClickZoom: true,       // Enable double click zoom
+      dragging: true,              // Enable dragging
+      tap: true,                   // Enable tap for mobile
+      touchZoom: true,             // Enable touch zoom
+      scrollWheelZoom: true,       // Enable scroll wheel zoom
+      wheelPxPerZoomLevel: 60,     // Smooth scroll zoom
     });
 
     L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
@@ -261,17 +290,19 @@ export const MissionMap: React.FC<Props> = ({
     }
 
     // Get marker icon based on waypoint type
+    // READ-ONLY OPTIMIZATION: Static markers with no interactivity
     function getWaypointIcon(wp, index) {
       let fill = '#f97316';
       if (wp.isStart) fill = '#16a34a';
       if (wp.isEnd) fill = '#dc2626';
-      if (wp.isActive) fill = '#22c55e';
-      
-      const size = wp.isActive ? 48 : 36;
-      
+      if (wp.isCompleted) fill = '#22c55e';
+
+      const size = 36; // constant size — active waypoints no longer enlarge
+
+      // PERFORMANCE: Minimal SVG, no filters, no animations
       const svgIcon = \`
         <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="\${size}" height="\${size}" fill="\${fill}">
-          <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7z"/>
+          <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7z" stroke="rgba(0,0,0,0.25)" stroke-width="0.4"/>
           <text x="12" y="10.5" font-family="sans-serif" font-size="12" font-weight="bold" fill="white" text-anchor="middle" dy=".3em">\${index + 1}</text>
         </svg>
       \`;
@@ -284,31 +315,59 @@ export const MissionMap: React.FC<Props> = ({
       });
     }
     
-    // Draw mission path
-    if (waypoints.length > 1) {
-      const pathCoords = waypoints.map(wp => [wp.lat, wp.lon]);
-      missionPolyline = L.polyline(pathCoords, {
-        color: '#3B82F6',
-        weight: 3,
-        dashArray: '5, 5',
-      }).addTo(map);
+    // PERFORMANCE: Chunked marker loading to prevent UI freeze with 100+ waypoints
+    // Optimized chunk size and timing for fastest initial render
+    function chunkedLoadMarkers(waypoints) {
+      const CHUNK_SIZE = 50;  // Larger chunks (50) for faster loading, still smooth
+      let currentIndex = 0;
+      
+      function loadNextChunk() {
+        const endIndex = Math.min(currentIndex + CHUNK_SIZE, waypoints.length);
+        
+        // Load this chunk
+        for (let i = currentIndex; i < endIndex; i++) {
+          const wp = waypoints[i];
+          const marker = L.marker([wp.lat, wp.lon], {
+            icon: getWaypointIcon(wp, i),
+            interactive: false,           // READ-ONLY: No interactions
+            bubblingMouseEvents: false,   // No event propagation
+          }).addTo(map);
+          
+          waypointMarkers.push(marker);
+        }
+        
+        currentIndex = endIndex;
+        
+        // If more markers to load, schedule next chunk immediately
+        if (currentIndex < waypoints.length) {
+          // Use requestAnimationFrame for smoother loading
+          requestAnimationFrame(loadNextChunk);
+        } else {
+          // All markers loaded - now draw mission path
+          if (waypoints.length > 1) {
+            const pathCoords = waypoints.map(wp => [wp.lat, wp.lon]);
+            missionPolyline = L.polyline(pathCoords, {
+              color: '#3B82F6',
+              weight: 3,
+              dashArray: '5, 5',
+              interactive: false,  // READ-ONLY: No interaction needed
+            }).addTo(map);
+          }
+          
+          // Notify that loading is complete
+          console.log('[MissionMap] All markers loaded:', waypoints.length);
+        }
+      }
+      
+      loadNextChunk();
     }
     
-    // Draw waypoint markers
-    waypoints.forEach((wp, index) => {
-      const marker = L.marker([wp.lat, wp.lon], {
-        icon: getWaypointIcon(wp, index),
-      }).addTo(map);
-      
-      marker.bindPopup(\`
-        <strong>Waypoint \${wp.id}</strong><br>
-        Row: \${wp.row || '-'}<br>
-        Block: \${wp.block || '-'}<br>
-        Pile: \${wp.pile || '-'}
-      \`);
-      
-      waypointMarkers.push(marker);
-    });
+    // Start chunked loading
+    if (waypoints.length > 0) {
+      chunkedLoadMarkers(waypoints);
+    }
+    
+    // Draw mission path will be added after markers are loaded (see chunkedLoadMarkers)
 
     // Draw rover marker and heading
     if (roverData.hasPosition) {
@@ -432,10 +491,165 @@ export const MissionMap: React.FC<Props> = ({
     function fitToMission() {
       const bounds = [];
       waypoints.forEach(wp => bounds.push([wp.lat, wp.lon]));
-      if (liveRoverPos) bounds.push([liveRoverPos.lat, liveRoverPos.lon]);
       if (bounds.length > 0) map.fitBounds(bounds, { padding: [50, 50], animate: true });
     }
+
+    // PERFORMANCE: Freeze marker pane during zoom to prevent re-renders
+    map.on('zoomstart', function() {
+      const markerPane = map.getPane('markerPane');
+      if (markerPane) {
+        markerPane.style.willChange = 'transform';
+        markerPane.style.pointerEvents = 'none';
+      }
+    });
     
+    map.on('zoomend', function() {
+      const markerPane = map.getPane('markerPane');
+      if (markerPane) {
+        markerPane.style.pointerEvents = '';
+      }
+    });
+
+    // Track active waypoint index for highlight updates
+    let currentActiveIndex = waypoints.findIndex(wp => wp.isActive);
+    if (currentActiveIndex === -1) currentActiveIndex = -1;
+
+    // READ-ONLY OPTIMIZATION: Fast active waypoint update via direct DOM manipulation
+    // Size stays constant at 36; color respects start/end/completed state.
+    // Completion state is authoritative — active waypoints do not override completion color.
+    window.setActiveWaypoint = function(index) {
+      if (index === currentActiveIndex) return;
+
+      // Deactivate previous marker - direct DOM update
+      if (currentActiveIndex >= 0 && currentActiveIndex < waypointMarkers.length) {
+        const prevWp = waypoints[currentActiveIndex];
+        const prevMarker = waypointMarkers[currentActiveIndex];
+        const prevEl = prevMarker.getElement();
+        if (prevEl) {
+          const svg = prevEl.querySelector('svg');
+          const path = prevEl.querySelector('path');
+          if (svg && path) {
+            const isStart = currentActiveIndex === 0;
+            const isEnd = currentActiveIndex === waypoints.length - 1;
+            let fill = isStart ? '#16a34a' : (isEnd ? '#dc2626' : '#f97316');
+            if (prevWp && prevWp.isCompleted) fill = '#22c55e';
+            svg.setAttribute('width', '36');
+            svg.setAttribute('height', '36');
+            path.setAttribute('fill', fill);
+          }
+        }
+      }
+
+      // Activate new marker - direct DOM update
+      if (index >= 0 && index < waypointMarkers.length) {
+        const newWp = waypoints[index];
+        const newMarker = waypointMarkers[index];
+        const newEl = newMarker.getElement();
+        if (newEl) {
+          const svg = newEl.querySelector('svg');
+          const path = newEl.querySelector('path');
+          if (svg && path) {
+            const isStart = index === 0;
+            const isEnd = index === waypoints.length - 1;
+            let fill = isStart ? '#16a34a' : (isEnd ? '#dc2626' : '#f97316');
+            if (newWp && newWp.isCompleted) fill = '#22c55e';
+            svg.setAttribute('width', '36');
+            svg.setAttribute('height', '36');
+            path.setAttribute('fill', fill);
+          }
+        }
+      }
+
+      currentActiveIndex = index;
+    };
+
+    // Patch marker colors from completion flags without recreating markers.
+    // Accepts a boolean array aligned to the global waypoints array.
+    window.updateWaypointStatuses = function(flags) {
+      if (!Array.isArray(flags)) return;
+      const n = Math.min(flags.length, waypointMarkers.length);
+      for (let i = 0; i < n; i++) {
+        if (waypoints[i]) waypoints[i].isCompleted = !!flags[i];
+        const marker = waypointMarkers[i];
+        const el = marker && marker.getElement ? marker.getElement() : null;
+        if (!el) continue;
+        const svg = el.querySelector('svg');
+        const path = el.querySelector('path');
+        if (!svg || !path) continue;
+        const isStart = i === 0;
+        const isEnd = i === waypoints.length - 1;
+        let fill = isStart ? '#16a34a' : (isEnd ? '#dc2626' : '#f97316');
+        if (flags[i]) fill = '#22c55e';
+        path.setAttribute('fill', fill);
+        svg.setAttribute('width', '36');
+        svg.setAttribute('height', '36');
+      }
+    };
+
+    // Clear all waypoint markers and polyline from the map
+    window.clearAllMarkers = function() {
+      try {
+        // Remove all waypoint markers
+        for (let i = 0; i < waypointMarkers.length; i++) {
+          if (waypointMarkers[i] && map.hasLayer(waypointMarkers[i])) {
+            map.removeLayer(waypointMarkers[i]);
+          }
+        }
+        waypointMarkers.length = 0;
+
+        // Remove mission polyline
+        if (missionPolyline) {
+          map.removeLayer(missionPolyline);
+          missionPolyline = null;
+        }
+      } catch(e) {
+        console.error('[MissionMap] clearAllMarkers error:', e);
+      }
+    };
+
+    // Receive waypoints from React Native after WebView loads
+    // Called via injectedJavaScript whenever waypoints change
+    window.loadWaypointsFromReactNative = function(wpArray) {
+      try {
+        // wpArray is already an array (injected as global), not a JSON string
+        const newWaypoints = Array.isArray(wpArray) ? wpArray : (typeof wpArray === 'string' ? JSON.parse(wpArray) : []);
+        if (!Array.isArray(newWaypoints) || newWaypoints.length === 0) return;
+
+        // Clear existing markers before loading new ones
+        window.clearAllMarkers();
+
+        // Update global waypoints array
+        waypoints.length = 0;
+        for (let i = 0; i < newWaypoints.length; i++) {
+          waypoints.push(newWaypoints[i]);
+        }
+
+        // Track active waypoint index
+        currentActiveIndex = waypoints.findIndex(wp => wp.isActive);
+
+        // Center map on first waypoint or rover
+        if (waypoints.length > 0) {
+          map.setView([waypoints[0].lat, waypoints[0].lon], 15);
+        }
+
+        // Load markers in chunks
+        chunkedLoadMarkers(waypoints);
+
+        // Re-fit bounds after a short delay
+        setTimeout(function() {
+          map.invalidateSize();
+          const b = [];
+          waypoints.forEach(wp => b.push([wp.lat, wp.lon]));
+          if (liveRoverPos) b.push([liveRoverPos.lat, liveRoverPos.lon]);
+          if (b.length > 0) map.fitBounds(b, { padding: [50, 50] });
+        }, 200);
+
+        console.log('[MissionMap] Loaded ' + waypoints.length + ' waypoints from React Native');
+      } catch (e) {
+        console.error('[MissionMap] Failed to load waypoints:', e);
+      }
+    };
+
     // Notify React Native that map is ready
     setTimeout(() => {
       if (window.ReactNativeWebView) {
@@ -447,6 +661,99 @@ export const MissionMap: React.FC<Props> = ({
 </html>
     `;
   }, []); // Empty dependencies - HTML generated ONLY ONCE on mount, NEVER regenerated
+
+  // Memoize source prop to avoid new object reference every render
+  const mapSource = useMemo(() => ({ html: mapHTML }), [mapHTML]);
+
+  // Inject waypoints after WebView loads AND when waypoints change
+  useEffect(() => {
+    if (!mapReady || !webViewRef.current) return;
+
+    // Empty waypoints — clear the map
+    if (!waypoints || waypoints.length === 0) {
+      webViewRef.current.injectJavaScript(`
+        (function() {
+          try {
+            if (window.clearAllMarkers) window.clearAllMarkers();
+            if (missionPolyline) { map.removeLayer(missionPolyline); missionPolyline = null; }
+            waypoints.length = 0;
+          } catch(e) { console.error('[MissionMap] Clear error:', e); }
+        })();
+        true;
+      `);
+      return;
+    }
+
+    const waypointsArray = waypoints.map((wp, idx) => {
+      const wpStatus = statusMap?.[wp.sn];
+      const isCompleted =
+        wpStatus?.status === 'completed' || wpStatus?.status === 'skipped';
+      return {
+        id: wp.sn,
+        uniqueId: `wp-${idx}-${wp.sn}`,
+        lat: wp.lat,
+        lon: wp.lon,
+        block: wp.block,
+        row: wp.row,
+        pile: wp.pile,
+        isActive: idx === activeWaypointIndexRef.current,
+        isStart: idx === 0,
+        isEnd: idx === waypoints.length - 1,
+        isCompleted,
+      };
+    });
+
+    webViewRef.current.injectJavaScript(`
+      (function() {
+        window.__waypointsData = ${JSON.stringify(waypointsArray)};
+        if (window.loadWaypointsFromReactNative) {
+          window.loadWaypointsFromReactNative(window.__waypointsData);
+        }
+        delete window.__waypointsData;
+      })();
+      true;
+    `);
+    console.log(`[MissionMap] Injected ${waypoints.length} waypoints`);
+  }, [mapReady, waypoints]); // activeWaypointIndex handled by the dedicated setActiveWaypoint effect below
+
+  // Pause/resume Leaflet rendering when visibility changes
+  // This stops tile loading, marker animation, and continuous redraws when hidden
+  useEffect(() => {
+    if (!mapReady || !webViewRef.current) return;
+
+    if (isVisible) {
+      // Resume: invalidate size and re-enable interactions
+      webViewRef.current.injectJavaScript(`
+        (function() {
+          try {
+            if (typeof map !== 'undefined' && map) {
+              map.invalidateSize();
+              map.dragging.enable();
+              map.touchZoom.enable();
+              map.doubleClickZoom.enable();
+              map.scrollWheelZoom.enable();
+            }
+          } catch(e) { console.error('[MissionMap] Resume error:', e); }
+        })();
+        true;
+      `);
+    } else {
+      // Pause: stop tile loading, disable interactions, reduce redraws
+      webViewRef.current.injectJavaScript(`
+        (function() {
+          try {
+            if (typeof map !== 'undefined' && map) {
+              map.dragging.disable();
+              map.touchZoom.disable();
+              map.doubleClickZoom.disable();
+              map.scrollWheelZoom.disable();
+            }
+          } catch(e) { console.error('[MissionMap] Pause error:', e); }
+        })();
+        true;
+      `);
+    }
+  }, [isVisible, mapReady]);
 
   // Initialize rover marker once when map is ready
   useEffect(() => {
@@ -560,8 +867,35 @@ export const MissionMap: React.FC<Props> = ({
     };
   }, []);
 
-  // Update rover position, heading, and trail via JavaScript injection
+  // Update active waypoint highlight when index changes
   useEffect(() => {
+    if (!mapReady || !webViewRef.current || activeWaypointIndex === undefined || activeWaypointIndex === null) return;
+    webViewRef.current.injectJavaScript(
+      `(function() { if (window.setActiveWaypoint) window.setActiveWaypoint(${activeWaypointIndex}); })(); true;`
+    );
+  }, [activeWaypointIndex, mapReady]);
+
+  // Lightweight bridge: sync completion flags into the WebView without recreating markers.
+  // Sends a boolean array aligned to the current waypoints order whenever statusMap changes.
+  useEffect(() => {
+    if (!mapReady || !webViewRef.current) return;
+    if (!waypoints || waypoints.length === 0) return;
+    const completedFlags = waypoints.map(
+      (wp) =>
+        statusMap?.[wp.sn]?.status === 'completed' ||
+        statusMap?.[wp.sn]?.status === 'skipped'
+    );
+    webViewRef.current.injectJavaScript(
+      `(function() { if (window.updateWaypointStatuses) window.updateWaypointStatuses(${JSON.stringify(
+        completedFlags
+      )}); })(); true;`
+    );
+  }, [statusMap, mapReady, waypoints]);
+
+  // Update rover position, heading, and trail via JavaScript injection
+  // Skip updates when not visible to save JS thread and GPU
+  useEffect(() => {
+    if (!isVisible) return; // Don't inject JS when tab is hidden
     if (!mapReady || !webViewRef.current || !mapInitializedRef.current) {
       if (Math.random() < 0.05) { // Log 5% of skipped updates for debugging
         console.log('[MissionMap] Skipping rover update - mapReady:', mapReady, 'webViewRef:', !!webViewRef.current, 'mapInit:', mapInitializedRef.current);
@@ -577,7 +911,7 @@ export const MissionMap: React.FC<Props> = ({
 
     // Debug log to verify updates are being processed (10% sample rate to avoid spam)
     // if (Math.random() < 0.1) {
-    //   console.log('[MissionMap] 📍 Updating rover position:', {
+    //   console.log('[MissionMap] ✦ Updating rover position:', {
     //     lat: roverLat.toFixed(7),
     //     lon: roverLon.toFixed(7),
     //     heading: heading !== null ? heading.toFixed(1) + '°' : 'N/A',
@@ -723,13 +1057,13 @@ export const MissionMap: React.FC<Props> = ({
 
     webViewRef.current.injectJavaScript(updateScript);
     // TRAIL DISABLED: trailPoints removed from dependencies
-  }, [roverLat, roverLon, heading, armed, rtkFixType, /* trailPoints, */ mapReady]);
+  }, [roverLat, roverLon, heading, armed, rtkFixType, /* trailPoints, */ mapReady, isVisible]);
 
   return (
     <View style={styles.mapContainer}>
       <WebView
         ref={webViewRef}
-        source={{ html: mapHTML }}
+        source={mapSource}
         style={{ flex: 1, borderRadius: 12, backgroundColor: '#1e293b' }}
         onMessage={(event) => {
           try {
@@ -744,10 +1078,14 @@ export const MissionMap: React.FC<Props> = ({
                   (function() {
                     try {
                       map.invalidateSize();
-                      const b = [];
-                      waypoints.forEach(wp => b.push([wp.lat, wp.lon]));
-                      if (liveRoverPos) b.push([liveRoverPos.lat, liveRoverPos.lon]);
-                      if (b.length > 0) map.fitBounds(b, { padding: [50, 50] });
+                      if (waypoints.length > 0) {
+                        const b = [];
+                        waypoints.forEach(wp => b.push([wp.lat, wp.lon]));
+                        if (liveRoverPos) b.push([liveRoverPos.lat, liveRoverPos.lon]);
+                        if (b.length > 0) map.fitBounds(b, { padding: [50, 50] });
+                      } else if (liveRoverPos) {
+                        map.setView([liveRoverPos.lat, liveRoverPos.lon], 17);
+                      }
                     } catch(e) {}
                   })();
                   true;
@@ -762,8 +1100,11 @@ export const MissionMap: React.FC<Props> = ({
         }}
         javaScriptEnabled={true}
         domStorageEnabled={true}
-        startInLoadingState={true}
+        startInLoadingState={false}  // PERFORMANCE: Don't show loading indicator, faster init
         scalesPageToFit={false}
+        androidLayerType="hardware"  // ANDROID: Force hardware acceleration
+        cacheEnabled={true}  // PERFORMANCE: Enable caching
+        cacheMode="LOAD_DEFAULT"  // Use cache when available
       />
 
       {/* Compass with heading */}
@@ -829,3 +1170,5 @@ const styles = StyleSheet.create({
     zIndex: 2,
   },
 });
+
+export const MissionMap = React.memo(MissionMapBase);

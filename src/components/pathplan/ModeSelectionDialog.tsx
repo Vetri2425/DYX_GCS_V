@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Modal, ScrollView } from 'react-native';
+import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { colors } from '../../theme/colors';
 
 interface ModeSelectionDialogProps {
@@ -10,7 +11,7 @@ interface ModeSelectionDialogProps {
 }
 
 const AVAILABLE_MODES = [
-  { id: 'DGPS Mark', label: 'DGPS Mark', description: 'Mark points mission', icon: '📍' },
+  { id: 'DGPS Mark', label: 'DGPS Mark', description: 'Mark points mission', icon: 'star-three-points-outline', isMdi: true },
   { id: 'Dash', label: 'Dash', description: 'ON/OFF spray pattern with configurable distance', icon: '➖' },
   { id: 'Continuous', label: 'Continuous', description: 'Continuous marking mode', icon: '🔄' },
   { id: 'Survey', label: 'Survey', description: 'Area survey mission', icon: '🗺️' },
@@ -63,7 +64,16 @@ export const ModeSelectionDialog: React.FC<ModeSelectionDialogProps> = ({
                   activeOpacity={0.7}
                 >
                   <View style={styles.modeHeader}>
-                    <Text style={styles.modeIcon}>{mode.icon}</Text>
+                    {(mode as any).isMdi ? (
+                      <MaterialCommunityIcons
+                        name={(mode as any).icon}
+                        size={32}
+                        color={selectedMode === mode.id ? colors.primary : colors.textSecondary}
+                        style={styles.modeIconMdi}
+                      />
+                    ) : (
+                      <Text style={styles.modeIcon}>{mode.icon}</Text>
+                    )}
                     <View style={styles.modeInfo}>
                       <Text
                         style={[
@@ -196,6 +206,9 @@ const styles = StyleSheet.create({
   },
   modeIcon: {
     fontSize: 32,
+    marginRight: 12,
+  },
+  modeIconMdi: {
     marginRight: 12,
   },
   modeInfo: {

@@ -7,6 +7,8 @@ import Animated, {
   useAnimatedProps,
   withTiming,
   withSpring,
+  withDecay,
+  cancelAnimation,
   Easing,
   runOnJS,
 } from 'react-native-reanimated';
@@ -66,15 +68,22 @@ export const ManualPathConnectionCanvas: React.FC<Props> = ({
   const [isSequenceExpanded, setIsSequenceExpanded] = useState(true);
   const [markedForDeletion, setMarkedForDeletion] = useState<number[]>([]);
   const canvasRef = useRef<View>(null);
+  const lastTapTimestampRef = useRef<number>(0);
 
   // Pan/Zoom shared values for 60fps performance
   const scale = useSharedValue(1);
-  const offset = useSharedValue({ x: 0, y: 0 });
+  const offsetX = useSharedValue(0);
+  const offsetY = useSharedValue(0);
   // Saved values for pinch focal-point zoom
   const savedScale = useSharedValue(1);
-  const savedOffset = useSharedValue({ x: 0, y: 0 });
+  const savedOffsetX = useSharedValue(0);
+  const savedOffsetY = useSharedValue(0);
   const pinchFocalX = useSharedValue(0);
   const pinchFocalY = useSharedValue(0);
+
+  // NOTE: All gesture/animation code must use offsetX/offsetY (scalar shared values).
+  // Do NOT use "offset.value = { x, y }" — that pattern requires an object shared value
+  // which is not declared here and causes Reanimated crashes.
 
   // Fence follower shared values (60fps, UI-thread driven)
   const fenceX = useSharedValue(0);
@@ -134,12 +143,12 @@ export const ManualPathConnectionCanvas: React.FC<Props> = ({
     // Center the drawing within the padded area
     const scaledW = geoW * uniformScale;
     const scaledH = geoH * uniformScale;
-    const offsetX = canvasSize.width  * padding + (drawW - scaledW) / 2;
-    const offsetY = canvasSize.height * padding + (drawH - scaledH) / 2;
+    const padOffX = canvasSize.width  * padding + (drawW - scaledW) / 2;
+    const padOffY = canvasSize.height * padding + (drawH - scaledH) / 2;
 
-    const x = offsetX + (current.x - min.x) * uniformScale;
+    const x = padOffX + (current.x - min.x) * uniformScale;
     // Flip Y because screen Y goes down, geographic Y goes up
-    const y = offsetY + (max.y - current.y) * uniformScale;
+    const y = padOffY + (max.y - current.y) * uniformScale;
 
     return { x, y };
   }, []);
@@ -192,6 +201,12 @@ export const ManualPathConnectionCanvas: React.FC<Props> = ({
 
   // Handle waypoint tap to connect
   const handleWaypointTap = (waypointId: number) => {
+    // Debounce: reject double-fires from gesture system + TouchableOpacity
+    // racing on the same touch within 300ms
+    const now = Date.now();
+    if (now - lastTapTimestampRef.current < 300) return;
+    lastTapTimestampRef.current = now;
+
     if (connectionMode === 'del') {
       handleDeleteTap(waypointId);
       return;
@@ -303,10 +318,8 @@ export const ManualPathConnectionCanvas: React.FC<Props> = ({
     const targetOffsetY = canvasSize.height / 2 - centerY * newScale;
 
     scale.value = withTiming(newScale, { duration: 300, easing: Easing.bezier(0.25, 0.1, 0.25, 1) });
-    offset.value = withTiming(
-      { x: targetOffsetX, y: targetOffsetY },
-      { duration: 300, easing: Easing.bezier(0.25, 0.1, 0.25, 1) }
-    );
+    offsetX.value = withTiming(targetOffsetX, { duration: 300, easing: Easing.bezier(0.25, 0.1, 0.25, 1) });
+    offsetY.value = withTiming(targetOffsetY, { duration: 300, easing: Easing.bezier(0.25, 0.1, 0.25, 1) });
   };
 
   const handleZoomIn = () => {
@@ -315,10 +328,11 @@ export const ManualPathConnectionCanvas: React.FC<Props> = ({
     // Zoom toward canvas center (focal-point math)
     const cx = canvasSize.width / 2;
     const cy = canvasSize.height / 2;
-    const newOffsetX = cx - (cx - offset.value.x) * (newScale / oldScale);
-    const newOffsetY = cy - (cy - offset.value.y) * (newScale / oldScale);
+    const newOffX = cx - (cx - offsetX.value) * (newScale / oldScale);
+    const newOffY = cy - (cy - offsetY.value) * (newScale / oldScale);
     scale.value = withTiming(newScale, { duration: 200, easing: Easing.bezier(0.25, 0.1, 0.25, 1) });
-    offset.value = withTiming({ x: newOffsetX, y: newOffsetY }, { duration: 200, easing: Easing.bezier(0.25, 0.1, 0.25, 1) });
+    offsetX.value = withTiming(newOffX, { duration: 200, easing: Easing.bezier(0.25, 0.1, 0.25, 1) });
+    offsetY.value = withTiming(newOffY, { duration: 200, easing: Easing.bezier(0.25, 0.1, 0.25, 1) });
   };
 
   const handleZoomOut = () => {
@@ -326,10 +340,11 @@ export const ManualPathConnectionCanvas: React.FC<Props> = ({
     const newScale = Math.max(oldScale / 1.2, 0.5);
     const cx = canvasSize.width / 2;
     const cy = canvasSize.height / 2;
-    const newOffsetX = cx - (cx - offset.value.x) * (newScale / oldScale);
-    const newOffsetY = cy - (cy - offset.value.y) * (newScale / oldScale);
+    const newOffX = cx - (cx - offsetX.value) * (newScale / oldScale);
+    const newOffY = cy - (cy - offsetY.value) * (newScale / oldScale);
     scale.value = withTiming(newScale, { duration: 200, easing: Easing.bezier(0.25, 0.1, 0.25, 1) });
-    offset.value = withTiming({ x: newOffsetX, y: newOffsetY }, { duration: 200, easing: Easing.bezier(0.25, 0.1, 0.25, 1) });
+    offsetX.value = withTiming(newOffX, { duration: 200, easing: Easing.bezier(0.25, 0.1, 0.25, 1) });
+    offsetY.value = withTiming(newOffY, { duration: 200, easing: Easing.bezier(0.25, 0.1, 0.25, 1) });
   };
 
   // Cancel the idle timer
@@ -361,8 +376,8 @@ export const ManualPathConnectionCanvas: React.FC<Props> = ({
     const relX = absX - canvasOrigin.x;
     const relY = absY - canvasOrigin.y;
     return {
-      x: (relX - offset.value.x) / scale.value,
-      y: (relY - offset.value.y) / scale.value,
+      x: (relX - offsetX.value) / scale.value,
+      y: (relY - offsetY.value) / scale.value,
     };
   }, [canvasOrigin]);
 
@@ -426,13 +441,11 @@ export const ManualPathConnectionCanvas: React.FC<Props> = ({
     const oldScale = scale.value;
     const newScale = Math.min(oldScale * 2, 5);
     // Focal-point zoom: keep the tapped point fixed
-    const newOffsetX = relX - (relX - offset.value.x) * (newScale / oldScale);
-    const newOffsetY = relY - (relY - offset.value.y) * (newScale / oldScale);
+    const newOffX = relX - (relX - offsetX.value) * (newScale / oldScale);
+    const newOffY = relY - (relY - offsetY.value) * (newScale / oldScale);
     scale.value = withTiming(newScale, { duration: 300, easing: Easing.bezier(0.25, 0.1, 0.25, 1) });
-    offset.value = withTiming(
-      { x: newOffsetX, y: newOffsetY },
-      { duration: 300, easing: Easing.bezier(0.25, 0.1, 0.25, 1) }
-    );
+    offsetX.value = withTiming(newOffX, { duration: 300, easing: Easing.bezier(0.25, 0.1, 0.25, 1) });
+    offsetY.value = withTiming(newOffY, { duration: 300, easing: Easing.bezier(0.25, 0.1, 0.25, 1) });
   }, [canvasOrigin]);
 
   // ── Gesture: long-press (500ms) then drag to connect ──
@@ -465,37 +478,56 @@ export const ManualPathConnectionCanvas: React.FC<Props> = ({
   // Long-press must activate first, then pan tracking continues
   const dragSequence = Gesture.Simultaneous(longPressGesture, drawPanGesture);
 
-  // Pan gesture for map navigation – only when NOT in drag mode
+  // Pan gesture for map navigation – requires 2 fingers when in tap/del mode, 1 finger in pan mode
   const panGesture = Gesture.Pan()
-    .enabled(connectionMode === 'pan' || connectionMode !== 'drag')
+    .enabled(connectionMode !== 'drag')
+    .minPointers(connectionMode === 'pan' ? 1 : 2)
     .onBegin(() => {
-      savedOffset.value = offset.value;
+      savedOffsetX.value = offsetX.value;
+      savedOffsetY.value = offsetY.value;
     })
     .onUpdate((event) => {
-      offset.value = {
-        x: savedOffset.value.x + event.translationX,
-        y: savedOffset.value.y + event.translationY,
-      };
+      offsetX.value = savedOffsetX.value + event.translationX;
+      offsetY.value = savedOffsetY.value + event.translationY;
+    })
+    .onEnd((event) => {
+      // Momentum deceleration for smooth pan release
+      offsetX.value = withDecay({ velocity: event.velocityX, deceleration: 0.997 });
+      offsetY.value = withDecay({ velocity: event.velocityY, deceleration: 0.997 });
     });
 
-  // Focal-point pinch zoom
+  // Focal-point pinch zoom — incremental per-frame math (no drift)
   const pinchGesture = Gesture.Pinch()
     .onBegin((e) => {
+      // Snapshot current state for the first frame
       savedScale.value = scale.value;
-      savedOffset.value = offset.value;
+      savedOffsetX.value = offsetX.value;
+      savedOffsetY.value = offsetY.value;
       pinchFocalX.value = e.focalX;
       pinchFocalY.value = e.focalY;
     })
     .onUpdate((event) => {
-      const newScale = Math.min(Math.max(savedScale.value * event.scale, 0.5), 5);
-      // Focal-point math: keep the pinch center fixed on screen
-      const fX = pinchFocalX.value;
-      const fY = pinchFocalY.value;
-      offset.value = {
-        x: fX - (fX - savedOffset.value.x) * (newScale / savedScale.value),
-        y: fY - (fY - savedOffset.value.y) * (newScale / savedScale.value),
-      };
+      // Incremental: compute delta from previous frame, not from onBegin
+      const prevScale = savedScale.value;
+      const newScale = Math.min(Math.max(prevScale * event.scale, 0.5), 5);
+      const fX = event.focalX;
+      const fY = event.focalY;
+      const ratio = newScale / prevScale;
+
+      // Focal-point offset: keep the pinch center fixed on screen
+      // Also account for finger movement (focal drift) since last frame
+      const focalDX = fX - pinchFocalX.value;
+      const focalDY = fY - pinchFocalY.value;
+      offsetX.value = fX - (fX - savedOffsetX.value) * ratio + focalDX;
+      offsetY.value = fY - (fY - savedOffsetY.value) * ratio + focalDY;
       scale.value = newScale;
+
+      // Save current state as baseline for next frame
+      savedScale.value = newScale;
+      savedOffsetX.value = offsetX.value;
+      savedOffsetY.value = offsetY.value;
+      pinchFocalX.value = fX;
+      pinchFocalY.value = fY;
     });
 
   // Double-tap to zoom
@@ -505,7 +537,8 @@ export const ManualPathConnectionCanvas: React.FC<Props> = ({
       runOnJS(onDoubleTap)(e.absoluteX, e.absoluteY);
     });
 
-  // Compose all gestures
+  // Compose all gestures — pinch and pan run simultaneously (2-finger pan+zoom),
+  // drag sequence races with pan (one wins), double-tap is independent
   const composedGesture = Gesture.Simultaneous(
     Gesture.Race(dragSequence, panGesture),
     pinchGesture,
@@ -515,8 +548,8 @@ export const ManualPathConnectionCanvas: React.FC<Props> = ({
   // Animated style for the canvas transform
   const animatedStyle = useAnimatedStyle(() => ({
     transform: [
-      { translateX: offset.value.x },
-      { translateY: offset.value.y },
+      { translateX: offsetX.value },
+      { translateY: offsetY.value },
       { scale: scale.value },
     ],
   }));
@@ -529,8 +562,8 @@ export const ManualPathConnectionCanvas: React.FC<Props> = ({
     // this conversion happens on the UI thread for zero-delay tracking.
     const relX = fenceX.value - canvasOrigin.x;
     const relY = fenceY.value - canvasOrigin.y;
-    const canvasX = (relX - offset.value.x) / scale.value;
-    const canvasY = (relY - offset.value.y) / scale.value;
+    const canvasX = (relX - offsetX.value) / scale.value;
+    const canvasY = (relY - offsetY.value) / scale.value;
 
     return {
       x2: canvasX,
@@ -542,8 +575,8 @@ export const ManualPathConnectionCanvas: React.FC<Props> = ({
   const animatedCircleProps = useAnimatedProps(() => {
     const relX = fenceX.value - canvasOrigin.x;
     const relY = fenceY.value - canvasOrigin.y;
-    const canvasX = (relX - offset.value.x) / scale.value;
-    const canvasY = (relY - offset.value.y) / scale.value;
+    const canvasX = (relX - offsetX.value) / scale.value;
+    const canvasY = (relY - offsetY.value) / scale.value;
 
     return {
       cx: canvasX,
@@ -557,13 +590,13 @@ export const ManualPathConnectionCanvas: React.FC<Props> = ({
     if (!roverPosition || canvasSize.width === 0) return;
 
     const roverPt = latLngToCanvas(roverPosition.lat, roverPosition.lng, bounds, canvasSize);
-    const targetOffset = {
-      x: canvasSize.width / 2 - roverPt.x,
-      y: canvasSize.height / 2 - roverPt.y,
-    };
 
-    offset.value = withTiming(
-      { x: targetOffset.x, y: targetOffset.y },
+    offsetX.value = withTiming(
+      canvasSize.width / 2 - roverPt.x,
+      { duration: 300, easing: Easing.bezier(0.25, 0.1, 0.25, 1) }
+    );
+    offsetY.value = withTiming(
+      canvasSize.height / 2 - roverPt.y,
       { duration: 300, easing: Easing.bezier(0.25, 0.1, 0.25, 1) }
     );
     scale.value = withTiming(1, { duration: 300, easing: Easing.bezier(0.25, 0.1, 0.25, 1) });
@@ -730,9 +763,8 @@ export const ManualPathConnectionCanvas: React.FC<Props> = ({
                 );
               })}
 
-              {/* Preview line from last connected point to current drag position */}
-              {/* Always mounted — opacity driven by fenceOpacity on UI thread for zero-delay show/hide */}
-              {(() => {
+              {/* Preview line from last connected point to current drag position — only in drag mode */}
+              {connectionMode === 'drag' && (() => {
                 const lastId = connectedWaypoints.length > 0
                   ? connectedWaypoints[connectedWaypoints.length - 1]
                   : null;
@@ -815,36 +847,38 @@ export const ManualPathConnectionCanvas: React.FC<Props> = ({
               );
             })}
 
-            {/* Preview line overlay — rendered on top of waypoint markers */}
-            <Svg style={[StyleSheet.absoluteFill, { zIndex: 999 }]} pointerEvents="none">
-              {(() => {
-                const lastId = connectedWaypoints.length > 0
-                  ? connectedWaypoints[connectedWaypoints.length - 1]
-                  : null;
-                const lastWp = lastId != null
-                  ? canvasWaypoints.find(wp => wp.id === lastId)
-                  : null;
+            {/* Preview line overlay — rendered on top of waypoint markers, only in drag mode */}
+            {connectionMode === 'drag' && (
+              <Svg style={[StyleSheet.absoluteFill, { zIndex: 999 }]} pointerEvents="none">
+                {(() => {
+                  const lastId = connectedWaypoints.length > 0
+                    ? connectedWaypoints[connectedWaypoints.length - 1]
+                    : null;
+                  const lastWp = lastId != null
+                    ? canvasWaypoints.find(wp => wp.id === lastId)
+                    : null;
 
-                return (
-                  <>
-                    <AnimatedLine
-                      key="preview-line"
-                      x1={lastWp?.x ?? 0}
-                      y1={lastWp?.y ?? 0}
-                      animatedProps={animatedLineProps}
-                      stroke="#60A5FA"
-                      strokeWidth={3}
-                      strokeDasharray="6, 4"
-                    />
-                    <AnimatedCircle
-                      animatedProps={animatedCircleProps}
-                      r={12}
-                      fill="#60A5FA"
-                    />
-                  </>
-                );
-              })()}
-            </Svg>
+                  return (
+                    <>
+                      <AnimatedLine
+                        key="preview-line"
+                        x1={lastWp?.x ?? 0}
+                        y1={lastWp?.y ?? 0}
+                        animatedProps={animatedLineProps}
+                        stroke="#60A5FA"
+                        strokeWidth={3}
+                        strokeDasharray="6, 4"
+                      />
+                      <AnimatedCircle
+                        animatedProps={animatedCircleProps}
+                        r={12}
+                        fill="#60A5FA"
+                      />
+                    </>
+                  );
+                })()}
+              </Svg>
+            )}
           </Animated.View>
         </GestureDetector>
 

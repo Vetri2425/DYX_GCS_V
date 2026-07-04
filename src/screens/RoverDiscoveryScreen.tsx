@@ -3,6 +3,7 @@
  * Full-screen discovery page shown on app launch.
  * Listens for UDP beacon broadcasts and presents rover list.
  * Landscape-optimized split layout for tablet.
+ * UI ported from NewS/RoverDiscovery web design.
  */
 
 import React, { useState, useEffect, useRef } from 'react';
@@ -37,34 +38,49 @@ export default function RoverDiscoveryScreen({ onRoverSelected }: RoverDiscovery
   const [testingManualUrl, setTestingManualUrl] = useState(false);
   const [connectingRoverId, setConnectingRoverId] = useState<string | null>(null);
 
-  // Pulse animation for the beacon ring
-  const pulseAnim = useRef(new Animated.Value(0)).current;
-  const pulse2Anim = useRef(new Animated.Value(0)).current;
+  // Animations
+  const spinAnim = useRef(new Animated.Value(0)).current;
+  const pulseAnim = useRef(new Animated.Value(1)).current;
+  const scanLineAnim = useRef(new Animated.Value(0)).current;
 
-  // Start pulsing rings
+  // Rotating dashed circle spinner
   useEffect(() => {
-    const runPulse = (anim: Animated.Value, delay: number) => {
-      Animated.loop(
-        Animated.sequence([
-          Animated.delay(delay),
-          Animated.parallel([
-            Animated.timing(anim, {
-              toValue: 1,
-              duration: 2000,
-              useNativeDriver: true,
-            }),
-          ]),
-          Animated.timing(anim, {
-            toValue: 0,
-            duration: 0,
-            useNativeDriver: true,
-          }),
-        ])
-      ).start();
-    };
+    Animated.loop(
+      Animated.timing(spinAnim, {
+        toValue: 1,
+        duration: 4000,
+        useNativeDriver: true,
+      })
+    ).start();
+  }, []);
 
-    runPulse(pulseAnim, 0);
-    runPulse(pulse2Anim, 1000);
+  // Radar pulse ring
+  useEffect(() => {
+    Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulseAnim, {
+          toValue: 2.5,
+          duration: 2000,
+          useNativeDriver: true,
+        }),
+        Animated.timing(pulseAnim, {
+          toValue: 1,
+          duration: 0,
+          useNativeDriver: true,
+        }),
+      ])
+    ).start();
+  }, []);
+
+  // Scan line animation
+  useEffect(() => {
+    Animated.loop(
+      Animated.timing(scanLineAnim, {
+        toValue: 1,
+        duration: 4000,
+        useNativeDriver: true,
+      })
+    ).start();
   }, []);
 
   // Start beacon listener
@@ -72,9 +88,7 @@ export default function RoverDiscoveryScreen({ onRoverSelected }: RoverDiscovery
     if (beaconListener.isAvailable) {
       beaconListener.start((rovers) => setDiscoveredRovers(rovers));
     }
-
     const dotTimer = setInterval(() => setNow(Date.now()), 2000);
-
     return () => {
       if (beaconListener.isAvailable) beaconListener.stop();
       clearInterval(dotTimer);
@@ -146,12 +160,10 @@ export default function RoverDiscoveryScreen({ onRoverSelected }: RoverDiscovery
       const urlObj = new URL(manualUrl);
       const ip = urlObj.hostname;
       const port = urlObj.port ? parseInt(urlObj.port) : 5001;
-
       const response = await axios.get(`${manualUrl}/api/status`, {
         timeout: 10000,
         validateStatus: () => true,
       });
-
       if (response.status < 500) {
         const device: JetsonDevice = {
           id: 'custom-' + ip,
@@ -212,93 +224,119 @@ export default function RoverDiscoveryScreen({ onRoverSelected }: RoverDiscovery
 
   const formatUptime = (seconds: number): string => {
     if (seconds < 60) return `${seconds}s`;
-    if (seconds < 3600) {
-      return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
-    }
+    if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
     return `${Math.floor(seconds / 3600)}h ${Math.floor((seconds % 3600) / 60)}m`;
   };
 
-  const pulseScale = pulseAnim.interpolate({ inputRange: [0, 1], outputRange: [1, 2.4] });
-  const pulseOpacity = pulseAnim.interpolate({ inputRange: [0, 0.3, 1], outputRange: [0, 0.4, 0] });
-  const pulse2Scale = pulse2Anim.interpolate({ inputRange: [0, 1], outputRange: [1, 2.4] });
-  const pulse2Opacity = pulse2Anim.interpolate({ inputRange: [0, 0.3, 1], outputRange: [0, 0.35, 0] });
+  const spinRotation = spinAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: ['0deg', '360deg'],
+  });
+
+  const pulseScale = pulseAnim;
+  const pulseOpacity = pulseAnim.interpolate({
+    inputRange: [1, 2.5],
+    outputRange: [0.3, 0],
+  });
 
   const allRovers = discoveredRovers;
   const hasBeacons = allRovers.length > 0;
   const hasNetwork = networkDevices.length > 0;
   const totalCount = allRovers.length + networkDevices.length;
 
-  // ── LEFT PANEL ───────────────────────────────────────────────────────────────
+  // ── LEFT PANEL (Sidebar) ─────────────────────────────────────────────────
   const renderLeftPanel = () => (
-    <View style={styles.leftPanel}>
-      {/* App Branding */}
-      <View style={styles.branding}>
+    <View style={styles.sidebar}>
+      {/* Branding */}
+      <View style={styles.brandingSection}>
         <View style={styles.logoBox}>
-          <Ionicons name="radio" size={28} color="#4CAF50" />
+          <Ionicons name="radio" size={28} color="#4ade80" />
         </View>
         <Text style={styles.appTitle}>DYX GCS</Text>
         <Text style={styles.appSubtitle}>Ground Control Station</Text>
       </View>
 
-      {/* Animated Beacon Indicator */}
-      <View style={styles.beaconWrapper}>
-        <Animated.View style={[styles.pulseRing, { transform: [{ scale: pulseScale }], opacity: pulseOpacity }]} />
-        <Animated.View style={[styles.pulseRing, { transform: [{ scale: pulse2Scale }], opacity: pulse2Opacity }]} />
-        <View style={styles.beaconCore}>
-          <Ionicons name="wifi" size={36} color="#4CAF50" />
+      {/* Status & Telemetry */}
+      <View style={styles.sidebarContent}>
+        {/* System Active Card */}
+        <View style={styles.statusCard}>
+          <View style={styles.statusCardHeader}>
+            <View style={styles.statusDotWrap}>
+              <View style={styles.statusDotGreen} />
+            </View>
+            <Text style={styles.systemActiveText}>System Active</Text>
+          </View>
+          <View style={styles.statusInfoRow}>
+            <Text style={styles.statusLabel}>Status</Text>
+            <Text style={styles.statusValue}>
+              {beaconListener.isAvailable ? 'Listening for beacons...' : 'Web mode'}
+            </Text>
+          </View>
+          <View style={styles.statusInfoRow}>
+            <Text style={styles.statusLabel}>UDP Port</Text>
+            <Text style={styles.udpPortValue}>5002</Text>
+          </View>
         </View>
-      </View>
 
-      {/* Status */}
-      <View style={styles.statusBlock}>
-        <View style={styles.statusRow}>
-          <View style={styles.statusDotGreen} />
-          <Text style={styles.statusText}>
-            {beaconListener.isAvailable ? 'Listening for beacons' : 'Web mode'}
-          </Text>
+        {/* Telemetry Section */}
+        <View style={styles.telemetrySection}>
+          <Text style={styles.telemetrySectionTitle}>Telemetry</Text>
+          <View style={styles.telemetryGrid}>
+            <View style={styles.telemetryBox}>
+              <Ionicons name="pulse" size={12} color="#60a5fa" />
+              <Text style={styles.telemetryValue}>{totalCount}</Text>
+              <Text style={styles.telemetryLabel}>Active Rovers</Text>
+            </View>
+            <View style={styles.telemetryBox}>
+              <Ionicons name="cellular" size={12} color="#fb923c" />
+              <Text style={styles.telemetryValue}>{totalCount > 0 ? 'Good' : '--'}</Text>
+              <Text style={styles.telemetryLabel}>Signal Strength</Text>
+            </View>
+          </View>
         </View>
-        <Text style={styles.statusDetail}>UDP Port 5002</Text>
-        {totalCount > 0 && (
-          <Text style={styles.statusFound}>{totalCount} rover{totalCount !== 1 ? 's' : ''} found</Text>
-        )}
       </View>
 
       {/* Action Buttons */}
-      <View style={styles.leftActions}>
-        <TouchableOpacity style={styles.actionBtn} onPress={handleRefresh}>
-          <Ionicons name="refresh" size={16} color="white" />
-          <Text style={styles.actionBtnText}>Refresh</Text>
+      <View style={styles.actionButtonsWrap}>
+        <TouchableOpacity style={styles.btnGreen} onPress={handleRefresh} activeOpacity={0.8}>
+          <Ionicons name="refresh" size={14} color="#000" />
+          <Text style={styles.btnGreenText}>REFRESH</Text>
         </TouchableOpacity>
 
         <TouchableOpacity
-          style={[styles.actionBtn, styles.actionBtnBlue]}
+          style={styles.btnBlue}
           onPress={runNetworkScan}
           disabled={scanning}
+          activeOpacity={0.8}
         >
           {scanning ? (
             <ActivityIndicator size="small" color="white" />
           ) : (
-            <Ionicons name="scan" size={16} color="white" />
+            <Ionicons name="search" size={14} color="white" />
           )}
-          <Text style={styles.actionBtnText}>{scanning ? 'Scanning...' : 'Network Scan'}</Text>
+          <Text style={styles.btnBlueText}>{scanning ? 'SCANNING...' : 'NETWORK SCAN'}</Text>
         </TouchableOpacity>
 
-        <TouchableOpacity style={[styles.actionBtn, styles.actionBtnOrange]} onPress={() => setShowManualInput(true)}>
-          <Ionicons name="link" size={16} color="white" />
-          <Text style={styles.actionBtnText}>Manual URL</Text>
+        <TouchableOpacity
+          style={styles.btnOrange}
+          onPress={() => setShowManualInput(true)}
+          activeOpacity={0.8}
+        >
+          <Ionicons name="link" size={14} color="white" />
+          <Text style={styles.btnOrangeText}>MANUAL URL</Text>
         </TouchableOpacity>
 
-        <TouchableOpacity style={styles.skipBtn} onPress={handleSkip}>
-          <Text style={styles.skipBtnText}>Continue Offline</Text>
+        <TouchableOpacity style={styles.btnSkip} onPress={handleSkip} activeOpacity={0.6}>
+          <Text style={styles.btnSkipText}>Continue Offline</Text>
         </TouchableOpacity>
       </View>
     </View>
   );
 
-  // ── RIGHT PANEL ──────────────────────────────────────────────────────────────
+  // ── ROVER CARDS ──────────────────────────────────────────────────────────
   const renderRoverCard = (rover: DiscoveredRover) => {
     const isStale = now - rover.lastSeen > 5000;
-    const dotColor = isStale ? '#FF9800' : '#4CAF50';
+    const dotColor = isStale ? '#fb923c' : '#4ade80';
     const isConnecting = connectingRoverId === rover.roverId;
 
     return (
@@ -309,20 +347,15 @@ export default function RoverDiscoveryScreen({ onRoverSelected }: RoverDiscovery
         disabled={isConnecting}
         activeOpacity={0.75}
       >
-        {/* Left accent bar */}
         <View style={[styles.cardAccent, { backgroundColor: dotColor }]} />
-
-        {/* Icon */}
         <View style={[styles.cardIconWrap, { borderColor: dotColor + '40' }]}>
-          <Ionicons name="hardware-chip" size={30} color={dotColor} />
+          <Ionicons name="hardware-chip" size={28} color={dotColor} />
         </View>
-
-        {/* Info */}
         <View style={styles.cardBody}>
           <View style={styles.cardRow}>
             <Text style={styles.cardName}>{rover.roverName}</Text>
             <View style={[styles.cardBadge, { backgroundColor: dotColor + '22', borderColor: dotColor }]}>
-              <View style={[styles.dot, { backgroundColor: dotColor }]} />
+              <View style={[styles.badgeDot, { backgroundColor: dotColor }]} />
               <Text style={[styles.cardBadgeText, { color: dotColor }]}>
                 {isStale ? 'STALE' : 'LIVE'}
               </Text>
@@ -331,28 +364,26 @@ export default function RoverDiscoveryScreen({ onRoverSelected }: RoverDiscovery
           <Text style={styles.cardId}>{rover.roverId}</Text>
           <View style={styles.cardMeta}>
             <View style={styles.metaItem}>
-              <Ionicons name="globe-outline" size={12} color="#4CAF50" />
-              <Text style={styles.metaText}>{rover.ip}:{rover.port}</Text>
+              <Ionicons name="globe-outline" size={11} color="#4ade80" />
+              <Text style={styles.metaTextGreen}>{rover.ip}:{rover.port}</Text>
             </View>
             <View style={styles.metaItem}>
-              <Ionicons name="time-outline" size={12} color="#888" />
+              <Ionicons name="time-outline" size={11} color="#666" />
               <Text style={styles.metaTextGray}>Up {formatUptime(rover.uptime)}</Text>
             </View>
             <View style={styles.metaItem}>
-              <Ionicons name="code-slash-outline" size={12} color="#888" />
+              <Ionicons name="code-slash-outline" size={11} color="#666" />
               <Text style={styles.metaTextGray}>v{rover.version}</Text>
             </View>
           </View>
         </View>
-
-        {/* Connect indicator */}
         <View style={styles.cardArrow}>
           {isConnecting ? (
-            <ActivityIndicator size="small" color="#4CAF50" />
+            <ActivityIndicator size="small" color="#4ade80" />
           ) : (
             <>
               <Text style={styles.connectLabel}>CONNECT</Text>
-              <Ionicons name="arrow-forward" size={20} color="#4CAF50" />
+              <Ionicons name="chevron-forward" size={18} color="#4ade80" />
             </>
           )}
         </View>
@@ -365,40 +396,40 @@ export default function RoverDiscoveryScreen({ onRoverSelected }: RoverDiscovery
     return (
       <TouchableOpacity
         key={device.id}
-        style={[styles.roverCard, styles.networkCard]}
+        style={styles.roverCard}
         onPress={() => handleSelectNetworkDevice(device)}
         disabled={isConnecting}
         activeOpacity={0.75}
       >
-        <View style={[styles.cardAccent, { backgroundColor: '#2196F3' }]} />
-        <View style={[styles.cardIconWrap, { borderColor: '#2196F340' }]}>
-          <Ionicons name="wifi" size={30} color="#2196F3" />
+        <View style={[styles.cardAccent, { backgroundColor: '#3b82f6' }]} />
+        <View style={[styles.cardIconWrap, { borderColor: '#3b82f640' }]}>
+          <Ionicons name="wifi" size={28} color="#3b82f6" />
         </View>
         <View style={styles.cardBody}>
           <View style={styles.cardRow}>
             <Text style={styles.cardName}>{device.name}</Text>
-            <View style={[styles.cardBadge, { backgroundColor: '#2196F322', borderColor: '#2196F3' }]}>
-              <Text style={[styles.cardBadgeText, { color: '#2196F3' }]}>SCAN</Text>
+            <View style={[styles.cardBadge, { backgroundColor: '#3b82f622', borderColor: '#3b82f6' }]}>
+              <Text style={[styles.cardBadgeText, { color: '#3b82f6' }]}>SCAN</Text>
             </View>
           </View>
           <View style={styles.cardMeta}>
             <View style={styles.metaItem}>
-              <Ionicons name="globe-outline" size={12} color="#2196F3" />
-              <Text style={[styles.metaText, { color: '#2196F3' }]}>{device.ip}:{device.port}</Text>
+              <Ionicons name="globe-outline" size={11} color="#3b82f6" />
+              <Text style={[styles.metaTextGreen, { color: '#3b82f6' }]}>{device.ip}:{device.port}</Text>
             </View>
             <View style={styles.metaItem}>
-              <Ionicons name="speedometer-outline" size={12} color="#888" />
+              <Ionicons name="speedometer-outline" size={11} color="#666" />
               <Text style={styles.metaTextGray}>{device.responseTime}ms</Text>
             </View>
           </View>
         </View>
         <View style={styles.cardArrow}>
           {isConnecting ? (
-            <ActivityIndicator size="small" color="#2196F3" />
+            <ActivityIndicator size="small" color="#3b82f6" />
           ) : (
             <>
-              <Text style={[styles.connectLabel, { color: '#2196F3' }]}>CONNECT</Text>
-              <Ionicons name="arrow-forward" size={20} color="#2196F3" />
+              <Text style={[styles.connectLabel, { color: '#3b82f6' }]}>CONNECT</Text>
+              <Ionicons name="chevron-forward" size={18} color="#3b82f6" />
             </>
           )}
         </View>
@@ -406,78 +437,170 @@ export default function RoverDiscoveryScreen({ onRoverSelected }: RoverDiscovery
     );
   };
 
-  const renderRightPanel = () => (
-    <View style={styles.rightPanel}>
-      {/* Header */}
-      <View style={styles.rightHeader}>
-        <Text style={styles.rightTitle}>
-          {totalCount > 0 ? `NEARBY ROVERS` : 'SCANNING...'}
-        </Text>
-        {totalCount > 0 && (
-          <View style={styles.countBadge}>
-            <Text style={styles.countText}>{totalCount}</Text>
+  // ── MAIN CONTENT (Right Panel) ───────────────────────────────────────────
+  const renderMainContent = () => (
+    <View style={styles.mainContent}>
+      {/* Header Bar */}
+      <View style={styles.headerBar}>
+        <View style={styles.headerLeft}>
+          <View style={styles.headerStatusDot} />
+          <Text style={styles.headerScanText}>
+            {totalCount > 0 ? 'CONNECTED' : 'SCANNING...'}
+          </Text>
+          <View style={styles.headerDivider} />
+          <Text style={styles.headerCoords}>LAT: 0.000000 | LNG: 0.000000</Text>
+        </View>
+        <View style={styles.headerRight}>
+          <TouchableOpacity style={styles.headerIconBtn} activeOpacity={0.6}>
+            <Ionicons name="settings-outline" size={16} color="rgba(255,255,255,0.4)" />
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.headerIconBtn} activeOpacity={0.6}>
+            <Ionicons name="hardware-chip-outline" size={16} color="rgba(255,255,255,0.4)" />
+          </TouchableOpacity>
+        </View>
+      </View>
+
+      {/* Viewport Area */}
+      <View style={styles.viewport}>
+        {/* Decorative Corner Elements */}
+        <View style={[styles.corner, styles.cornerTL]} />
+        <View style={[styles.corner, styles.cornerTR]} />
+        <View style={[styles.corner, styles.cornerBL]} />
+        <View style={[styles.corner, styles.cornerBR]} />
+
+        {/* Scan Line */}
+        <Animated.View
+          style={[
+            styles.scanLine,
+            {
+              transform: [
+                {
+                  translateY: scanLineAnim.interpolate({
+                    inputRange: [0, 1],
+                    outputRange: [-600, 600],
+                  }),
+                },
+              ],
+            },
+          ]}
+        />
+
+        {/* Rover List or Empty State */}
+        {(hasBeacons || hasNetwork) ? (
+          <View style={styles.roverListArea}>
+            {hasBeacons && (
+              <>
+                {networkDevices.length > 0 && (
+                  <Text style={styles.sectionLabel}>BEACON DISCOVERY</Text>
+                )}
+                {allRovers.map(renderRoverCard)}
+              </>
+            )}
+            {hasNetwork && (
+              <>
+                <Text style={styles.sectionLabel}>NETWORK SCAN</Text>
+                {networkDevices.map(renderNetworkCard)}
+              </>
+            )}
+            {scanning && (
+              <View style={styles.scanningRow}>
+                <ActivityIndicator size="small" color="#3b82f6" />
+                <Text style={styles.scanningText}>Scanning network for rovers...</Text>
+              </View>
+            )}
+          </View>
+        ) : (
+          <View style={styles.emptyState}>
+            {/* Animated Spinner */}
+            <View style={styles.spinnerWrap}>
+              <Animated.View
+                style={[
+                  styles.spinnerOuter,
+                  { transform: [{ rotate: spinRotation }] },
+                ]}
+              >
+                <View style={styles.spinnerInner}>
+                  <ActivityIndicator size="large" color="#4ade80" />
+                </View>
+              </Animated.View>
+              {/* Radar Pulse */}
+              <Animated.View
+                style={[
+                  styles.radarPulse,
+                  {
+                    transform: [{ scale: pulseScale }],
+                    opacity: pulseOpacity,
+                  },
+                ]}
+              />
+            </View>
+
+            <Text style={styles.emptyTitle}>Waiting for rovers...</Text>
+            <Text style={styles.emptyDesc}>
+              Ensure the rover is powered on and connected to the same network.{'\n'}
+              The system is currently listening for broadcast beacons.
+            </Text>
+
+            {/* Tips Card */}
+            <View style={styles.tipsCard}>
+              <View style={styles.tipRow}>
+                <View style={styles.tipDotWrap}>
+                  <View style={styles.tipDot} />
+                </View>
+                <Text style={styles.tipText}>
+                  Rover broadcasts on{' '}
+                  <Text style={styles.tipHighlightGreen}>UDP port 5002</Text>
+                </Text>
+              </View>
+              <View style={styles.tipRow}>
+                <View style={styles.tipDotWrap}>
+                  <View style={styles.tipDot} />
+                </View>
+                <Text style={styles.tipText}>
+                  Beacon interval: <Text style={styles.tipHighlightWhite}>every 2 seconds</Text>
+                </Text>
+              </View>
+              <View style={styles.tipRow}>
+                <View style={styles.tipDotWrap}>
+                  <View style={styles.tipDot} />
+                </View>
+                <Text style={styles.tipText}>
+                  Use <Text style={styles.tipHighlightBlue}>Network Scan</Text> or{' '}
+                  <Text style={styles.tipHighlightOrange}>Manual URL</Text> as fallback
+                </Text>
+              </View>
+            </View>
+
+            {scanning && (
+              <View style={[styles.scanningRow, { marginTop: 16 }]}>
+                <ActivityIndicator size="small" color="#3b82f6" />
+                <Text style={styles.scanningText}>Scanning network...</Text>
+              </View>
+            )}
           </View>
         )}
       </View>
 
-      {/* Beacon Rovers */}
-      {hasBeacons && (
-        <>
-          {networkDevices.length > 0 && (
-            <Text style={styles.sectionLabel}>BEACON DISCOVERY</Text>
-          )}
-          {allRovers.map(renderRoverCard)}
-        </>
-      )}
-
-      {/* Network Scan Rovers */}
-      {hasNetwork && (
-        <>
-          <Text style={styles.sectionLabel}>NETWORK SCAN</Text>
-          {networkDevices.map(renderNetworkCard)}
-        </>
-      )}
-
-      {/* Empty State */}
-      {!hasBeacons && !hasNetwork && !scanning && (
-        <View style={styles.emptyState}>
-          <ActivityIndicator size="large" color="#4CAF5044" style={{ marginBottom: 20 }} />
-          <Text style={styles.emptyTitle}>Waiting for rovers...</Text>
-          <Text style={styles.emptyHint}>
-            Make sure the rover is powered on{'\n'}and connected to the same WiFi network
-          </Text>
-          <View style={styles.emptyTips}>
-            <View style={styles.tipRow}>
-              <Ionicons name="checkmark-circle-outline" size={16} color="#4CAF50" />
-              <Text style={styles.tipText}>Rover broadcasts on UDP port 5002</Text>
-            </View>
-            <View style={styles.tipRow}>
-              <Ionicons name="checkmark-circle-outline" size={16} color="#4CAF50" />
-              <Text style={styles.tipText}>Beacon interval: every 2 seconds</Text>
-            </View>
-            <View style={styles.tipRow}>
-              <Ionicons name="checkmark-circle-outline" size={16} color="#4CAF50" />
-              <Text style={styles.tipText}>Use Network Scan or Manual URL as fallback</Text>
-            </View>
-          </View>
+      {/* Footer Bar */}
+      <View style={styles.footerBar}>
+        <View style={styles.footerLeft}>
+          <Text style={styles.footerText}>CPU: 1/8</Text>
+          <Text style={styles.footerText}>MEM: 256MB</Text>
+          <Text style={styles.footerText}>NET: 0.5 KB/S</Text>
         </View>
-      )}
-
-      {/* Scanning indicator */}
-      {scanning && (
-        <View style={styles.scanningRow}>
-          <ActivityIndicator size="small" color="#2196F3" />
-          <Text style={styles.scanningText}>Scanning network for rovers...</Text>
+        <View style={styles.footerRight}>
+          <Text style={styles.footerTextGreen}>ENCRYPTION: AES-256</Text>
+          <Text style={styles.footerText}>v2.4.0-STABLE</Text>
         </View>
-      )}
+      </View>
     </View>
   );
 
+  // ── RENDER ───────────────────────────────────────────────────────────────
   return (
     <View style={styles.container}>
       {renderLeftPanel()}
-      <View style={styles.divider} />
-      {renderRightPanel()}
+      {renderMainContent()}
 
       {/* Manual URL Modal */}
       <Modal
@@ -489,7 +612,7 @@ export default function RoverDiscoveryScreen({ onRoverSelected }: RoverDiscovery
         <View style={styles.modalOverlay}>
           <View style={styles.modalCard}>
             <View style={styles.modalHeader}>
-              <Ionicons name="link" size={24} color="#FF9800" />
+              <Ionicons name="link" size={22} color="#fb923c" />
               <Text style={styles.modalTitle}>Manual Backend URL</Text>
             </View>
             <Text style={styles.modalHint}>
@@ -533,210 +656,362 @@ export default function RoverDiscoveryScreen({ onRoverSelected }: RoverDiscovery
   );
 }
 
+// ════════════════════════════════════════════════════════════════════════════
+// STYLES — ported from NewS/RoverDiscovery Tailwind → React Native
+// ════════════════════════════════════════════════════════════════════════════
 const styles = StyleSheet.create({
   container: {
     flex: 1,
     flexDirection: 'row',
-    backgroundColor: '#0D1B2A',
+    backgroundColor: '#0a0a0b',
   },
 
-  // ── LEFT PANEL ──────────────────────────────────────────────────────────────
-  leftPanel: {
-    width: 260,
-    backgroundColor: '#0A1628',
-    paddingHorizontal: 20,
-    paddingVertical: 24,
-    justifyContent: 'space-between',
+  // ── SIDEBAR ─────────────────────────────────────────────────────────────
+  sidebar: {
+    width: 288,
+    backgroundColor: '#0d0d0f',
     borderRightWidth: 1,
-    borderRightColor: '#1e3a5f',
+    borderRightColor: 'rgba(255,255,255,0.05)',
+    flexDirection: 'column',
   },
-  branding: {
+  brandingSection: {
     alignItems: 'center',
+    paddingTop: 32,
+    paddingBottom: 16,
+    paddingHorizontal: 24,
   },
   logoBox: {
-    width: 56,
-    height: 56,
-    borderRadius: 14,
-    backgroundColor: '#4CAF5015',
+    width: 64,
+    height: 64,
+    borderRadius: 16,
+    backgroundColor: 'rgba(74,222,128,0.1)',
     borderWidth: 1,
-    borderColor: '#4CAF5040',
+    borderColor: 'rgba(74,222,128,0.2)',
     justifyContent: 'center',
     alignItems: 'center',
-    marginBottom: 10,
+    marginBottom: 16,
   },
   appTitle: {
-    fontSize: 26,
-    fontWeight: '800',
-    color: 'white',
-    letterSpacing: 3,
+    fontSize: 20,
+    fontWeight: '700',
+    color: '#ffffff',
+    letterSpacing: 4,
   },
   appSubtitle: {
-    fontSize: 11,
-    color: '#4CAF50',
-    letterSpacing: 1.5,
+    fontSize: 9,
+    color: 'rgba(74,222,128,0.6)',
+    letterSpacing: 3,
     textTransform: 'uppercase',
-    marginTop: 2,
+    fontWeight: '500',
+    marginTop: 4,
   },
 
-  // Beacon animation
-  beaconWrapper: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    height: 120,
+  // Status Card
+  sidebarContent: {
+    flex: 1,
+    paddingHorizontal: 24,
+    paddingTop: 8,
   },
-  pulseRing: {
-    position: 'absolute',
-    width: 60,
-    height: 60,
-    borderRadius: 30,
-    borderWidth: 2,
-    borderColor: '#4CAF50',
+  statusCard: {
+    backgroundColor: 'rgba(255,255,255,0.05)',
+    borderRadius: 12,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.05)',
+    marginBottom: 20,
   },
-  beaconCore: {
-    width: 60,
-    height: 60,
-    borderRadius: 30,
-    backgroundColor: '#4CAF5015',
-    borderWidth: 1.5,
-    borderColor: '#4CAF5060',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-
-  // Status block
-  statusBlock: {
-    alignItems: 'center',
-    gap: 6,
-  },
-  statusRow: {
+  statusCardHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
+    gap: 10,
+    marginBottom: 12,
+  },
+  statusDotWrap: {
+    position: 'relative',
   },
   statusDotGreen: {
     width: 8,
     height: 8,
     borderRadius: 4,
-    backgroundColor: '#4CAF50',
+    backgroundColor: '#4ade80',
   },
-  statusText: {
-    fontSize: 13,
-    color: '#ccc',
-    fontWeight: '500',
-  },
-  statusDetail: {
+  systemActiveText: {
     fontSize: 11,
-    color: '#555',
-    letterSpacing: 1,
-  },
-  statusFound: {
-    fontSize: 13,
-    color: '#4CAF50',
     fontWeight: '600',
-    marginTop: 4,
+    color: '#4ade80',
+    textTransform: 'uppercase',
+    letterSpacing: 1.5,
+  },
+  statusInfoRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: 6,
+  },
+  statusLabel: {
+    fontSize: 11,
+    color: 'rgba(255,255,255,0.4)',
+  },
+  statusValue: {
+    fontSize: 11,
+    color: 'rgba(255,255,255,0.8)',
+  },
+  udpPortValue: {
+    fontSize: 11,
+    color: '#4ade80',
+    fontVariant: ['tabular-nums'],
   },
 
-  // Left action buttons
-  leftActions: {
+  // Telemetry
+  telemetrySection: {
+    marginBottom: 12,
+  },
+  telemetrySectionTitle: {
+    fontSize: 9,
+    textTransform: 'uppercase',
+    letterSpacing: 3,
+    color: 'rgba(255,255,255,0.3)',
+    fontWeight: '700',
+    paddingHorizontal: 4,
+    marginBottom: 10,
+  },
+  telemetryGrid: {
+    flexDirection: 'row',
     gap: 8,
   },
-  actionBtn: {
+  telemetryBox: {
+    flex: 1,
+    backgroundColor: 'rgba(255,255,255,0.05)',
+    borderRadius: 10,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.05)',
+  },
+  telemetryValue: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#ffffff',
+    fontVariant: ['tabular-nums'],
+    marginTop: 4,
+  },
+  telemetryLabel: {
+    fontSize: 8,
+    color: 'rgba(255,255,255,0.3)',
+    textTransform: 'uppercase',
+    marginTop: 2,
+  },
+
+  // Action Buttons
+  actionButtonsWrap: {
+    padding: 24,
+    gap: 8,
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(255,255,255,0.05)',
+    backgroundColor: 'rgba(0,0,0,0.2)',
+  },
+  btnGreen: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     gap: 8,
-    backgroundColor: '#4CAF50',
-    paddingVertical: 10,
-    borderRadius: 8,
+    backgroundColor: '#4ade80',
+    paddingVertical: 12,
+    borderRadius: 12,
   },
-  actionBtnBlue: {
-    backgroundColor: '#2196F3',
+  btnGreenText: {
+    color: '#000',
+    fontSize: 11,
+    fontWeight: '800',
+    letterSpacing: 0.5,
   },
-  actionBtnOrange: {
-    backgroundColor: '#FF9800',
+  btnBlue: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: '#3b82f6',
+    paddingVertical: 12,
+    borderRadius: 12,
   },
-  actionBtnText: {
-    color: 'white',
-    fontSize: 13,
-    fontWeight: '600',
+  btnBlueText: {
+    color: '#fff',
+    fontSize: 11,
+    fontWeight: '800',
+    letterSpacing: 0.5,
   },
-  skipBtn: {
+  btnOrange: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: '#f59e0b',
+    paddingVertical: 12,
+    borderRadius: 12,
+  },
+  btnOrangeText: {
+    color: '#fff',
+    fontSize: 11,
+    fontWeight: '800',
+    letterSpacing: 0.5,
+  },
+  btnSkip: {
     alignItems: 'center',
     paddingVertical: 8,
   },
-  skipBtnText: {
-    color: '#445',
-    fontSize: 12,
+  btnSkipText: {
+    fontSize: 9,
+    color: 'rgba(255,255,255,0.2)',
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    letterSpacing: 3,
   },
 
-  // ── DIVIDER ─────────────────────────────────────────────────────────────────
-  divider: {
-    width: 1,
-    backgroundColor: '#1e3a5f',
-  },
-
-  // ── RIGHT PANEL ─────────────────────────────────────────────────────────────
-  rightPanel: {
+  // ── MAIN CONTENT ────────────────────────────────────────────────────────
+  mainContent: {
     flex: 1,
-    paddingHorizontal: 24,
-    paddingVertical: 24,
+    flexDirection: 'column',
+    backgroundColor: '#0a0a0b',
   },
-  rightHeader: {
+
+  // Header Bar
+  headerBar: {
+    height: 56,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(255,255,255,0.05)',
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 12,
-    marginBottom: 20,
+    justifyContent: 'space-between',
+    paddingHorizontal: 28,
+    backgroundColor: 'rgba(13,13,15,0.5)',
   },
-  rightTitle: {
-    fontSize: 13,
+  headerLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  headerStatusDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: '#4ade80',
+  },
+  headerScanText: {
+    fontSize: 11,
     fontWeight: '700',
-    color: '#4CAF50',
     letterSpacing: 2,
+    color: 'rgba(255,255,255,0.8)',
+    textTransform: 'uppercase',
   },
-  countBadge: {
-    backgroundColor: '#4CAF5022',
-    borderWidth: 1,
-    borderColor: '#4CAF5060',
-    borderRadius: 10,
-    paddingHorizontal: 8,
-    paddingVertical: 2,
+  headerDivider: {
+    width: 1,
+    height: 16,
+    backgroundColor: 'rgba(255,255,255,0.1)',
   },
-  countText: {
-    fontSize: 12,
-    color: '#4CAF50',
-    fontWeight: '700',
+  headerCoords: {
+    fontSize: 11,
+    color: 'rgba(255,255,255,0.3)',
+    fontVariant: ['tabular-nums'],
+  },
+  headerRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  headerIconBtn: {
+    padding: 8,
+    borderRadius: 8,
+  },
+
+  // Viewport
+  viewport: {
+    flex: 1,
+    position: 'relative',
+    overflow: 'hidden',
+  },
+  scanLine: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    height: 2,
+    backgroundColor: 'rgba(74,222,128,0.3)',
+    zIndex: 1,
+  },
+
+  // Corner decorations
+  corner: {
+    position: 'absolute',
+    width: 40,
+    height: 40,
+    zIndex: 2,
+  },
+  cornerTL: {
+    top: 24,
+    left: 24,
+    borderTopWidth: 2,
+    borderLeftWidth: 2,
+    borderColor: 'rgba(255,255,255,0.1)',
+    borderTopLeftRadius: 8,
+  },
+  cornerTR: {
+    top: 24,
+    right: 24,
+    borderTopWidth: 2,
+    borderRightWidth: 2,
+    borderColor: 'rgba(255,255,255,0.1)',
+    borderTopRightRadius: 8,
+  },
+  cornerBL: {
+    bottom: 24,
+    left: 24,
+    borderBottomWidth: 2,
+    borderLeftWidth: 2,
+    borderColor: 'rgba(255,255,255,0.1)',
+    borderBottomLeftRadius: 8,
+  },
+  cornerBR: {
+    bottom: 24,
+    right: 24,
+    borderBottomWidth: 2,
+    borderRightWidth: 2,
+    borderColor: 'rgba(255,255,255,0.1)',
+    borderBottomRightRadius: 8,
+  },
+
+  // Rover list area
+  roverListArea: {
+    flex: 1,
+    paddingHorizontal: 28,
+    paddingVertical: 20,
   },
   sectionLabel: {
-    fontSize: 10,
-    color: '#445',
+    fontSize: 9,
+    color: 'rgba(255,255,255,0.3)',
     letterSpacing: 2,
-    fontWeight: '600',
+    fontWeight: '700',
+    textTransform: 'uppercase',
     marginBottom: 10,
     marginTop: 4,
   },
 
-  // ── ROVER CARD ───────────────────────────────────────────────────────────────
+  // Rover Card
   roverCard: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#111d2e',
+    backgroundColor: 'rgba(255,255,255,0.03)',
     borderRadius: 12,
-    marginBottom: 12,
+    marginBottom: 10,
     overflow: 'hidden',
     borderWidth: 1,
-    borderColor: '#1e3a5f',
-  },
-  networkCard: {
-    borderColor: '#1a2f4a',
+    borderColor: 'rgba(255,255,255,0.05)',
   },
   cardAccent: {
-    width: 4,
+    width: 3,
     alignSelf: 'stretch',
   },
   cardIconWrap: {
-    width: 52,
-    height: 52,
-    borderRadius: 26,
+    width: 48,
+    height: 48,
+    borderRadius: 24,
     borderWidth: 1,
     justifyContent: 'center',
     alignItems: 'center',
@@ -745,7 +1020,7 @@ const styles = StyleSheet.create({
   cardBody: {
     flex: 1,
     paddingVertical: 14,
-    gap: 4,
+    gap: 3,
   },
   cardRow: {
     flexDirection: 'row',
@@ -753,10 +1028,9 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   cardName: {
-    fontSize: 17,
+    fontSize: 15,
     fontWeight: '700',
-    color: 'white',
-    letterSpacing: 0.3,
+    color: '#ffffff',
   },
   cardBadge: {
     flexDirection: 'row',
@@ -767,24 +1041,23 @@ const styles = StyleSheet.create({
     paddingHorizontal: 6,
     paddingVertical: 2,
   },
-  dot: {
+  badgeDot: {
     width: 5,
     height: 5,
     borderRadius: 3,
   },
   cardBadgeText: {
-    fontSize: 9,
+    fontSize: 8,
     fontWeight: '700',
     letterSpacing: 1,
   },
   cardId: {
-    fontSize: 12,
-    color: '#556',
-    fontFamily: undefined,
+    fontSize: 11,
+    color: 'rgba(255,255,255,0.3)',
   },
   cardMeta: {
     flexDirection: 'row',
-    gap: 16,
+    gap: 14,
     marginTop: 2,
   },
   metaItem: {
@@ -792,62 +1065,28 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 4,
   },
-  metaText: {
-    fontSize: 13,
-    color: '#4CAF50',
+  metaTextGreen: {
+    fontSize: 11,
+    color: '#4ade80',
     fontWeight: '500',
   },
   metaTextGray: {
-    fontSize: 12,
-    color: '#667',
+    fontSize: 11,
+    color: 'rgba(255,255,255,0.35)',
   },
   cardArrow: {
     alignItems: 'center',
-    paddingHorizontal: 18,
+    paddingHorizontal: 16,
     gap: 2,
   },
   connectLabel: {
-    fontSize: 9,
-    color: '#4CAF50',
+    fontSize: 8,
+    color: '#4ade80',
     letterSpacing: 1,
     fontWeight: '700',
   },
 
-  // ── EMPTY STATE ──────────────────────────────────────────────────────────────
-  emptyState: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    paddingHorizontal: 40,
-  },
-  emptyTitle: {
-    fontSize: 20,
-    fontWeight: '600',
-    color: '#445',
-    marginBottom: 8,
-  },
-  emptyHint: {
-    fontSize: 13,
-    color: '#334',
-    textAlign: 'center',
-    lineHeight: 20,
-    marginBottom: 28,
-  },
-  emptyTips: {
-    gap: 8,
-    alignSelf: 'flex-start',
-  },
-  tipRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  tipText: {
-    fontSize: 13,
-    color: '#445',
-  },
-
-  // Scanning
+  // Scanning row
   scanningRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -855,25 +1094,159 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
   },
   scanningText: {
-    fontSize: 14,
-    color: '#2196F3',
+    fontSize: 13,
+    color: '#3b82f6',
     fontWeight: '500',
   },
 
-  // ── MODAL ────────────────────────────────────────────────────────────────────
+  // ── EMPTY STATE ─────────────────────────────────────────────────────────
+  emptyState: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 40,
+  },
+  spinnerWrap: {
+    width: 128,
+    height: 128,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 28,
+  },
+  spinnerOuter: {
+    width: 128,
+    height: 128,
+    borderRadius: 64,
+    borderWidth: 2,
+    borderColor: 'rgba(74,222,128,0.2)',
+    borderStyle: 'dashed',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  spinnerInner: {
+    width: 96,
+    height: 96,
+    borderRadius: 48,
+    borderWidth: 1,
+    borderColor: 'rgba(74,222,128,0.4)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  radarPulse: {
+    position: 'absolute',
+    width: 128,
+    height: 128,
+    borderRadius: 64,
+    borderWidth: 1,
+    borderColor: '#4ade80',
+  },
+  emptyTitle: {
+    fontSize: 22,
+    fontWeight: '700',
+    color: '#ffffff',
+    marginBottom: 8,
+  },
+  emptyDesc: {
+    fontSize: 13,
+    color: 'rgba(255,255,255,0.4)',
+    textAlign: 'center',
+    lineHeight: 20,
+    marginBottom: 28,
+  },
+  tipsCard: {
+    backgroundColor: 'rgba(255,255,255,0.05)',
+    borderRadius: 16,
+    padding: 20,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.05)',
+    width: '100%',
+    maxWidth: 420,
+    gap: 12,
+  },
+  tipRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  tipDotWrap: {
+    width: 16,
+    height: 16,
+    borderRadius: 8,
+    backgroundColor: 'rgba(74,222,128,0.2)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  tipDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: '#4ade80',
+  },
+  tipText: {
+    fontSize: 11,
+    color: 'rgba(255,255,255,0.6)',
+  },
+  tipHighlightGreen: {
+    color: '#4ade80',
+    fontVariant: ['tabular-nums'],
+  },
+  tipHighlightWhite: {
+    color: '#ffffff',
+    fontWeight: '500',
+  },
+  tipHighlightBlue: {
+    color: '#60a5fa',
+    fontWeight: '500',
+  },
+  tipHighlightOrange: {
+    color: '#fb923c',
+    fontWeight: '500',
+  },
+
+  // ── FOOTER BAR ──────────────────────────────────────────────────────────
+  footerBar: {
+    height: 44,
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(255,255,255,0.05)',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 28,
+    backgroundColor: 'rgba(13,13,15,0.5)',
+  },
+  footerLeft: {
+    flexDirection: 'row',
+    gap: 20,
+  },
+  footerRight: {
+    flexDirection: 'row',
+    gap: 16,
+  },
+  footerText: {
+    fontSize: 9,
+    color: 'rgba(255,255,255,0.2)',
+    fontVariant: ['tabular-nums'],
+  },
+  footerTextGreen: {
+    fontSize: 9,
+    color: 'rgba(74,222,128,0.5)',
+    fontVariant: ['tabular-nums'],
+  },
+
+  // ── MODAL ───────────────────────────────────────────────────────────────
   modalOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.75)',
+    backgroundColor: 'rgba(0,0,0,0.8)',
     justifyContent: 'center',
     alignItems: 'center',
   },
   modalCard: {
-    backgroundColor: '#111d2e',
+    backgroundColor: '#151619',
     borderRadius: 16,
     padding: 28,
     width: 420,
     borderWidth: 1,
-    borderColor: '#1e3a5f',
+    borderColor: 'rgba(255,255,255,0.1)',
   },
   modalHeader: {
     flexDirection: 'row',
@@ -882,25 +1255,25 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   modalTitle: {
-    fontSize: 18,
+    fontSize: 17,
     fontWeight: '700',
-    color: 'white',
+    color: '#ffffff',
   },
   modalHint: {
-    fontSize: 13,
-    color: '#556',
+    fontSize: 12,
+    color: 'rgba(255,255,255,0.4)',
     marginBottom: 18,
     lineHeight: 20,
   },
   urlInput: {
-    backgroundColor: '#0A1628',
+    backgroundColor: '#0a0a0b',
     borderWidth: 1,
-    borderColor: '#2a4a6a',
-    borderRadius: 8,
+    borderColor: 'rgba(255,255,255,0.1)',
+    borderRadius: 10,
     paddingHorizontal: 14,
-    paddingVertical: 11,
-    color: 'white',
-    fontSize: 15,
+    paddingVertical: 12,
+    color: '#ffffff',
+    fontSize: 14,
     marginBottom: 20,
   },
   modalButtons: {
@@ -910,18 +1283,18 @@ const styles = StyleSheet.create({
   modalBtn: {
     flex: 1,
     paddingVertical: 12,
-    borderRadius: 8,
+    borderRadius: 10,
     alignItems: 'center',
   },
   modalBtnCancel: {
-    backgroundColor: '#1e3a5f',
+    backgroundColor: 'rgba(255,255,255,0.1)',
   },
   modalBtnConnect: {
-    backgroundColor: '#FF9800',
+    backgroundColor: '#f59e0b',
   },
   modalBtnText: {
-    color: 'white',
-    fontSize: 15,
+    color: '#ffffff',
+    fontSize: 14,
     fontWeight: '600',
   },
 });

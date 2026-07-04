@@ -20,7 +20,7 @@ interface MissionCompletionDialogProps {
   statusMap: Record<number, {
     reached?: boolean;
     marked?: boolean;
-    status?: 'completed' | 'loading' | 'skipped' | 'reached' | 'marked' | 'pending';
+    status?: 'completed' | 'loading' | 'skipped' | 'reached' | 'marked' | 'pending' | 'spray_on' | 'spray_off' | 'passed' | 'mission_end';
     timestamp?: string;
     pile?: string | number;
     rowNo?: string | number;

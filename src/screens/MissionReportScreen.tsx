@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { TouchableOpacity } from 'react-native';
 import { View, StyleSheet, ScrollView, SafeAreaView, StatusBar, Text, Alert } from 'react-native';
 import { colors } from '../theme/colors';
@@ -10,12 +10,13 @@ import { WaypointsTable } from '../components/missionreport/WaypointsTable';
 import { MissionMap } from '../components/missionreport/MissionMap';
 import { Mode, VehicleStatus, Waypoint } from '../components/missionreport/types';
 import { RTKInjectionScreen } from '../components/missionreport/RTKInjectionScreen';
-import { useRover } from '../context/RoverContext';
+import { useTelemetry } from '../context/TelemetryContext';
+import { useConnection } from '../context/ConnectionContext';
+import { useMission } from '../context/MissionContext';
 import { AutoAssignDialog } from '../components/missionreport/AutoAssignDialog';
 import { WaypointPreviewDialog } from '../components/missionreport/WaypointPreviewDialog';
 import { MissionCompletionDialog } from '../components/missionreport/MissionCompletionDialog';
 import { LogClearDialog } from '../components/missionreport/LogClearDialog';
-import { MissionStartConfirmationDialog } from '../components/missionreport/MissionStartConfirmationDialog';
 import { useScreenReadiness } from '../hooks/useComponentReadiness';
 import PersistentStorage from '../services/PersistentStorage';
 // NOTE: calculateAccuracy and formatAccuracyDisplay commented out - now using backend wp_dist_cm
@@ -35,7 +36,7 @@ const PANEL_PADDING_V = 8; // vertical padding for left/right panels
 type WpStatus = {
   reached?: boolean;
   marked?: boolean;
-  status?: 'completed' | 'loading' | 'skipped' | 'reached' | 'marked' | 'pending';
+  status?: 'completed' | 'loading' | 'skipped' | 'reached' | 'marked' | 'pending' | 'spray_on' | 'spray_off' | 'passed' | 'mission_end';
   timestamp?: string;
   pile?: string | number;
   rowNo?: string | number;
@@ -49,7 +50,11 @@ type WpStatus = {
   position_error_cm?: number; // Distance error in cm (was position_error_mm)
 };
 
-export default function MissionReportScreen() {
+interface MissionReportScreenProps {
+  isVisible?: boolean;
+}
+
+export default function MissionReportScreen({ isVisible = true }: MissionReportScreenProps) {
   const DEBUG_MISSION_LOGS = false;
   const missionLog = (...args: any[]) => {
     if (DEBUG_MISSION_LOGS) console.log(...args);
@@ -58,31 +63,47 @@ export default function MissionReportScreen() {
     const normalized = String(backendMode ?? '').trim().toLowerCase();
     if (normalized === 'auto') return 'AUTO';
     if (normalized === 'manual') return 'MANUAL';
+    if (normalized === 'continuous') return 'CONTINUOUS';
+    if (normalized === 'dash') return 'DASH';
     return null;
   };
-  const { telemetry, roverPosition, services, onMissionEvent, connectionState, missionWaypoints, setMissionWaypoints, clearMissionWaypoints, missionMode, setMissionMode } = useRover();
+  const { telemetry, roverPosition, onMissionEvent } = useTelemetry();
+  const { services, connectionState } = useConnection();
+  const { missionWaypoints, setMissionWaypoints, clearMissionWaypoints, missionMode, setMissionMode } = useMission();
   const [mode, setMode] = useState<Mode>('AUTO');
   const [currentIndex, setCurrentIndex] = useState<number | null>(null);
   const [statusMap, setStatusMap] = useState<Record<number, WpStatus>>({});
-  
+
+  // STATUS DOWNGRADE GUARD: Defines priority order — higher index = more "final"
+  // Once a waypoint reaches 'completed' or 'skipped', backend events cannot regress it
+  const STATUS_PRIORITY: Record<string, number> = {
+    'pending': 0,
+    'loading': 1,
+    'reached': 2,
+    'passed': 2,
+    'spray_on': 3,
+    'spray_off': 3,
+    'marked': 3,
+    'completed': 4,
+    'skipped': 4,
+    'mission_end': 4,
+  };
+
+  /** Returns true if the incoming status would be a downgrade from the existing one */
+  const isStatusDowngrade = (existingStatus: string | undefined, incomingStatus: string | undefined): boolean => {
+    if (!existingStatus || !incomingStatus) return false;
+    const existingPriority = STATUS_PRIORITY[existingStatus] ?? 0;
+    const incomingPriority = STATUS_PRIORITY[incomingStatus] ?? 0;
+    return incomingPriority < existingPriority;
+  };
+
   // Track screen readiness - prevents user actions until all components initialized
   const { isReady: screenReady } = useScreenReadiness(
     'mission-report-screen',
     'Mission Report Screen',
     async (setProgress) => {
-      setProgress(20, 'Loading waypoints...');
-      await new Promise(resolve => setTimeout(resolve, 100));
-      
-      setProgress(40, 'Initializing telemetry...');
-      await new Promise(resolve => setTimeout(resolve, 100));
-      
-      setProgress(60, 'Setting up map...');
-      await new Promise(resolve => setTimeout(resolve, 100));
-      
-      setProgress(80, 'Connecting services...');
-      await new Promise(resolve => setTimeout(resolve, 100));
-      
-      // Screen ready
+      // No artificial delays — screen becomes ready as soon as async init completes
+      setProgress(100, 'Ready');
     },
     true, // critical
     [] // No dependencies
@@ -111,9 +132,9 @@ export default function MissionReportScreen() {
   const [missionStartTime, setMissionStartTime] = useState<Date | null>(null);
   const [missionEndTime, setMissionEndTime] = useState<Date | null>(null);
   const [isMissionActive, setIsMissionActive] = useState(false); // Track if mission is currently running
+  const [waitingForManual, setWaitingForManual] = useState(false); // MANUAL mode: waiting for user to press NEXT
   
-  // Mission start confirmation dialog state
-  const [showStartConfirmationDialog, setShowStartConfirmationDialog] = useState(false);
+
 
   // Skip audit / undo support
   type SkipAuditRecord = {
@@ -137,9 +158,9 @@ export default function MissionReportScreen() {
   const [showRTKInjection, setShowRTKInjection] = useState(false);
 
   // Toggle full screen map mode
-  const toggleMapFullscreen = () => {
+  const toggleMapFullscreen = useCallback(() => {
     setIsMapFullscreen(prev => !prev);
-  };
+  }, []);
 
   const openRTKInjection = () => setShowRTKInjection(true);
   const closeRTKInjection = () => setShowRTKInjection(false);
@@ -356,30 +377,28 @@ export default function MissionReportScreen() {
     // Only clean up old statuses during active missions
     const currentWaypointSn = currentIndex + 1; // Convert 0-based index to 1-based SN
     
-    // Create a new statusMap keeping only:
-    // 1. Current waypoint + next waypoint
-    // 2. All waypoints that were already marked as completed/skipped (don't remove mission history)
-    const newStatusMap = { ...statusMap };
+    // Use ref to read latest statusMap without it being a dependency (prevents self-triggering loop)
+    const currentStatusMap = statusMapRef.current;
+    const newStatusMap = { ...currentStatusMap };
     let hasChanges = false;
 
-    Object.keys(statusMap).forEach(snStr => {
+    Object.keys(currentStatusMap).forEach(snStr => {
       const sn = parseInt(snStr, 10);
-      const status = statusMap[sn];
+      const status = currentStatusMap[sn];
       
       // Keep statuses that are completed or skipped (mission history)
       if (status?.status === 'completed' || status?.status === 'skipped') {
         return; // Keep this entry
       }
       
-      // For waypoints with reached/loading/pending/marked status:
-      // Only keep if they're current or next waypoint
+      // Only clean up 'loading' status for waypoints that are no longer current
+      // IMPORTANT: Never delete 'reached' or 'marked' — waypoint_marked fires AFTER currentIndex
+      // advances, so deleting 'reached' before 'waypoint_marked' arrives loses accuracy data
       if (sn !== currentWaypointSn && sn !== currentWaypointSn + 1) {
-        // This is an old reached/marked status that's no longer relevant
-        // Remove it to keep table clean during mission progress
-        if (status?.status === 'reached' || status?.status === 'marked') {
+        if (status?.status === 'loading') {
           delete newStatusMap[sn];
           hasChanges = true;
-          console.log(`[MissionReportScreen] 🗑️ Cleaned up stale "${status.status}" status for waypoint ${sn}`);
+          console.log(`[MissionReportScreen] 🗑️ Cleaned up stale "loading" status for waypoint ${sn}`);
         }
       }
     });
@@ -388,7 +407,7 @@ export default function MissionReportScreen() {
     if (hasChanges) {
       setStatusMap(newStatusMap);
     }
-  }, [currentIndex, isMissionActive, waypoints, statusMap]);
+  }, [currentIndex, isMissionActive, waypoints]);
 
   // PRESERVE STATUS ON MISSION COMPLETION: Keep statusMap after mission ends for export and review
   // Previously this was clearing statusMap, but that prevented proper export of skipped waypoints
@@ -413,25 +432,37 @@ export default function MissionReportScreen() {
     setMissionWaypoints(next.map((wp, i) => ({ ...wp, sn: i + 1 })));
   };
 
-  // ✅ FIX: Depend on entire telemetry object to ensure live updates (matches DYX-GCS source)
+  // Depend on individual primitive fields, not the full telemetry object.
+  // telemetry is a new object reference every 50ms (from useRoverTelemetry),
+  // so [telemetry] never actually caches. Primitives only change when values change.
   const vehicleStatus = useMemo((): VehicleStatus => {
-    // 🔧 FIX: Handle hrms/vrms as strings or numbers (backend sends strings currently)
+    // Handle hrms/vrms as strings or numbers (backend sends strings currently)
     const hrmsValue = typeof telemetry.hrms === 'string' ? parseFloat(telemetry.hrms) : telemetry.hrms;
     const vrmsValue = typeof telemetry.vrms === 'string' ? parseFloat(telemetry.vrms) : telemetry.vrms;
-    
+
     return {
       battery: `${telemetry.battery.percentage.toFixed(1)}% (${telemetry.battery.voltage.toFixed(2)}V)`,
       gps: getFixTypeLabel(telemetry.rtk.fix_type),
       satellites: telemetry.global.satellites_visible,
-      satelliteSignal: `${telemetry.global.satellites_visible}/10`,
       hrms: `${(hrmsValue || 0).toFixed(3)} m`,
       vrms: `${(vrmsValue || 0).toFixed(3)} m`,
       imu: telemetry.imu_status,
       mode: telemetry.state?.mode || 'UNKNOWN',
     };
-  }, [telemetry]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    telemetry.battery.percentage,
+    telemetry.battery.voltage,
+    telemetry.rtk.fix_type,
+    telemetry.global.satellites_visible,
+    telemetry.hrms,
+    telemetry.vrms,
+    telemetry.imu_status,
+    telemetry.state?.mode,
+  ]);
 
-  // ✅ FIX: Depend on entire objects to ensure live updates (matches DYX-GCS pattern)
+  // Depend on individual primitive fields, not the full telemetry/roverPosition objects.
+  // These objects are new references every 50ms, so the memo would never cache.
   const mapProps = useMemo(() => {
     const props = {
       roverLat: roverPosition?.lat ?? 0,
@@ -443,7 +474,7 @@ export default function MissionReportScreen() {
 
     // Debug log map props updates (10% sample rate)
     if (DEBUG_MISSION_LOGS && Math.random() < 0.1) {
-      missionLog('[MissionReportScreen] 📍 Map props updated:', {
+      missionLog('[MissionReportScreen] ✦ Map props updated:', {
         lat: props.roverLat.toFixed(7),
         lon: props.roverLon.toFixed(7),
         heading: props.heading !== null ? props.heading.toFixed(1) + '°' : 'N/A',
@@ -453,7 +484,14 @@ export default function MissionReportScreen() {
     }
 
     return props;
-  }, [roverPosition, telemetry]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    roverPosition?.lat,
+    roverPosition?.lng,
+    telemetry.attitude?.yaw_deg,
+    telemetry.state?.armed,
+    telemetry.rtk?.fix_type,
+  ]);
 
   // Calculate marked waypoints count from real-time statusMap
   const markedCount = useMemo(() => {
@@ -479,7 +517,7 @@ export default function MissionReportScreen() {
   // Automatically derive currentIndex from statusMap to keep UI in sync
   // This fixes the issue where currentIndex gets stuck even though statusMap updates correctly
   useEffect(() => {
-    if (waypoints.length === 0) return;
+    if (waypoints.length === 0 || !isMissionActive) return;
 
     // Find the first waypoint that is NOT completed or skipped
     // This represents the current active waypoint
@@ -518,12 +556,24 @@ export default function MissionReportScreen() {
     // Only update if the derived index is different from current
     setCurrentIndex(prev => {
       if (prev !== derivedIndex) {
+        // Forward-guard: do not advance past a non-terminal waypoint
+        // This mirrors the guard in the socket event handler (lines 1828-1837)
+        if (derivedIndex !== null && prev !== null && derivedIndex > prev) {
+          const leavingWp = waypoints[prev];
+          if (leavingWp) {
+            const leavingStatus = statusMap[leavingWp.sn];
+            if (!leavingStatus || (leavingStatus.status !== 'completed' && leavingStatus.status !== 'skipped')) {
+              // The waypoint we're leaving is not yet terminal — hold position
+              return prev;
+            }
+          }
+        }
         missionLog(`[MissionReportScreen] 🔄 Auto-derived currentIndex from statusMap: ${prev} -> ${derivedIndex} (waypoint #${derivedIndex !== null ? derivedIndex + 1 : 'null'})`);
         return derivedIndex;
       }
       return prev;
     });
-  }, [statusMap, waypoints]);
+  }, [statusMap, waypoints, isMissionActive]);
 
   // Separate effect to handle mission completion detection without circular dependencies
   // Using refs to avoid infinite loops - only triggers when currentIndex becomes null
@@ -668,8 +718,9 @@ export default function MissionReportScreen() {
     }
   });
 
-  // Get mission data for display (current or previous)
-  const getDisplayMissionData = () => {
+  // Get mission data for display (current or previous) — memoized to avoid
+  // creating new object references on every telemetry-driven re-render
+  const displayData = useMemo(() => {
     // If we have a completed previous mission and no current mission activity, show previous
     if (previousMissionData && !isMissionActive && Object.keys(statusMap).length === 0) {
       return {
@@ -688,11 +739,10 @@ export default function MissionReportScreen() {
       startTime: missionStartTime,
       endTime: missionEndTime,
     };
-  };
+  }, [previousMissionData, isMissionActive, statusMap, waypoints, missionMode, missionStartTime, missionEndTime]);
 
   // Calculate mission statistics for completion dialog
   const getMissionStats = () => {
-    const displayData = getDisplayMissionData();
     const totalWaypoints = displayData.waypoints.length;
     const completedWaypoints = displayData.waypoints.filter(wp => {
       const wpStatus = displayData.statusMap[wp.sn];
@@ -777,26 +827,7 @@ export default function MissionReportScreen() {
 
   // Mission control handlers matching web application
   const handleStart = async () => {
-    // Check if we need confirmation before starting
-    if (hasExistingMissionData()) {
-      console.log('[MissionReportScreen] Existing mission data detected - showing confirmation dialog');
-      setShowStartConfirmationDialog(true);
-      return { success: false, message: 'Awaiting user confirmation' };
-    }
-    
-    // No existing data, start immediately
     return executeStartMission();
-  };
-
-  // Handle confirmation dialog result
-  const handleStartConfirmation = () => {
-    setShowStartConfirmationDialog(false);
-    executeStartMission();
-  };
-
-  const handleStartCancellation = () => {
-    setShowStartConfirmationDialog(false);
-    console.log('[MissionReportScreen] Mission start cancelled by user');
   };
 
   // Actual mission start function (after confirmation)
@@ -920,13 +951,30 @@ export default function MissionReportScreen() {
         // TRAIL DISABLED: Clear trail when mission stops commented out
         // trailPointsRef.current = [];
         // setTrailPoints([]);
+      } else if (response?.message?.includes('No mission running')) {
+        // Mission was already stopped (likely by MissionControlCard)
+        setCurrentIndex(null);
+        setIsMissionActive(false);
+        preserveCurrentMission.current();
+        console.log('[MissionReportScreen] Mission already stopped');
+        showNotification('info', 'Mission Stopped', 'Mission was already stopped');
       } else {
         console.error('[MissionReportScreen] Stop failed:', response.message);
         showNotification('error', 'Stop Failed', response.message || 'Failed to stop mission');
       }
-    } catch (error) {
-      console.error('[MissionReportScreen] Stop Error:', error);
-      showNotification('error', 'Error', 'Failed to stop mission');
+    } catch (error: any) {
+      const errMsg = error?.message ?? String(error);
+      if (errMsg.includes('No mission running')) {
+        // Mission was already stopped (likely by MissionControlCard)
+        setCurrentIndex(null);
+        setIsMissionActive(false);
+        preserveCurrentMission.current();
+        console.log('[MissionReportScreen] Mission already stopped (caught)');
+        showNotification('info', 'Mission Stopped', 'Mission was already stopped');
+      } else {
+        console.error('[MissionReportScreen] Stop Error:', error);
+        showNotification('error', 'Error', 'Failed to stop mission');
+      }
     }
   };
 
@@ -935,6 +983,7 @@ export default function MissionReportScreen() {
       console.log('[MissionReportScreen] Requesting backend to move to next waypoint');
       const response = await services.nextMission();
       if (response.success) {
+        setWaitingForManual(false); // MANUAL mode: user acknowledged, clear the flag
         // Backend will emit mission_status; optimistic increment as fallback
         setCurrentIndex(prev => (prev === null ? 0 : Math.min(prev + 1, waypoints.length - 1)));
         console.log('[MissionReportScreen] Next waypoint requested successfully');
@@ -1150,74 +1199,69 @@ export default function MissionReportScreen() {
     };
   }, []);
 
-  // Load persisted mission state on mount
+  // Load persisted mission state on mount — single batch read for speed
   useEffect(() => {
     const loadPersistedState = async () => {
       try {
-        const [savedStatusMap, savedStartTime, savedEndTime, savedIsActive, savedMode, savedUIState] = await Promise.all([
-          PersistentStorage.loadStatusMap(),
-          PersistentStorage.loadMissionStartTime(),
-          PersistentStorage.loadMissionEndTime(),
-          PersistentStorage.loadMissionActive(),
-          PersistentStorage.loadMissionMode(),
-          PersistentStorage.loadMissionReportUIState(),
-        ]);
+        // BATCH READ: Single AsyncStorage.multiGet instead of 6 separate reads
+        const data = await PersistentStorage.loadAllMissionReportData();
+        if (!data) return;
 
-        if (savedStatusMap && Object.keys(savedStatusMap).length > 0) {
-          setStatusMap(savedStatusMap);
-          console.log('[MissionReportScreen] 📂 Restored status map with', Object.keys(savedStatusMap).length, 'entries');
+        if (data.statusMap && Object.keys(data.statusMap).length > 0) {
+          setStatusMap(data.statusMap);
+          console.log('[MissionReportScreen] 📂 Restored status map with', Object.keys(data.statusMap).length, 'entries');
         }
 
-        if (savedStartTime) {
-          setMissionStartTime(savedStartTime);
+        if (data.startTime) {
+          setMissionStartTime(data.startTime);
           console.log('[MissionReportScreen] 📂 Restored mission start time');
         }
 
-        if (savedEndTime) {
-          setMissionEndTime(savedEndTime);
+        if (data.endTime) {
+          setMissionEndTime(data.endTime);
           console.log('[MissionReportScreen] 📂 Restored mission end time');
         }
 
-        if (savedIsActive) {
+        if (data.isActive) {
           // 🔧 FIX: Only restore mission active state if backend telemetry confirms mission is actually running
           // This prevents showing STOP button when backend mission is not running
           const currentBackendStatus = telemetry?.mission?.status?.toString().toLowerCase();
           const isBackendActuallyRunning = currentBackendStatus === 'running' || currentBackendStatus === 'active';
-          
+
           if (isBackendActuallyRunning) {
-            setIsMissionActive(savedIsActive);
-            console.log('[MissionReportScreen] 📂 Restored mission active state:', savedIsActive, '(confirmed by backend)');
+            setIsMissionActive(data.isActive);
+            console.log('[MissionReportScreen] 📂 Restored mission active state:', data.isActive, '(confirmed by backend)');
           } else if (currentBackendStatus === undefined || currentBackendStatus === '') {
             // If no telemetry yet, temporarily restore but will be corrected by MissionControlCard sync
-            setIsMissionActive(savedIsActive);
-            console.log('[MissionReportScreen] 📂 Restored mission active state temporarily (no telemetry yet):', savedIsActive);
+            setIsMissionActive(data.isActive);
+            console.log('[MissionReportScreen] 📂 Restored mission active state temporarily (no telemetry yet):', data.isActive);
           } else {
             setIsMissionActive(false);
             console.log('[MissionReportScreen] 📂 Skipped restoring mission active state - backend shows:', currentBackendStatus || 'no status');
           }
         }
 
-        if (savedMode) {
-          setMissionMode(savedMode);
-          console.log('[MissionReportScreen] 📂 Restored mission mode:', savedMode);
+        if (data.mode) {
+          setMissionMode(data.mode);
+          console.log('[MissionReportScreen] 📂 Restored mission mode:', data.mode);
         } else {
           // Ensure mode is set to default if no saved mode
           setMissionMode('DGPS Mark');
         }
 
         // Restore UI state
-        if (savedUIState) {
-          if (savedUIState.isMapFullscreen !== undefined) {
-            setIsMapFullscreen(savedUIState.isMapFullscreen);
-            console.log('[MissionReportScreen] 📂 Restored map fullscreen state:', savedUIState.isMapFullscreen);
+        if (data.uiState) {
+          if (data.uiState.isMapFullscreen !== undefined) {
+            setIsMapFullscreen(data.uiState.isMapFullscreen);
+            console.log('[MissionReportScreen] 📂 Restored map fullscreen state:', data.uiState.isMapFullscreen);
           }
-          if (savedUIState.currentIndex !== undefined) {
-            setCurrentIndex(savedUIState.currentIndex);
-            console.log('[MissionReportScreen] 📂 Restored current waypoint index:', savedUIState.currentIndex);
+          if (data.uiState.currentIndex !== undefined) {
+            setCurrentIndex(data.uiState.currentIndex);
+            console.log('[MissionReportScreen] 📂 Restored current waypoint index:', data.uiState.currentIndex);
           }
-          if (savedUIState.mode) {
-            setMode(savedUIState.mode);
-            console.log('[MissionReportScreen] 📂 Restored mode:', savedUIState.mode);
+          if (data.uiState.mode) {
+            setMode(data.uiState.mode);
+            console.log('[MissionReportScreen] 📂 Restored mode:', data.uiState.mode);
           }
         }
       } catch (error) {
@@ -1303,22 +1347,26 @@ export default function MissionReportScreen() {
       // Match only the full "Mission: Spray suppressed" pattern to avoid duplicates
       if (event.message && typeof event.message === 'string' && event.message.includes('Mission: Spray suppressed')) {
         console.log('[MissionReportScreen] 🚫 Detected spray suppression message:', event.message);
-        // Mark the most recent waypoint as skipped
-        const currentWpIndex = Object.keys(statusMapRef.current).length;
-        if (currentWpIndex > 0 && currentWpIndex <= waypointsRef.current.length) {
-          const wpId = waypointsRef.current[currentWpIndex - 1]?.sn;
-          if (wpId && statusMapRef.current[wpId]) {
-            console.log(`[MissionReportScreen] ⏭️ Marking waypoint ${wpId} as SKIPPED (spray suppressed)`);
-            setStatusMap(prev => ({
-              ...prev,
-              [wpId]: {
-                ...prev[wpId],
-                status: 'skipped',
-                remark: 'Skipped - GPS accuracy too low',
-              },
-            }));
+        // Mark the most recent waypoint as skipped — read prev inside functional updater
+        setStatusMap(prev => {
+          const currentWpIndex = Object.keys(prev).length;
+          const allWps = waypointsRef.current;
+          if (currentWpIndex > 0 && currentWpIndex <= allWps.length) {
+            const wpId = allWps[currentWpIndex - 1]?.sn;
+            if (wpId && prev[wpId]) {
+              console.log(`[MissionReportScreen] ⏭️ Marking waypoint ${wpId} as SKIPPED (spray suppressed)`);
+              return {
+                ...prev,
+                [wpId]: {
+                  ...prev[wpId],
+                  status: 'skipped',
+                  remark: 'Skipped - GPS accuracy too low',
+                },
+              };
+            }
           }
-        }
+          return prev;
+        });
       }
 
       // Handle bulk skip events (backend emits event_type: 'bulk_skip')
@@ -1331,44 +1379,15 @@ export default function MissionReportScreen() {
 
           if (typeof skipFrom === 'number' && typeof skipTo === 'number' && skipTo >= skipFrom) {
             const timestamp = event.timestamp ? (typeof event.timestamp === 'string' ? event.timestamp : new Date(event.timestamp).toISOString()) : new Date().toISOString();
-            // Capture previous statuses for audit/undo
-            const prevStatuses: Record<number, WpStatus | null> = {};
-            waypointsRef.current.forEach(wp => {
-              if (wp.sn >= skipFrom && wp.sn <= skipTo) {
-                prevStatuses[wp.sn] = statusMapRef.current[wp.sn] ?? null;
-              }
-            });
 
-            const recordId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-            const auditRecord: any = {
-              id: recordId,
-              skipFrom,
-              skipTo,
-              timestamp,
-              previousStatuses: prevStatuses,
-            };
-
-            // Persist audit record (best-effort)
-            PersistentStorage.saveSkipAuditRecord(auditRecord).catch(err => console.warn('[MissionReportScreen] Failed to save skip audit', err));
-
-            // Store in local history for quick undo
-            setSkipHistory(prev => [auditRecord as any].concat(prev));
-
-            // Show undo prompt for a short window
-            if (undoTimerRef.current) {
-              clearTimeout(undoTimerRef.current);
-            }
-            setUndoPrompt({ visible: true, id: recordId });
-            undoTimerRef.current = setTimeout(() => {
-              setUndoPrompt({ visible: false, id: null });
-              undoTimerRef.current = null;
-            }, 8000);
-
-            // Mark each waypoint in the range as skipped (by sn)
+            // Capture previous statuses for audit/undo and mark as skipped —
+            // both read prev inside the functional updater to avoid stale refs
             setStatusMap(prev => {
               const copy = { ...prev };
+              const prevStatuses: Record<number, WpStatus | null> = {};
               waypointsRef.current.forEach(wp => {
                 if (wp.sn >= skipFrom && wp.sn <= skipTo) {
+                  prevStatuses[wp.sn] = prev[wp.sn] ?? null;
                   copy[wp.sn] = {
                     ...(copy[wp.sn] || {}),
                     status: 'skipped',
@@ -1377,6 +1396,25 @@ export default function MissionReportScreen() {
                   } as WpStatus;
                 }
               });
+
+              // Fire-and-forget: persist audit then update UI history
+              const recordId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+              const auditRecord: any = {
+                id: recordId,
+                skipFrom,
+                skipTo,
+                timestamp,
+                previousStatuses: prevStatuses,
+              };
+              PersistentStorage.saveSkipAuditRecord(auditRecord).catch(err => console.warn('[MissionReportScreen] Failed to save skip audit', err));
+              setSkipHistory(h => [auditRecord as any].concat(h));
+              setUndoPrompt({ visible: true, id: recordId });
+              if (undoTimerRef.current) clearTimeout(undoTimerRef.current);
+              undoTimerRef.current = setTimeout(() => {
+                setUndoPrompt({ visible: false, id: null });
+                undoTimerRef.current = null;
+              }, 8000);
+
               return copy;
             });
 
@@ -1401,6 +1439,12 @@ export default function MissionReportScreen() {
       //   waypoints_count: waypoints.length
       // });
       
+      // DEBUG: Log distance-to-next-waypoint from backend
+      const distToNext = event.wp_dist_cm ?? event.distance_to_next ?? event.dist_to_wp ?? event.data?.wp_dist_cm ?? event.data?.distance_to_next ?? telemetryRef.current.wp_dist_cm;
+      if (distToNext != null) {
+        console.log(`[MissionReportScreen] 📏 Distance to next WP: ${distToNext} cm (${(distToNext / 100).toFixed(2)} m) [eventType: ${eventType}]`);
+      }
+
       // Skip high-frequency events (mission_status, unknown telemetry updates)
       if (eventType === 'mission_status' || eventType === 'unknown') {
         // Process state updates silently without logging
@@ -1410,120 +1454,140 @@ export default function MissionReportScreen() {
       }
       
       // Handle waypoint reached events (multiple possible event formats)
-      if (eventType === 'waypoint_reached' || event.event_type === 'waypoint_reached' || 
+      if (eventType === 'waypoint_reached' || event.event_type === 'waypoint_reached' ||
           (event.data && event.data.event_type === 'waypoint_reached')) {
-        const wpId = event.waypoint_id ?? event.id ?? event.data?.waypoint_id ?? event.data?.id ?? 0;
+        const wpId = event.waypoint_id ?? event.waypointId ?? event.id ?? event.data?.waypoint_id ?? event.data?.waypointId ?? event.data?.id ?? 0;
         const timestamp = event.timestamp ? (typeof event.timestamp === 'string' ? event.timestamp : new Date(event.timestamp).toISOString()) : new Date().toISOString();
-        
-        console.log(`[MissionReportScreen] 🎯 Processing waypoint_reached: wpId=${wpId}, waypoints.length=${waypointsRef.current.length}`);
-        
+
+        console.log(`[MissionReportScreen] 🎯 Processing waypoint_reached: wpId=${wpId}, mode=${modeRef.current}, waypoints.length=${waypointsRef.current.length}`);
+
         // Find the corresponding waypoint by waypoint_id to get the correct sn
         const targetWaypoint = waypointsRef.current.find(wp => wp.sn === wpId);
         const statusKey = targetWaypoint ? targetWaypoint.sn : wpId;
-        
-        // Capture rover's current position and accuracy from telemetry
-        const roverLat = telemetryRef.current.global?.lat;
-        const roverLon = telemetryRef.current.global?.lon;
-        const hrms = telemetryRef.current.hrms;
-        const vrms = telemetryRef.current.vrms;
+        const currentMode = modeRef.current;
 
-        // COMMENTED OUT: Frontend Haversine calculation - now using backend accuracy_error_mm
-        // Calculate accuracy if we have position data and target waypoint
-        // let accuracyData: { accuracy_level?: string; position_error_mm?: number } = {};
-        // if (targetWaypoint && roverLat != null && roverLon != null && roverLat !== 0 && roverLon !== 0) {
-        //   const { errorMm, accuracy } = calculateAccuracy(
-        //     targetWaypoint.lat,
-        //     targetWaypoint.lon,
-        //     roverLat,
-        //     roverLon
-        //   );
-        //   accuracyData = {
-        //     accuracy_level: accuracy.level,
-        //     position_error_mm: errorMm,
-        //   };
-        //   console.log(`[MissionReportScreen] 📊 Accuracy calculated for WP ${statusKey}: ${errorMm.toFixed(1)}mm (${accuracy.label})`);
-        // }
+        // CONTINUOUS / DASH modes — simplified status, no accuracy tracking
+        if (currentMode === 'CONTINUOUS' || currentMode === 'DASH') {
+          let status: WpStatus['status'];
+          let remark: string;
 
-        // USE ACCURACY DATA: Primary data source from event.accuracy_error_mm (sent by backend at top level)
-        // Priority: 1) event.accuracy_error_mm (PRIMARY from backend), 2) hrms fallback
-        
-        // PRIMARY: Backend accuracy_error_mm
-        const gpsFailsafeAccuracyMm = event.accuracy_error_mm ?? null;
-        
-        // COMMENTED OUT METHODS (kept for reference):
-        // const positionErrorCmFromEvent = event.position_error_cm ?? event.data?.position_error_cm ?? null;
-        // const accuracyErrorMmFromEvent = event.accuracy_error_mm ?? event.data?.accuracy_error_mm ?? null;
-        // const positionErrorMm_METHOD2 = telemetryRef.current.position_error_cm != null ? telemetryRef.current.position_error_cm * 10 : null;
-        // const positionErrorMm_METHOD3 = positionErrorCmFromEvent != null ? positionErrorCmFromEvent * 10 : null;
-        // const positionErrorMm_METHOD4 = accuracyErrorMmFromEvent != null ? accuracyErrorMmFromEvent : null;
-        
-        // Use backend accuracy as primary source
-        const backendAccuracyMm = gpsFailsafeAccuracyMm;
+          if (currentMode === 'CONTINUOUS') {
+            if (event.is_first) {
+              status = 'spray_on';
+              remark = 'Spray ON';
+            } else if (event.is_last) {
+              status = 'spray_off';
+              remark = 'Spray OFF';
+            } else {
+              status = 'passed';
+              remark = 'Passed';
+            }
+          } else {
+            // DASH mode
+            if (event.is_first) {
+              status = 'spray_on';
+              remark = 'Dash Started';
+            } else {
+              status = 'passed';
+              remark = 'Passed';
+            }
+          }
 
-        // FALLBACK: hrms (meters) converted to mm if no GPS failsafe available
-        // const hrmsAccuracyMm = hrms != null && hrms > 0 ? hrms * 1000 : null;
-        // const backendAccuracyMm_FALLBACK = (positionErrorMm != null && positionErrorMm > 0)
-        //                              ? positionErrorMm
-        //                              : hrmsAccuracyMm;
+          // Move downgrade guard and nextEntry construction inside functional updater
+          // so they read fresh state from `prev` instead of stale `statusMapRef.current`
+          setStatusMap(prev => {
+            const prevEntry = prev[statusKey];
+            if (isStatusDowngrade(prevEntry?.status, status)) {
+              console.log(`[MissionReportScreen] 🛡️ Blocked status downgrade for WP ${statusKey}: ${prevEntry?.status} → ${status}`);
+              return prev;
+            }
+            const nextEntry = {
+              ...(prevEntry || {}),
+              reached: true,
+              status,
+              timestamp,
+              remark,
+              pile: event.pile ?? prevEntry?.pile,
+              rowNo: event.rowNo ?? event.row_no ?? prevEntry?.rowNo,
+            } as WpStatus;
 
-        let accuracyData: { accuracy_level?: string; position_error_cm?: number } = {};
-        if (backendAccuracyMm != null) {
-          // Use same thresholds as frontend: Excellent ≤30mm, Good 30-60mm, Poor >60mm
-          const accuracy = getAccuracyLevel(backendAccuracyMm);
-          accuracyData = {
-            accuracy_level: accuracy.level,
-            position_error_cm: backendAccuracyMm / 10, // Convert mm to cm for consistency with WaypointsTable
-          };
-          const source = 'event_accuracy_error_mm';
-          console.log(`[MissionReportScreen] 📊 Backend accuracy for WP ${statusKey}: ${backendAccuracyMm.toFixed(1)}mm (${accuracy.label}) [source: ${source}]`);
+            if (!prevEntry || prevEntry.status !== nextEntry.status) {
+              console.log(`[MissionReportScreen] ✅ [${currentMode}] Waypoint ${statusKey} → ${status} at ${timestamp}`);
+              return { ...prev, [statusKey]: nextEntry };
+            }
+            return prev;
+          });
         } else {
-          console.log(`[MissionReportScreen] ⚠️ No backend accuracy for WP ${statusKey}, sources checked:`, {
-            event_accuracy_error_mm: event.accuracy_error_mm,
-            // telemetry_position_error_cm: telemetryRef.current.position_error_cm,
-            // event_position_error_cm: event.position_error_cm,
-            // hrms: hrms,
+          // AUTO / MANUAL modes — existing logic with accuracy tracking
+          const roverLat = event.position?.lat ?? telemetryRef.current.global?.lat;
+          const roverLon = event.position?.lng ?? telemetryRef.current.global?.lon;
+          const hrms = telemetryRef.current.hrms;
+          const vrms = telemetryRef.current.vrms;
+
+          const gpsFailsafeAccuracyMm = event.accuracy_error_mm ?? null;
+          const backendAccuracyMm = gpsFailsafeAccuracyMm;
+
+          let accuracyData: { accuracy_level?: string; position_error_cm?: number } = {};
+          if (backendAccuracyMm != null) {
+            const accuracy = getAccuracyLevel(backendAccuracyMm);
+            accuracyData = {
+              accuracy_level: accuracy.level,
+              position_error_cm: backendAccuracyMm / 10,
+            };
+            console.log(`[MissionReportScreen] 📊 Backend accuracy for WP ${statusKey}: ${backendAccuracyMm.toFixed(1)}mm (${accuracy.label})`);
+          } else {
+            console.log(`[MissionReportScreen] ⚠️ No backend accuracy for WP ${statusKey}, sources checked:`, {
+              event_accuracy_error_mm: event.accuracy_error_mm,
+            });
+          }
+
+          // Move downgrade guard and nextEntry inside functional updater
+          // to read fresh state from `prev` instead of stale `statusMapRef.current`
+          setStatusMap(prev => {
+            const prevEntry = prev[statusKey];
+
+            // GUARD: Don't downgrade a completed/skipped waypoint back to reached
+            if (isStatusDowngrade(prevEntry?.status, 'reached')) {
+              console.log(`[MissionReportScreen] 🛡️ Blocked status downgrade for WP ${statusKey}: ${prevEntry?.status} → reached`);
+              return prev;
+            }
+
+            const nextEntry = {
+              ...(prevEntry || {}),
+              reached: true,
+              status: 'reached',
+              timestamp,
+              pile: event.pile ?? prevEntry?.pile,
+              rowNo: event.rowNo ?? event.row_no ?? prevEntry?.rowNo,
+              hrms: hrms ?? prevEntry?.hrms,
+              vrms: vrms ?? prevEntry?.vrms,
+              lat_achieved: roverLat ?? prevEntry?.lat_achieved,
+              lon_achieved: roverLon ?? prevEntry?.lon_achieved,
+              ...accuracyData,
+            } as WpStatus;
+
+            const changed = !prevEntry ||
+              prevEntry.status !== nextEntry.status ||
+              prevEntry.reached !== nextEntry.reached ||
+              prevEntry.pile !== nextEntry.pile ||
+              prevEntry.rowNo !== nextEntry.rowNo ||
+              prevEntry.accuracy_level !== nextEntry.accuracy_level;
+
+            if (changed) {
+              console.log(`[MissionReportScreen] ✅ Waypoint ${statusKey} reached at ${timestamp}`);
+              return { ...prev, [statusKey]: nextEntry };
+            }
+            return prev;
           });
         }
-        
-        const prevEntry = statusMapRef.current[statusKey];
-        const nextEntry = {
-          ...(prevEntry || {}),
-          reached: true,
-          status: 'reached',
-          timestamp,
-          pile: event.pile ?? prevEntry?.pile,
-          rowNo: event.rowNo ?? event.row_no ?? prevEntry?.rowNo,
-          hrms: hrms ?? prevEntry?.hrms,
-          vrms: vrms ?? prevEntry?.vrms,
-          lat_achieved: roverLat ?? prevEntry?.lat_achieved,
-          lon_achieved: roverLon ?? prevEntry?.lon_achieved,
-          ...accuracyData,
-        } as WpStatus;
-
-        const changed = !prevEntry ||
-          prevEntry.status !== nextEntry.status ||
-          prevEntry.reached !== nextEntry.reached ||
-          prevEntry.pile !== nextEntry.pile ||
-          prevEntry.rowNo !== nextEntry.rowNo ||
-          prevEntry.accuracy_level !== nextEntry.accuracy_level;
-
-        if (changed) {
-          setStatusMap(prev => ({
-            ...prev,
-            [statusKey]: nextEntry,
-          }));
-        }
-        
-        console.log(`[MissionReportScreen] ✅ Waypoint ${statusKey} reached at ${timestamp}`);
-        // showNotification('info', 'Waypoint Reached', `Reached waypoint ${statusKey}`);
       }
 
       // Handle waypoint marked/completed events (multiple possible event formats)
       if (eventType === 'waypoint_marked' || eventType === 'waypoint_completed' ||
           event.event_type === 'waypoint_marked' || event.event_type === 'waypoint_completed' ||
           (event.data && (event.data.event_type === 'waypoint_marked' || event.data.event_type === 'waypoint_completed'))) {
-        const wpId = event.waypoint_id ?? event.id ?? event.data?.waypoint_id ?? event.data?.id ?? 0;
-        const timestamp = event.timestamp 
+        const wpId = event.waypoint_id ?? event.waypointId ?? event.id ?? event.data?.waypoint_id ?? event.data?.waypointId ?? event.data?.id ?? 0;
+        const timestamp = event.timestamp
           ? (typeof event.timestamp === 'string' ? event.timestamp : new Date(event.timestamp).toISOString())
           : new Date().toISOString();
         const markingStatus = event.marking_status ?? event.markingStatus ?? event.status ?? event.data?.marking_status ?? 'completed';
@@ -1587,40 +1651,109 @@ export default function MissionReportScreen() {
           });
         }
         
-        const prevEntry = statusMapRef.current[statusKey];
-        const nextEntry = {
-          ...(prevEntry || {}),
-          marked: true,
-          status: markingStatus === 'skipped' ? 'skipped' : 'completed',
-          timestamp,
-          pile: event.pile ?? prevEntry?.pile,
-          rowNo: event.rowNo ?? event.row_no ?? prevEntry?.rowNo,
-          remark: event.remark ?? (markingStatus === 'skipped' ? 'Skipped' : prevEntry?.remark),
-          ...accuracyData, // Add accuracy data from backend
-        } as WpStatus;
+        // Move prevEntry read and changed check inside functional updater
+        // to read fresh state from `prev` instead of stale `statusMapRef.current`
+        setStatusMap(prev => {
+          const prevEntry = prev[statusKey];
+          const nextEntry = {
+            ...(prevEntry || {}),
+            marked: true,
+            status: markingStatus === 'skipped' ? 'skipped' : 'completed',
+            timestamp,
+            pile: event.pile ?? prevEntry?.pile,
+            rowNo: event.rowNo ?? event.row_no ?? prevEntry?.rowNo,
+            remark: event.remark ?? (markingStatus === 'skipped' ? 'Skipped' : prevEntry?.remark),
+            ...accuracyData,
+          } as WpStatus;
 
-        const changed = !prevEntry ||
-          prevEntry.status !== nextEntry.status ||
-          prevEntry.marked !== nextEntry.marked ||
-          prevEntry.pile !== nextEntry.pile ||
-          prevEntry.rowNo !== nextEntry.rowNo ||
-          prevEntry.remark !== nextEntry.remark ||
-          prevEntry.accuracy_level !== nextEntry.accuracy_level;
+          const changed = !prevEntry ||
+            prevEntry.status !== nextEntry.status ||
+            prevEntry.marked !== nextEntry.marked ||
+            prevEntry.pile !== nextEntry.pile ||
+            prevEntry.rowNo !== nextEntry.rowNo ||
+            prevEntry.remark !== nextEntry.remark ||
+            prevEntry.accuracy_level !== nextEntry.accuracy_level ||
+            prevEntry.position_error_cm !== nextEntry.position_error_cm;
 
-        if (changed) {
-          setStatusMap(prev => ({
-            ...prev,
-            [statusKey]: nextEntry,
-          }));
-        }
+          if (changed) {
+            return { ...prev, [statusKey]: nextEntry };
+          }
+          return prev;
+        });
 
         const statusEmoji = markingStatus === 'skipped' ? '⏭️' : '✅';
         console.log(`[MissionReportScreen] ${statusEmoji} Waypoint ${statusKey} ${markingStatus} at ${timestamp}`);
-        // showNotification(
-        //   markingStatus === 'skipped' ? 'info' : 'success',
-        //   markingStatus === 'skipped' ? 'Waypoint Skipped' : 'Waypoint Completed',
-        //   `Waypoint ${statusKey} ${markingStatus}`
-        // );
+      }
+
+      // waypoint_hold_complete — hold period done, servo sequence about to run (AUTO + MANUAL)
+      // No statusMap update needed here — waypoint_marked/waypoint_skipped follows immediately
+      if (eventType === 'waypoint_hold_complete' || event.event_type === 'waypoint_hold_complete') {
+        const wpId = event.waypoint_id ?? event.waypointId ?? event.current_waypoint ?? 0;
+        console.log(`[MissionReportScreen] ⏱️ Hold complete for WP ${wpId}, should_mark=${event.should_mark}`);
+        // Intentionally no statusMap change — waypoint_marked or waypoint_skipped fires next
+      }
+
+      // DASH MODE: dash_completed — overwrite last waypoint with final summary
+      if (eventType === 'dash_completed' || event.event_type === 'dash_completed') {
+        const allWps = waypointsRef.current;
+        if (allWps.length > 0) {
+          const lastWpSn = allWps[allWps.length - 1].sn;
+          const timestamp = event.timestamp
+            ? (typeof event.timestamp === 'string' ? event.timestamp : new Date(event.timestamp).toISOString())
+            : new Date().toISOString();
+          const distance = event.cumulative_distance ?? event.total_distance ?? '';
+          const distanceDisplay = distance ? ` | ${Number(distance).toFixed(1)}m` : '';
+
+          setStatusMap(prev => ({
+            ...prev,
+            [lastWpSn]: {
+              ...(prev[lastWpSn] || {}),
+              status: 'mission_end',
+              remark: `Done${distanceDisplay}`,
+              timestamp,
+            } as WpStatus,
+          }));
+          console.log(`[MissionReportScreen] 🏁 [DASH] dash_completed: last WP ${lastWpSn} → mission_end${distanceDisplay}`);
+        }
+      }
+
+      // MANUAL MODE ONLY: waypoint_completed_manual — WP is done, mission paused waiting for user NEXT
+      if (eventType === 'waypoint_completed_manual' || event.event_type === 'waypoint_completed_manual') {
+        const wpId = event.waypoint_id ?? event.waypointId ?? event.current_waypoint ?? 0;
+        const timestamp = event.timestamp
+          ? (typeof event.timestamp === 'string' ? event.timestamp : new Date(event.timestamp).toISOString())
+          : new Date().toISOString();
+
+        console.log(`[MissionReportScreen] 🖐️ MANUAL waypoint_completed_manual: wpId=${wpId}, waiting_for_manual=${event.waiting_for_manual}`);
+
+        if (wpId > 0) {
+          const targetWaypoint = waypointsRef.current.find(wp => wp.sn === wpId);
+          const statusKey = targetWaypoint ? targetWaypoint.sn : wpId;
+
+          // Move downgrade guard inside functional updater for fresh state
+          setStatusMap(prev => {
+            const prevEntry = prev[statusKey];
+            if (isStatusDowngrade(prevEntry?.status, 'completed')) {
+              console.log(`[MissionReportScreen] 🛡️ Blocked status downgrade for WP ${statusKey}: ${prevEntry?.status} → completed`);
+              return prev;
+            }
+            return {
+              ...prev,
+              [statusKey]: {
+                ...(prevEntry || {}),
+                marked: true,
+                status: 'completed',
+                timestamp,
+              } as WpStatus,
+            };
+          });
+        }
+
+        // Signal UI that NEXT button needs to be pressed to continue
+        if (event.waiting_for_manual) {
+          setWaitingForManual(true);
+          console.log('[MissionReportScreen] 🖐️ MANUAL mode: waiting for user to press NEXT');
+        }
       }
 
       // Handle mission completed event - including mission_state: completed
@@ -1698,34 +1831,46 @@ export default function MissionReportScreen() {
           const newIndex = event.current_waypoint - 1; // Convert from 1-based to 0-based
           const currentWaypointNumber = event.current_waypoint;
           setCurrentIndex(prev => {
-            if (prev !== newIndex) {
-              console.log(`[MissionReportScreen] 📍 Current waypoint changed: index ${prev} -> ${newIndex} (waypoint #${currentWaypointNumber})`);
-              console.log(`[MissionReportScreen] 📍 Looking for waypoint with sn=${currentWaypointNumber} in ${waypointsRef.current.length} waypoints`);
-              
-              // Find and log the target waypoint
-              const targetWaypoint = waypointsRef.current.find(wp => wp.sn === currentWaypointNumber);
-              if (targetWaypoint) {
-                console.log(`[MissionReportScreen] 📍 Found target waypoint:`, {
-                  sn: targetWaypoint.sn,
-                  block: targetWaypoint.block,
-                  row: targetWaypoint.row,
-                  pile: targetWaypoint.pile
-                });
-              } else {
-                console.log(`[MissionReportScreen] ⚠️ Target waypoint sn=${currentWaypointNumber} not found in waypoints array`);
+            if (prev === newIndex) return prev;
+
+            // Guard: only advance forward when the waypoint being left is terminal.
+            // Backend can send current_waypoint:N before waypoint_marked for N-1 arrives,
+            // which would jump the indicator ahead. Auto-derive corrects it once the
+            // waypoint_marked event arrives and statusMap updates.
+            if (newIndex > (prev ?? -1)) {
+              const leavingWp = prev !== null ? waypointsRef.current[prev] : null;
+              if (leavingWp) {
+                const leavingStatus = statusMapRef.current[leavingWp.sn];
+                if (!leavingStatus || (leavingStatus.status !== 'completed' && leavingStatus.status !== 'skipped')) {
+                  console.log(`[MissionReportScreen] ⏸ Holding indicator at index ${prev} — WP${leavingWp.sn} not yet terminal (${leavingStatus?.status ?? 'no status'})`);
+                  return prev;
+                }
               }
-              
-              statusUpdated = true;
-              return newIndex;
             }
-            return prev;
+
+            console.log(`[MissionReportScreen] ✦ Current waypoint changed: index ${prev} -> ${newIndex} (waypoint #${currentWaypointNumber})`);
+            console.log(`[MissionReportScreen] ✦ Looking for waypoint with sn=${currentWaypointNumber} in ${waypointsRef.current.length} waypoints`);
+
+            const targetWaypoint = waypointsRef.current.find(wp => wp.sn === currentWaypointNumber);
+            if (targetWaypoint) {
+              console.log(`[MissionReportScreen] ✦ Found target waypoint:`, {
+                sn: targetWaypoint.sn,
+                block: targetWaypoint.block,
+                row: targetWaypoint.row,
+                pile: targetWaypoint.pile
+              });
+            } else {
+              console.log(`[MissionReportScreen] ⚠️ Target waypoint sn=${currentWaypointNumber} not found in waypoints array`);
+            }
+
+            statusUpdated = true;
+            return newIndex;
           });
         }
         
         if (event.mission_mode) {
           const backendMode = String(event.mission_mode).toLowerCase();
           const nextMode = mapBackendMissionModeToUiMode(event.mission_mode);
-          console.log(`[MissionReportScreen] Backend reported mission mode: ${backendMode} (current UI mode: ${modeRef.current}, mission type: ${missionModeRef.current})`);
 
           if (nextMode && nextMode !== modeRef.current) {
             console.log(`[MissionReportScreen] Syncing Mission Control mode from backend: ${modeRef.current} -> ${nextMode}`);
@@ -1740,31 +1885,50 @@ export default function MissionReportScreen() {
           const wpId = event.current_waypoint;
           const targetWaypoint = waypointsRef.current.find(wp => wp.sn === wpId);
           const statusKey = targetWaypoint ? targetWaypoint.sn : wpId;
-          
-          console.log(`[MissionReportScreen] 📊 Mission status contains waypoint info: wpId=${wpId}, status=${event.waypoint_status}`);
-          
-          const prevEntry = statusMapRef.current[statusKey];
-          const nextEntry = {
-            ...(prevEntry || {}),
-            status: event.waypoint_status === 'completed' ? 'completed' : 
-                   event.waypoint_status === 'reached' ? 'reached' : 
-                   event.waypoint_status,
-            timestamp: event.timestamp ? (typeof event.timestamp === 'string' ? event.timestamp : new Date(event.timestamp).toISOString()) : new Date().toISOString(),
-            reached: event.waypoint_status === 'reached' || event.waypoint_status === 'completed',
-            marked: event.waypoint_status === 'completed',
-          } as WpStatus;
 
-          const changed = !prevEntry ||
-            prevEntry.status !== nextEntry.status ||
-            prevEntry.reached !== nextEntry.reached ||
-            prevEntry.marked !== nextEntry.marked;
+          const incomingStatus = event.waypoint_status === 'completed' ? 'completed' :
+                   event.waypoint_status === 'reached' ? 'reached' :
+                   event.waypoint_status;
 
-          if (changed) {
-            setStatusMap(prev => ({
-              ...prev,
-              [statusKey]: nextEntry,
-            }));
-          }
+          console.log(`[MissionReportScreen] 📊 Mission status contains waypoint info: wpId=${wpId}, status=${incomingStatus}`);
+
+          // Move downgrade guard and nextEntry inside functional updater
+          setStatusMap(prev => {
+            const prevEntry = prev[statusKey];
+
+            if (isStatusDowngrade(prevEntry?.status, incomingStatus)) {
+              console.log(`[MissionReportScreen] 🛡️ Blocked status downgrade for WP ${statusKey}: ${prevEntry?.status} → ${incomingStatus}`);
+              return prev;
+            }
+
+            const nextEntry = {
+              ...(prevEntry || {}),
+              status: incomingStatus,
+              timestamp: event.timestamp ? (typeof event.timestamp === 'string' ? event.timestamp : new Date(event.timestamp).toISOString()) : new Date().toISOString(),
+              reached: event.waypoint_status === 'reached' || event.waypoint_status === 'completed',
+              marked: event.waypoint_status === 'completed',
+              pile: event.pile ?? prevEntry?.pile,
+              rowNo: event.rowNo ?? event.row_no ?? prevEntry?.rowNo,
+              remark: event.remark ?? prevEntry?.remark,
+              accuracy_level: event.accuracy_level ?? prevEntry?.accuracy_level,
+              position_error_cm: event.position_error_cm ?? prevEntry?.position_error_cm,
+            } as WpStatus;
+
+            const changed = !prevEntry ||
+              prevEntry.status !== nextEntry.status ||
+              prevEntry.reached !== nextEntry.reached ||
+              prevEntry.marked !== nextEntry.marked ||
+              prevEntry.pile !== nextEntry.pile ||
+              prevEntry.rowNo !== nextEntry.rowNo ||
+              prevEntry.remark !== nextEntry.remark ||
+              prevEntry.accuracy_level !== nextEntry.accuracy_level ||
+              prevEntry.position_error_cm !== nextEntry.position_error_cm;
+
+            if (changed) {
+              return { ...prev, [statusKey]: nextEntry };
+            }
+            return prev;
+          });
           statusUpdated = true;
         }
         
@@ -1825,7 +1989,9 @@ export default function MissionReportScreen() {
       // Note: mission_completed is handled earlier in the event handler (line ~848)
 
       // Catch-all handler for any other mission events that might contain waypoint updates
-      if (eventType !== 'mission_status' && eventType !== 'unknown' && 
+      // Exclude mission_progress - it's a high-frequency status ping, not a waypoint state change
+      if (eventType !== 'mission_status' && eventType !== 'unknown' && eventType !== 'mission_progress' &&
+          eventType !== 'waypoint_hold_complete' && eventType !== 'waypoint_completed_manual' &&
           (event.waypoint_id || event.id || event.current_waypoint)) {
         console.log(`[MissionReportScreen] 🔍 Unhandled mission event with waypoint info:`, {
           eventType,
@@ -1837,38 +2003,47 @@ export default function MissionReportScreen() {
         });
         
         // Try to extract waypoint status updates from any unhandled events
-        const wpId = event.waypoint_id ?? event.id ?? event.current_waypoint ?? 0;
+        const wpId = event.waypoint_id ?? event.waypointId ?? event.id ?? event.current_waypoint ?? 0;
         if (wpId > 0 && waypointsRef.current.length > 0) {
           const targetWaypoint = waypointsRef.current.find(wp => wp.sn === wpId);
           const statusKey = targetWaypoint ? targetWaypoint.sn : wpId;
           
           // Check for any status indicators in the event
-          if (event.status === 'completed' || event.status === 'reached' || 
+          if (event.status === 'completed' || event.status === 'reached' ||
               event.status === 'marked' || event.status === 'skipped') {
-            console.log(`[MissionReportScreen] 📝 Extracting status from unhandled event: wpId=${wpId}, status=${event.status}`);
-            
-            const prevEntry = statusMapRef.current[statusKey];
-            const nextEntry = {
-              ...(prevEntry || {}),
-              status: event.status,
-              timestamp: event.timestamp ? (typeof event.timestamp === 'string' ? event.timestamp : new Date(event.timestamp).toISOString()) : new Date().toISOString(),
-              reached: event.status === 'reached' || event.status === 'completed',
-              marked: event.status === 'completed' || event.status === 'marked',
-              remark: event.remark ?? prevEntry?.remark ?? '—',
-            } as WpStatus;
 
-            const changed = !prevEntry ||
-              prevEntry.status !== nextEntry.status ||
-              prevEntry.reached !== nextEntry.reached ||
-              prevEntry.marked !== nextEntry.marked ||
-              prevEntry.remark !== nextEntry.remark;
+            // Move all reads inside functional updater to avoid stale statusMapRef
+            setStatusMap(prev => {
+              const prevEntry = prev[statusKey];
 
-            if (changed) {
-              setStatusMap(prev => ({
-                ...prev,
-                [statusKey]: nextEntry,
-              }));
-            }
+              // GUARD: Don't downgrade a completed/skipped waypoint
+              if (isStatusDowngrade(prevEntry?.status, event.status)) {
+                console.log(`[MissionReportScreen] 🛡️ Blocked status downgrade for WP ${statusKey}: ${prevEntry?.status} → ${event.status}`);
+                return prev;
+              }
+
+              console.log(`[MissionReportScreen] 📝 Extracting status from unhandled event: wpId=${wpId}, status=${event.status}`);
+
+              const nextEntry = {
+                ...(prevEntry || {}),
+                status: event.status,
+                timestamp: event.timestamp ? (typeof event.timestamp === 'string' ? event.timestamp : new Date(event.timestamp).toISOString()) : new Date().toISOString(),
+                reached: event.status === 'reached' || event.status === 'completed',
+                marked: event.status === 'completed' || event.status === 'marked',
+                remark: event.remark ?? prevEntry?.remark ?? '—',
+              } as WpStatus;
+
+              const changed = !prevEntry ||
+                prevEntry.status !== nextEntry.status ||
+                prevEntry.reached !== nextEntry.reached ||
+                prevEntry.marked !== nextEntry.marked ||
+                prevEntry.remark !== nextEntry.remark;
+
+              if (changed) {
+                return { ...prev, [statusKey]: nextEntry };
+              }
+              return prev;
+            });
           }
         }
       }
@@ -1890,28 +2065,21 @@ export default function MissionReportScreen() {
     <SafeAreaView style={styles.container}>
       <StatusBar backgroundColor={colors.headerBlue} barStyle="light-content" />
 
-      {/* Previous Mission Indicator */}
-      {isShowingPreviousMission && (
-        <View style={styles.previousMissionBanner}>
-          <Text style={styles.previousMissionText}>
-            📋 Viewing Previous Mission Data - Start new mission to clear
-          </Text>
-        </View>
-      )}
-
       <View style={styles.mainContent}>
         {isMapFullscreen ? (
           /* Full Screen Map Mode */
           <View style={styles.fullscreenMap}>
             <MissionMap
-              waypoints={getDisplayMissionData().waypoints}
+              waypoints={displayData.waypoints}
               roverLat={mapProps.roverLat}
               roverLon={mapProps.roverLon}
               heading={mapProps.heading}
               activeWaypointIndex={currentIndex}
+              statusMap={displayData.statusMap}
               armed={mapProps.armed}
               rtkFixType={mapProps.rtkFixType}
               onToggleFullscreen={toggleMapFullscreen}
+              isVisible={isVisible}
             />
           </View>
         ) : (
@@ -1923,12 +2091,13 @@ export default function MissionReportScreen() {
                 isConnected={connectionState === 'connected'}
               />
               <MissionProgressCard
-                waypoints={getDisplayMissionData().waypoints}
+                waypoints={displayData.waypoints}
                 currentIndex={currentIndex}
                 markedCount={markedCount}
-                statusMap={getDisplayMissionData().statusMap}
+                statusMap={displayData.statusMap}
                 isMissionActive={isMissionActive}
                 wpDistCm={telemetry.wp_dist_cm}
+                distanceToNextM={telemetry.distance_to_next_m}
                 currentRoverPosition={
                   roverPosition && roverPosition.lat && roverPosition.lng
                     ? {
@@ -1942,7 +2111,7 @@ export default function MissionReportScreen() {
             <View style={styles.centerPanel}>
               <View style={styles.mapWrapper}>
                 <MissionMap
-                  waypoints={getDisplayMissionData().waypoints}
+                  waypoints={displayData.waypoints}
                   roverLat={mapProps.roverLat}
                   roverLon={mapProps.roverLon}
                   heading={mapProps.heading}
@@ -1952,6 +2121,7 @@ export default function MissionReportScreen() {
                   armed={mapProps.armed}
                   rtkFixType={mapProps.rtkFixType}
                   onToggleFullscreen={toggleMapFullscreen}
+                  isVisible={isVisible}
                 />
               </View>
             </View>
@@ -1968,6 +2138,7 @@ export default function MissionReportScreen() {
                 waypoints={waypoints}
                 missionMode={missionMode}
                 isMissionActive={isMissionActive}
+                waitingForManual={waitingForManual}
               />
             </View>
           </>
@@ -1976,11 +2147,12 @@ export default function MissionReportScreen() {
       {/* Bottom full-width waypoints table */}
       <View style={styles.bottomTableContainer}>
         <WaypointsTable
-          waypoints={getDisplayMissionData().waypoints}
+          waypoints={displayData.waypoints}
           onExport={handleExport}
           onExportComplete={handleExportComplete}
-          statusMap={getDisplayMissionData().statusMap}
-          missionMode={getDisplayMissionData().missionMode}
+          onClear={() => setShowClearLogsDialog(true)}
+          statusMap={displayData.statusMap}
+          missionMode={displayData.missionMode}
           currentIndex={currentIndex}
           pinnedCount={PINNED_COUNT}
           onReorder={handleReorder}
@@ -2087,14 +2259,7 @@ export default function MissionReportScreen() {
         onCancel={handleKeepLogsAfterExport}
       />
 
-      {/* Mission Start Confirmation Dialog */}
-      <MissionStartConfirmationDialog
-        visible={showStartConfirmationDialog}
-        onConfirm={handleStartConfirmation}
-        onCancel={handleStartCancellation}
-        hasExistingData={hasExistingMissionData()}
-        existingMissionInfo={getExistingMissionInfo()}
-      />
+
     </SafeAreaView>
   );
 }

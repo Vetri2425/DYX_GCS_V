@@ -3,26 +3,22 @@
  * Includes circle, grid, polygon, and other pattern generators
  */
 
+import { vincentyDistance } from './missionCalculator';
+
 const EARTH_RADIUS_M = 6378137; // Earth radius in meters
 
 /**
- * Calculate distance between two points using Haversine formula
+ * Calculate distance between two points using Vincenty formula
+ * More accurate than Haversine (±0.5mm vs ±0.5%)
  */
 export function calculateDistance(
   point1: { lat: number; lng: number },
   point2: { lat: number; lng: number }
 ): number {
-  const R = EARTH_RADIUS_M;
-  const dLat = ((point2.lat - point1.lat) * Math.PI) / 180;
-  const dLng = ((point2.lng - point1.lng) * Math.PI) / 180;
-  const a =
-    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-    Math.cos((point1.lat * Math.PI) / 180) *
-      Math.cos((point2.lat * Math.PI) / 180) *
-      Math.sin(dLng / 2) *
-      Math.sin(dLng / 2);
-  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-  return R * c;
+  return vincentyDistance(
+    { lat: point1.lat, lon: point1.lng },
+    { lat: point2.lat, lon: point2.lng }
+  );
 }
 
 /**

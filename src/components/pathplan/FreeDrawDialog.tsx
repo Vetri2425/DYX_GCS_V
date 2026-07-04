@@ -78,7 +78,7 @@ export const FreeDrawDialog: React.FC<FreeDrawDialogProps> = ({
           {/* Header */}
           <View style={styles.header}>
             <Text style={styles.headerIcon}>✏️</Text>
-            <Text style={styles.headerTitle}>Free Draw Mode</Text>
+            <Text style={styles.headerTitle}>FREE DRAW MODE</Text>
           </View>
 
           <ScrollView style={styles.content} showsVerticalScrollIndicator={false}>
@@ -117,7 +117,7 @@ export const FreeDrawDialog: React.FC<FreeDrawDialogProps> = ({
               </View>
               {!hasHomePosition && (
                 <TouchableOpacity style={styles.pinHomeBtn} onPress={handlePinHome}>
-                  <Text style={styles.pinHomeBtnText}>📍 Pin Home on Map</Text>
+                  <Text style={styles.pinHomeBtnText}>✦ Pin Home on Map</Text>
                 </TouchableOpacity>
               )}
             </View>
@@ -277,9 +277,11 @@ const styles = StyleSheet.create({
     fontSize: 24,
   },
   headerTitle: {
-    fontSize: 18,
+    fontSize: 13,
     fontWeight: '700',
-    color: colors.text,
+    color: colors.accent,
+    letterSpacing: 1,
+    textAlign: 'center',
   },
   content: {
     padding: 16,

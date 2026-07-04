@@ -16,6 +16,7 @@
 
 import { AppState, Platform } from 'react-native';
 import PersistentStorage from './PersistentStorage';
+import { isOfflineMode } from '../config';
 
 interface CrashLog {
   timestamp: string;
@@ -213,10 +214,12 @@ class GlobalCrashHandlerService {
           context: { url: input, method: init?.method },
         });
 
-        console.error('[CrashHandler] 🌐 Network Error:', {
-          url: input,
-          error: error?.message,
-        });
+        if (!isOfflineMode()) {
+          console.error('[CrashHandler] 🌐 Network Error:', {
+            url: input,
+            error: error?.message,
+          });
+        }
 
         // Re-throw so calling code can handle it
         throw error;

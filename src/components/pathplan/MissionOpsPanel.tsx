@@ -1,9 +1,8 @@
 import React, { useState } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Modal, Alert, TextInput } from 'react-native';
-// Using simple emoji for trash icon to avoid adding native icon deps
+import { MaterialCommunityIcons, Ionicons } from '@expo/vector-icons';
 import { colors } from '../../theme/colors';
 import { PathPlanWaypoint } from '../../types/pathplan';
-import { ModeSelectionDialog } from './ModeSelectionDialog';
 import { DashConfigDialog } from './DashConfigDialog';
 import { useRover } from '../../context/RoverContext';
 import { setMissionMode as setBackendMissionMode } from '../../services/missionModeService';
@@ -36,7 +35,7 @@ type Props = {
     onManualControlOpen?: () => void;
 };
 
-const MissionOpsPanel: React.FC<Props> = ({
+const MissionOpsPanel = React.memo(({
     waypoints,
     roverPosition = null,
     onUpdateWaypoints,
@@ -51,11 +50,10 @@ const MissionOpsPanel: React.FC<Props> = ({
     onExportMission,
     onRequestUpload,
     onManualControlOpen,
-}) => {
+}: Props) => {
     const { missionMode, setMissionMode, telemetry } = useRover();
     const [showExportDialog, setShowExportDialog] = useState(false);
     const [selectedExportFormat, setSelectedExportFormat] = useState<'qgc' | 'csv' | 'dxf'>('qgc');
-    const [showModeDialog, setShowModeDialog] = useState(false);
     const [showFilenameDialog, setShowFilenameDialog] = useState(false);
     const [exportFilename, setExportFilename] = useState('mission');
     const [pendingExportFormat, setPendingExportFormat] = useState<'qgc' | 'csv' | 'dxf'>('qgc');
@@ -296,39 +294,6 @@ const MissionOpsPanel: React.FC<Props> = ({
         setMissionMode('DGPS Mark');
     };
 
-    const handleModeSelect = async (mode: string) => {
-        setMissionMode(mode);
-        setShowModeDialog(false);
-
-        // If Dash mode selected, show the Dash config dialog (API called after config)
-        if (mode === 'Dash') {
-            setShowDashConfigDialog(true);
-            return;
-        }
-
-        // Call backend API immediately for other modes
-        let backendMode: 'auto' | 'continuous' | 'dash' = 'auto';
-        if (mode === 'Continuous') {
-            backendMode = 'continuous';
-        }
-
-        try {
-            const result = await setBackendMissionMode({ mode: backendMode });
-            if (result.success) {
-                console.log('[MissionOpsPanel] Mode set successfully:', backendMode);
-            } else {
-                console.error('[MissionOpsPanel] Failed to set mode:', result.error);
-            }
-        } catch (error) {
-            console.error('[MissionOpsPanel] Error calling setMissionMode:', error);
-        }
-
-        // If manual control selected, open the manual control UI
-        if (mode === 'Manual Control') {
-            onManualControlOpen?.();
-        }
-    };
-
     const handleDashConfigConfirm = async (onTime: number, offTime: number) => {
         setDashDistance(onTime);
         setDashGap(offTime);
@@ -360,34 +325,100 @@ const MissionOpsPanel: React.FC<Props> = ({
 
     return (
         <View style={styles.container}>
-            <View style={styles.headerCard}>
-                <Text style={styles.title}>MISSION OPS</Text>
-            </View>
-
-            {/* Mode Selection Card */}
-            <View style={styles.modeCardTop}>
-                <View style={styles.modeDisplay}>
-                    <View style={styles.modeInfo}>
-                        <Text style={styles.modeLabel}>Current Mode:</Text>
-                        <Text style={styles.modeValue}>{missionMode}</Text>
+            {/* Header */}
+            <View style={styles.header}>
+                <View style={styles.headerLeft}>
+                    <View style={styles.headerIconWrap}>
+                        <Ionicons name="navigate" size={16} color={colors.accent} />
                     </View>
-                    <TouchableOpacity
-                        style={styles.setModeButton}
-                        onPress={() => setShowModeDialog(true)}
-                        activeOpacity={0.7}
-                    >
-                        <Text style={styles.setModeButtonText}>⚙️ Set Mode</Text>
-                    </TouchableOpacity>
+                    <Text style={styles.headerTitle}>MISSION OPS</Text>
+                </View>
+                <View style={styles.headerBadge}>
+                    <View style={[styles.headerBadgeDot, { backgroundColor: waypoints.length > 0 ? '#4ade80' : 'rgba(255,255,255,0.3)' }]} />
+                    <Text style={[styles.headerBadgeText, { color: waypoints.length > 0 ? '#4ade80' : 'rgba(255,255,255,0.3)' }]}>
+                        {waypoints.length > 0 ? 'ACTIVE' : 'IDLE'}
+                    </Text>
                 </View>
             </View>
 
-            {/* Mode Selection Dialog */}
-            <ModeSelectionDialog
-                visible={showModeDialog}
-                currentMode={missionMode}
-                onSelectMode={handleModeSelect}
-                onCancel={() => setShowModeDialog(false)}
-            />
+            {/* Status Cards */}
+            <View style={styles.statusContent}>
+                {/* Mode Card */}
+                <View style={styles.statusCard}>
+                    <View style={[styles.statusAccent, { backgroundColor: colors.success }]} />
+                    <View style={styles.statusCardInner}>
+                        <View style={styles.statusCardRow}>
+                            <View style={[styles.statusIconWrap, { borderColor: 'rgba(16, 185, 129, 0.3)' }]}>
+                                <Ionicons name="settings-sharp" size={16} color={colors.success} />
+                            </View>
+                            <View style={[styles.statusBadge, { backgroundColor: 'rgba(16, 185, 129, 0.15)', borderColor: colors.success }]}>
+                                <View style={[styles.statusBadgeDot, { backgroundColor: colors.success }]} />
+                                <Text style={[styles.statusBadgeText, { color: colors.success }]}>ACTIVE</Text>
+                            </View>
+                        </View>
+                        <View style={styles.statusCardRow}>
+                            <Text style={styles.statusCardLabel}>MODE</Text>
+                            <Text style={styles.statusCardValue} numberOfLines={1}>{missionMode}</Text>
+                        </View>
+                    </View>
+                </View>
+
+                {/* GPS/RTK Card */}
+                <View style={styles.statusCard}>
+                    <View style={[styles.statusAccent, { backgroundColor: rtkStatusColor }]} />
+                    <View style={styles.statusCardInner}>
+                        <View style={styles.statusCardRow}>
+                            <View style={[styles.statusIconWrap, { borderColor: rtkStatusColor + '40' }]}>
+                                <Ionicons name="cellular" size={16} color={rtkStatusColor} />
+                            </View>
+                            <View style={[styles.statusBadge, { backgroundColor: rtkStatusColor + '22', borderColor: rtkStatusColor }]}>
+                                <View style={[styles.statusBadgeDot, { backgroundColor: rtkStatusColor }]} />
+                                <Text style={[styles.statusBadgeText, { color: rtkStatusColor }]}>
+                                    {rtkStatusColor === colors.success ? 'LOCKED' : rtkStatusColor === colors.warning ? 'WEAK' : 'LOST'}
+                                </Text>
+                            </View>
+                        </View>
+                        <View style={styles.statusCardRow}>
+                            <Text style={styles.statusCardLabel}>GPS / RTK</Text>
+                            <Text style={[styles.statusCardValue, { color: rtkStatusColor }]} numberOfLines={1}>{gpsStatusText}</Text>
+                        </View>
+                    </View>
+                </View>
+            </View>
+
+            {/* Action Buttons */}
+            <View style={styles.buttonsRow}>
+                <TouchableOpacity style={[styles.button, styles.uploadBtn]} onPress={handleUpload} activeOpacity={0.75}>
+                    <View style={[styles.btnIconWrap, { backgroundColor: 'rgba(74, 222, 128, 0.12)' }]}>
+                        <MaterialCommunityIcons name="upload" size={18} color="#4ade80" />
+                    </View>
+                    <Text style={[styles.buttonText, { color: '#4ade80' }]}>Upload</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                    style={[styles.button, waypoints.length ? styles.exportBtn : styles.disabledBtn]}
+                    onPress={handleExportClick}
+                    disabled={!waypoints.length}
+                    activeOpacity={0.75}
+                >
+                    <View style={[styles.btnIconWrap, { backgroundColor: waypoints.length ? 'rgba(96, 165, 250, 0.12)' : 'rgba(255,255,255,0.05)' }]}>
+                        <MaterialCommunityIcons name="download" size={18} color={waypoints.length ? '#60a5fa' : 'rgba(255,255,255,0.3)'} />
+                    </View>
+                    <Text style={[styles.buttonText, { color: waypoints.length ? '#60a5fa' : 'rgba(255,255,255,0.3)' }]}>Export</Text>
+                </TouchableOpacity>
+            </View>
+
+            {/* Load Mission Button */}
+            <TouchableOpacity
+                style={[styles.loadButton, waypoints.length ? styles.loadActive : styles.disabledBtn]}
+                onPress={handleLoadMission}
+                activeOpacity={0.8}
+            >
+                <Ionicons name="rocket" size={18} color="#fff" />
+                <Text style={styles.loadText}>LOAD MISSION</Text>
+                <View style={styles.loadCountBadge}>
+                    <Text style={styles.loadCountText}>{waypoints.length}</Text>
+                </View>
+            </TouchableOpacity>
 
             {/* Dash Mode Config Dialog */}
             <DashConfigDialog
@@ -397,68 +428,6 @@ const MissionOpsPanel: React.FC<Props> = ({
                 onConfirm={handleDashConfigConfirm}
                 onCancel={handleDashConfigCancel}
             />
-
-            {/* Conditionally render Manual Control placeholder or standard mission controls */}
-            {isManualControlMode ? (
-                <View style={styles.manualPlaceholder}>
-                    <Text style={styles.manualTitle}>Manual Control</Text>
-                    <Text style={styles.manualSubtitle}>Opens in fullscreen for safer operation.</Text>
-                    <TouchableOpacity style={styles.manualOpenBtn} onPress={onManualControlOpen}>
-                        <Text style={styles.manualOpenText}>Open Manual Control</Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity style={styles.manualExitBtn} onPress={handleExitManualMode}>
-                        <Text style={styles.manualExitText}>← Back to Mission Modes</Text>
-                    </TouchableOpacity>
-                </View>
-            ) : (
-                <>
-                    <View style={styles.buttonsRow}>
-                        <TouchableOpacity style={[styles.button, styles.uploadBtn]} onPress={handleUpload}>
-                            <Text style={styles.buttonText}>📤 Upload</Text>
-                        </TouchableOpacity>
-                        <TouchableOpacity
-                            style={[styles.button, waypoints.length ? styles.exportBtn : styles.disabledBtn]}
-                            onPress={handleExportClick}
-                        >
-                            <Text style={styles.buttonText}>⬇️ Export</Text>
-                        </TouchableOpacity>
-                    </View>
-
-                    <TouchableOpacity
-                        style={[styles.loadButton, waypoints.length ? styles.loadActive : styles.disabledBtn]}
-                        onPress={handleLoadMission}
-                    >
-                        <Text style={styles.loadText}>🚀 Load Mission</Text>
-                    </TouchableOpacity>
-
-                    <View style={styles.footerRow}>
-                        {isDeleteMode ? (
-                            <>
-                                <TouchableOpacity onPress={onToggleSelectAll}>
-                                    <Text style={styles.selectAllText}>{selectedForDelete.length === waypoints.length ? 'Deselect All' : 'Select All'}</Text>
-                                </TouchableOpacity>
-                                <View style={styles.deleteControls}>
-                                    <Text style={styles.selectedCount}>{selectedForDelete.length} selected</Text>
-                                    <TouchableOpacity style={styles.deleteBtn} onPress={onBulkDelete} disabled={selectedForDelete.length === 0}>
-                                        <Text style={styles.deleteBtnText}>Delete</Text>
-                                    </TouchableOpacity>
-                                    <TouchableOpacity style={styles.cancelBtn} onPress={onToggleDeleteMode}>
-                                        <Text style={styles.cancelBtnText}>Cancel</Text>
-                                    </TouchableOpacity>
-                                </View>
-                            </>
-                        ) : (
-                            <View style={[styles.gpsRtkBubble, { borderColor: rtkStatusColor + '55' }]}>
-                                <Text style={styles.gpsRtkBubbleLabel}>GPS / RTK</Text>
-                                <View style={styles.gpsRtkRight}>
-                                    <View style={[styles.gpsRtkDot, { backgroundColor: rtkStatusColor }]} />
-                                    <Text style={[styles.gpsRtkBubbleStatus, { color: rtkStatusColor }]}>{gpsStatusText}</Text>
-                                </View>
-                            </View>
-                        )}
-                    </View>
-                </>
-            )}
 
             {/* Export modal */}
             <Modal visible={showExportDialog} transparent animationType="fade" onRequestClose={() => setShowExportDialog(false)}>
@@ -514,7 +483,7 @@ const MissionOpsPanel: React.FC<Props> = ({
             </Modal>
         </View>
     );
-};
+});
 
 const styles = StyleSheet.create({
     container: {
@@ -523,149 +492,213 @@ const styles = StyleSheet.create({
         borderRadius: 12,
         borderWidth: 1,
         borderColor: colors.border,
-        padding: 12,
+        padding: 16,
         gap: 12,
     },
-    headerCard: {
+
+    // ── HEADER ──
+    header: {
+        flexDirection: 'row',
         alignItems: 'center',
-        paddingVertical: 6,
+        justifyContent: 'space-between',
+        paddingBottom: 12,
+        borderBottomWidth: 1,
+        borderBottomColor: colors.border,
     },
-    title: {
+    headerLeft: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 10,
+    },
+    headerIconWrap: {
+        width: 32,
+        height: 32,
+        borderRadius: 10,
+        backgroundColor: 'rgba(59, 130, 246, 0.15)',
+        borderWidth: 1,
+        borderColor: 'rgba(59, 130, 246, 0.3)',
+        justifyContent: 'center',
+        alignItems: 'center',
+    },
+    headerTitle: {
         color: colors.accent,
-        fontSize: 13,
+        fontSize: 14,
+        fontWeight: '700',
+        letterSpacing: 3,
+    },
+    headerBadge: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 5,
+        backgroundColor: 'rgba(16, 185, 129, 0.1)',
+        borderWidth: 1,
+        borderColor: 'rgba(16, 185, 129, 0.3)',
+        borderRadius: 6,
+        paddingHorizontal: 8,
+        paddingVertical: 3,
+    },
+    headerBadgeDot: {
+        width: 5,
+        height: 5,
+        borderRadius: 3,
+    },
+    headerBadgeText: {
+        fontSize: 8,
+        fontWeight: '700',
+        letterSpacing: 1.5,
+    },
+
+    // ── STATUS CARDS ──
+    statusContent: {
+        flexDirection: 'row',
+        gap: 8,
+    },
+    statusCard: {
+        flex: 1,
+        flexDirection: 'row',
+        backgroundColor: colors.cardBg,
+        borderRadius: 10,
+        overflow: 'hidden',
+        borderWidth: 1,
+        borderColor: colors.border,
+    },
+    statusAccent: {
+        width: 3,
+        alignSelf: 'stretch',
+    },
+    statusCardInner: {
+        flex: 1,
+        padding: 10,
+        gap: 6,
+        justifyContent: 'center',
+    },
+    statusCardRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+    },
+    statusIconWrap: {
+        width: 28,
+        height: 28,
+        borderRadius: 14,
+        borderWidth: 1,
+        justifyContent: 'center',
+        alignItems: 'center',
+    },
+    statusBadge: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 4,
+        borderWidth: 1,
+        borderRadius: 5,
+        paddingHorizontal: 6,
+        paddingVertical: 2,
+    },
+    statusBadgeDot: {
+        width: 4,
+        height: 4,
+        borderRadius: 2,
+    },
+    statusBadgeText: {
+        fontSize: 7,
         fontWeight: '700',
         letterSpacing: 1,
     },
+    statusCardLabel: {
+        color: 'rgba(103, 232, 249, 0.8)',
+        fontSize: 9,
+        fontWeight: '700',
+        letterSpacing: 2,
+        textTransform: 'uppercase',
+    },
+    statusCardValue: {
+        color: '#ffffff',
+        fontSize: 12,
+        fontWeight: '700',
+        flexShrink: 1,
+        textAlign: 'right',
+    },
+
+    // ── ACTION BUTTONS ──
     buttonsRow: {
+        flex: 0.6,
         flexDirection: 'row',
-        justifyContent: 'space-between',
         gap: 8,
     },
     button: {
         flex: 1,
-        paddingVertical: 18,
-        borderRadius: 10,
-        alignItems: 'center',
-        justifyContent: 'center',
-        marginHorizontal: 4,
-    },
-    uploadBtn: {
-        backgroundColor: colors.greenBtn,
-    },
-    exportBtn: {
-        backgroundColor: colors.blueBtn,
-    },
-    disabledBtn: {
-        backgroundColor: '#475569',
-    },
-    buttonText: {
-        color: colors.text,
-        fontWeight: '700',
-        fontSize: 15,
-    },
-    loadButton: {
-        marginTop: 8,
-        borderRadius: 10,
-        paddingVertical: 20,
-        alignItems: 'center',
-        justifyContent: 'center',
-    },
-    loadActive: {
-        backgroundColor: '#7c3aed',
-    },
-    loadText: {
-        color: colors.text,
-        fontWeight: '800',
-        fontSize: 16,
-    },
-    footerRow: {
-        marginTop: 8,
         flexDirection: 'row',
         alignItems: 'center',
-        justifyContent: 'space-between',
+        justifyContent: 'center',
+        gap: 8,
+        paddingVertical: 12,
+        paddingHorizontal: 14,
+        borderRadius: 10,
+        borderWidth: 2,
+        borderColor: colors.border,
     },
-    coordsText: {
-        color: colors.textSecondary,
-        fontFamily: 'monospace',
-        fontSize: 12,
+    btnIconWrap: {
+        width: 32,
+        height: 32,
+        borderRadius: 16,
+        backgroundColor: 'rgba(103, 232, 249, 0.08)',
+        justifyContent: 'center',
+        alignItems: 'center',
     },
-    gpsRtkBubble: {
+    uploadBtn: {
+        backgroundColor: 'rgba(74, 222, 128, 0.08)',
+        borderColor: 'rgba(74, 222, 128, 0.3)',
+    },
+    exportBtn: {
+        backgroundColor: 'rgba(96, 165, 250, 0.08)',
+        borderColor: 'rgba(96, 165, 250, 0.3)',
+    },
+    disabledBtn: {
+        backgroundColor: colors.cardBg,
+        opacity: 0.4,
+    },
+    buttonText: {
+        color: '#ffffff',
+        fontWeight: '700',
+        fontSize: 13,
+        letterSpacing: 0.5,
+    },
+
+    // ── LOAD MISSION ──
+    loadButton: {
         flex: 1,
         flexDirection: 'row',
         alignItems: 'center',
-        justifyContent: 'space-between',
-        backgroundColor: colors.cardBg,
+        justifyContent: 'center',
+        gap: 10,
         borderRadius: 10,
-        paddingVertical: 10,
-        paddingHorizontal: 18,
         borderWidth: 1,
+        borderColor: 'rgba(59, 130, 246, 0.3)',
     },
-    gpsRtkRight: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 6,
+    loadActive: {
+        backgroundColor: '#3b82f6',
     },
-    gpsRtkDot: {
-        width: 8,
-        height: 8,
-        borderRadius: 4,
-    },
-    gpsRtkBubbleLabel: {
-        color: colors.textSecondary,
-        fontSize: 12,
-        fontWeight: '600',
-        letterSpacing: 0.5,
-    },
-    gpsRtkBubbleStatus: {
+    loadText: {
+        color: '#ffffff',
+        fontWeight: '800',
         fontSize: 13,
-        fontWeight: '700',
+        letterSpacing: 2,
     },
-    trashIcon: {
-        padding: 6,
-    },
-    selectAllText: {
-        color: colors.accent,
-        fontSize: 12,
-    },
-    deleteControls: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 8,
-    },
-    selectedCount: {
-        color: colors.textSecondary,
-        fontSize: 12,
-    },
-    deleteBtn: {
-        backgroundColor: '#dc2626',
-        paddingHorizontal: 10,
-        paddingVertical: 6,
-        borderRadius: 6,
-    },
-    deleteBtnText: { color: 'white', fontWeight: '700' },
-    cancelBtn: {
-        backgroundColor: colors.inputBg,
-        paddingHorizontal: 8,
-        paddingVertical: 6,
-        borderRadius: 6,
-    },
-    cancelBtnText: { color: colors.text, fontWeight: '700' },
-    modeCard: {
-        marginTop: 10,
-        backgroundColor: 'rgba(2,6,23,0.2)',
-        borderRadius: 10,
-        padding: 10,
-    },
-    modeTitle: {
-        color: colors.accent,
-        fontWeight: '700',
-        marginBottom: 6,
-    },
-    pickerWrap: {
-        backgroundColor: colors.inputBg,
+    loadCountBadge: {
+        backgroundColor: 'rgba(255,255,255,0.2)',
         borderRadius: 8,
-        overflow: 'hidden',
+        paddingHorizontal: 8,
+        paddingVertical: 2,
+        marginLeft: 2,
     },
+    loadCountText: {
+        color: '#ffffff',
+        fontSize: 11,
+        fontWeight: '700',
+        fontVariant: ['tabular-nums'] as any,
+    },
+
+    // ── MODALS ──
     modalOverlay: {
         flex: 1,
         backgroundColor: 'rgba(0,0,0,0.7)',
@@ -675,153 +708,70 @@ const styles = StyleSheet.create({
     },
     modalContent: {
         backgroundColor: colors.panelBg,
-        borderRadius: 12,
-        padding: 20,
+        borderRadius: 14,
+        padding: 24,
         width: '100%',
         maxWidth: 400,
         borderWidth: 1,
         borderColor: colors.border,
     },
     modalTitle: {
-        color: colors.text,
-        fontSize: 16,
+        color: '#ffffff',
+        fontSize: 17,
         fontWeight: '700',
-        marginBottom: 12,
+        marginBottom: 16,
         textAlign: 'center',
     },
     formatBtn: {
-        backgroundColor: '#003366',
-        paddingVertical: 12,
+        backgroundColor: colors.cardBg,
+        paddingVertical: 14,
         paddingHorizontal: 16,
-        borderRadius: 8,
-        marginBottom: 10,
+        borderRadius: 10,
+        marginBottom: 8,
         borderWidth: 1,
-        borderColor: 'rgba(34,211,238,0.3)',
+        borderColor: colors.border,
         alignItems: 'center',
     },
     formatText: {
-        color: colors.text,
+        color: '#ffffff',
         fontWeight: '600',
+        fontSize: 13,
     },
     filenameInput: {
-        backgroundColor: colors.inputBg,
+        backgroundColor: colors.secondary,
         borderWidth: 1,
         borderColor: colors.border,
-        borderRadius: 8,
-        paddingHorizontal: 12,
-        paddingVertical: 10,
-        color: colors.text,
-        marginBottom: 12,
+        borderRadius: 10,
+        paddingHorizontal: 14,
+        paddingVertical: 12,
+        color: '#ffffff',
+        marginBottom: 14,
         fontSize: 14,
     },
     filenameHint: {
         color: colors.textSecondary,
         fontSize: 12,
-        marginBottom: 8,
+        marginBottom: 10,
         fontStyle: 'italic',
     },
     filenameButtonsRow: {
         flexDirection: 'row',
-        gap: 8,
+        gap: 10,
     },
     confirmBtn: {
         flex: 1,
         backgroundColor: '#10b981',
     },
-    modeCardTop: {
-        height: '18%',
-        marginBottom: 6,
-        justifyContent: 'center',
-    },
-    modeDisplay: {
-        height: '100%',
-        borderRadius: 8,
+    cancelBtn: {
         backgroundColor: colors.cardBg,
-        borderWidth: 1,
-        borderColor: colors.border,
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'space-between',
         paddingHorizontal: 12,
-    },
-    modeInfo: {
-        flex: 1,
-    },
-    modeLabel: {
-        fontSize: 11,
-        color: colors.textSecondary,
-        marginBottom: 4,
-        fontWeight: '600',
-        textTransform: 'uppercase',
-        letterSpacing: 0.5,
-    },
-    modeValue: {
-        fontSize: 16,
-        color: colors.primary,
-        fontWeight: '700',
-    },
-    setModeButton: {
-        backgroundColor: colors.blueBtn,
-        paddingVertical: 10,
-        paddingHorizontal: 16,
+        paddingVertical: 8,
         borderRadius: 8,
-        borderWidth: 1,
-        borderColor: 'rgba(103, 232, 249, 0.35)',
     },
-    setModeButtonText: {
-        color: colors.text,
+    cancelBtnText: {
+        color: '#ffffff',
         fontWeight: '700',
         fontSize: 13,
-    },
-    pickerWrapTop: {
-        height: '100%',
-        borderRadius: 8,
-        overflow: 'hidden',
-        backgroundColor: colors.inputBg,
-    },
-    manualPlaceholder: {
-        backgroundColor: 'rgba(6, 182, 212, 0.06)',
-        borderRadius: 10,
-        padding: 14,
-        borderWidth: 1,
-        borderColor: 'rgba(6, 182, 212, 0.25)',
-        gap: 10,
-    },
-    manualTitle: {
-        color: colors.accent,
-        fontWeight: '800',
-        fontSize: 14,
-        letterSpacing: 0.5,
-    },
-    manualSubtitle: {
-        color: colors.textSecondary,
-        fontSize: 12,
-    },
-    manualOpenBtn: {
-        backgroundColor: colors.blueBtn,
-        paddingVertical: 12,
-        borderRadius: 8,
-        alignItems: 'center',
-        borderWidth: 1,
-        borderColor: 'rgba(103, 232, 249, 0.35)',
-    },
-    manualOpenText: {
-        color: colors.text,
-        fontWeight: '700',
-        fontSize: 13,
-    },
-    manualExitBtn: {
-        backgroundColor: colors.inputBg,
-        paddingVertical: 10,
-        borderRadius: 8,
-        alignItems: 'center',
-        borderWidth: 1,
-        borderColor: colors.border,
-    },
-    manualExitText: {
-        color: colors.text,
-        fontWeight: '600',
-        fontSize: 12,
     },
 });
 

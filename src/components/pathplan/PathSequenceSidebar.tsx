@@ -1,13 +1,14 @@
 import React, { useState, useCallback } from 'react';
 import { Modal, Alert } from 'react-native';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, FlatList } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
+import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { colors } from '../../theme/colors';
 import { PathPlanWaypoint } from '../../types/pathplan';
 import { RowAssignmentDialog, BlockAssignmentDialog, PileAssignmentDialog, RowBlockPileButtons } from './RowBlockPileDialogs';
 import { EditWaypointDialog } from './EditWaypointDialog';
 import { DraggableWaypointsTable } from './DraggableWaypointsTable';
-import { recalculateWaypointDistances } from '../../utils/missionCalculator';
+import { recalculateWaypointDistances, vincentyDistance } from '../../utils/missionCalculator';
 import CheckBox from '@react-native-community/checkbox';
 import * as FileSystem from 'expo-file-system';
 import { Paths } from 'expo-file-system';
@@ -23,9 +24,10 @@ interface Props {
     missionName?: string;
     onMissionNameChange?: (name: string) => void;
     missionMode?: string;
+    roverPosition?: { lat: number; lon: number } | null;
 }
 
-export const PathSequenceSidebar: React.FC<Props> = ({
+export const PathSequenceSidebar = React.memo(({
     waypoints,
     selectedWaypoint,
     onSelectWaypoint,
@@ -36,10 +38,12 @@ export const PathSequenceSidebar: React.FC<Props> = ({
     missionName = 'DRAWN MISSION - 4:15:34',
     onMissionNameChange,
     missionMode,
-}) => {
+    roverPosition,
+}: Props) => {
     const [isEditingName, setIsEditingName] = useState(false);
     const [editedName, setEditedName] = useState(missionName);
     const [isFullScreenTable, setIsFullScreenTable] = useState(false);
+    const [isEditMode, setIsEditMode] = useState(false); // Toggle between fast scroll and drag-to-reorder
     // Unicode icons: ↗ (arrow out), ↩ (arrow in)
 
     // Check if mark section should be hidden
@@ -65,8 +69,16 @@ export const PathSequenceSidebar: React.FC<Props> = ({
         setIsEditingName(false);
     };
 
-    // Calculate distance from previous waypoint
+    // Calculate distance from previous waypoint (or rover for the first waypoint)
     const getDistance = (index: number): string => {
+        if (index === 0 && roverPosition && waypoints.length > 0) {
+            const wp = waypoints[0];
+            const dist = vincentyDistance(
+                { lat: roverPosition.lat, lon: roverPosition.lon },
+                { lat: wp.lat, lon: wp.lon }
+            );
+            return `${dist.toFixed(1)}m`;
+        }
         if (index === 0) return '0.0m';
         const wp = waypoints[index];
         return wp.distance ? `${wp.distance.toFixed(1)}m` : '0.0m';
@@ -197,45 +209,73 @@ export const PathSequenceSidebar: React.FC<Props> = ({
         <View style={styles.container}>
             {/* Mission Header */}
             <View style={styles.header}>
-                <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-                    {isEditingName ? (
-                        <View style={styles.editContainer}>
-                            <TextInput
-                                style={styles.nameInput}
-                                value={editedName}
-                                onChangeText={setEditedName}
-                                onBlur={handleSaveName}
-                                onSubmitEditing={handleSaveName}
-                                autoFocus
-                                selectTextOnFocus
-                            />
-                        </View>
-                    ) : (
-                        <TouchableOpacity onPress={() => setIsEditingName(true)} style={styles.nameContainer}>
-                            <Text style={styles.missionName} numberOfLines={2}>{missionName}</Text>
-                            <Text style={styles.editHint}>Tap to edit</Text>
+                <View style={styles.headerTop}>
+                    <View style={styles.headerLeft}>
+                        {isEditingName ? (
+                            <View style={styles.editContainer}>
+                                <TextInput
+                                    style={styles.nameInput}
+                                    value={editedName}
+                                    onChangeText={setEditedName}
+                                    onBlur={handleSaveName}
+                                    onSubmitEditing={handleSaveName}
+                                    autoFocus
+                                    selectTextOnFocus
+                                />
+                            </View>
+                        ) : (
+                            <TouchableOpacity onPress={() => setIsEditingName(true)} style={styles.nameContainer}>
+                                <View style={styles.headerIconWrap}>
+                                    <Ionicons name="list" size={16} color={colors.accent} />
+                                </View>
+                                <View>
+                                    <Text style={styles.missionName} numberOfLines={1}>{missionName}</Text>
+                                    <Text style={styles.editHint}>Tap to edit</Text>
+                                </View>
+                            </TouchableOpacity>
+                        )}
+                    </View>
+                    <View style={styles.headerActions}>
+                        <TouchableOpacity
+                            onPress={() => {
+                                if (waypoints.length === 0) return;
+                                if (onUpdateWaypoints) {
+                                    Alert.alert(
+                                        'Delete All Marking Points',
+                                        `Are you sure you want to delete all ${waypoints.length} marking points? This action cannot be undone.`,
+                                        [
+                                            { text: 'Cancel', style: 'cancel' },
+                                            { text: 'Delete All', style: 'destructive', onPress: () => onUpdateWaypoints([]) }
+                                        ]
+                                    );
+                                }
+                            }}
+                            disabled={waypoints.length === 0}
+                            style={[styles.headerBtn, styles.deleteAllBtn, waypoints.length === 0 && { opacity: 0.4 }]}
+                        >
+                            <MaterialCommunityIcons name="delete-outline" size={18} color="#fff" />
                         </TouchableOpacity>
-                    )}
-                    <TouchableOpacity onPress={() => setIsFullScreenTable(true)} style={{ marginLeft: 8, width: 40, height: 40, justifyContent: 'center', alignItems: 'center', padding: 0, backgroundColor: '#FFD600', borderRadius: 12 }}>
-                        <Text style={{ fontSize: 24, color: '#222' }}>↗</Text>
-                    </TouchableOpacity>
+                        <TouchableOpacity onPress={() => setIsFullScreenTable(true)} style={[styles.headerBtn, styles.expandBtn]}>
+                            <MaterialCommunityIcons name="arrow-expand" size={18} color="#222" />
+                        </TouchableOpacity>
+                    </View>
                 </View>
             </View>
 
 
             {/* Waypoints List */}
-            <ScrollView style={styles.waypointsList} showsVerticalScrollIndicator={true}>
-                {/* Table Header */}
-                <View style={styles.tableHeaderRow}>
-                    <Text style={[styles.tableHeaderText, { flex: 0.4 }]}>Seq</Text>
-                    <Text style={[styles.tableHeaderText, { flex: 1.2 }]}>Latitude</Text>
-                    <Text style={[styles.tableHeaderText, { flex: 1.2 }]}>Longitude</Text>
-                    <Text style={[styles.tableHeaderText, { flex: 0.6 }]}>Dist</Text>
-                    {!isMarkHidden && <Text style={[styles.tableHeaderText, { flex: 0.4 }]}>Mark</Text>}
-                    <Text style={[styles.tableHeaderText, { flex: 0.5 }]}>Action</Text>
-                </View>
-
-                {waypoints.map((wp, index) => (
+            {/* Table Header — fixed above virtualized list */}
+            <View style={styles.tableHeaderRow}>
+                <Text style={[styles.tableHeaderText, { flex: 0.4 }]}>Seq</Text>
+                <Text style={[styles.tableHeaderText, { flex: 1.2 }]}>Latitude</Text>
+                <Text style={[styles.tableHeaderText, { flex: 1.2 }]}>Longitude</Text>
+                <Text style={[styles.tableHeaderText, { flex: 0.6 }]}>Dist</Text>
+                {!isMarkHidden && <Text style={[styles.tableHeaderText, { flex: 0.4 }]}>Mark</Text>}
+                <Text style={[styles.tableHeaderText, { flex: 0.5 }]}>Action</Text>
+            </View>
+            <FlatList
+                data={waypoints}
+                renderItem={({ item: wp, index }) => (
                     <TouchableOpacity
                         key={`${wp.id}-${index}`}
                         style={[
@@ -247,7 +287,7 @@ export const PathSequenceSidebar: React.FC<Props> = ({
                         <Text style={[styles.waypointCell, { flex: 0.4, fontWeight: 'bold' }]}>{index + 1}</Text>
                         <Text style={[styles.waypointCell, { flex: 1.2, fontFamily: 'monospace', fontSize: 10 }]}>{wp.lat?.toFixed(7) ?? '0.0000000'}</Text>
                         <Text style={[styles.waypointCell, { flex: 1.2, fontFamily: 'monospace', fontSize: 10 }]}>{wp.lon?.toFixed(7) ?? '0.0000000'}</Text>
-                        <Text style={[styles.waypointCell, { flex: 0.6 }]}>{wp.distance?.toFixed(1) ?? '0.0'}</Text>
+                        <Text style={[styles.waypointCell, { flex: 0.6 }]}>{getDistance(index)}</Text>
 
                         {/* Mark Checkbox */}
                         {!isMarkHidden && (
@@ -268,107 +308,94 @@ export const PathSequenceSidebar: React.FC<Props> = ({
                                 style={styles.actionBtn}
                                 onPress={() => onDeleteWaypoint?.(wp.id)}
                             >
-                                <Text style={styles.actionIcon}>🗑️</Text>
+                                <MaterialCommunityIcons name="delete-outline" size={18} color={colors.danger} />
                             </TouchableOpacity>
                         </View>
                     </TouchableOpacity>
-                ))}
-                {waypoints.length === 0 && (
+                )}
+                keyExtractor={(wp, index) => `${wp.id}-${index}`}
+                initialNumToRender={15}
+                maxToRenderPerBatch={20}
+                windowSize={5}
+                getItemLayout={(_, index) => ({ length: 48, offset: 48 * index, index })}
+                style={styles.waypointsList}
+                ListEmptyComponent={
                     <View style={styles.emptyState}>
                         <Text style={styles.emptyText}>No marking points yet</Text>
                         <Text style={styles.emptyHint}>Tap on map to add</Text>
                     </View>
-                )}
-            </ScrollView>
+                }
+                extraData={selectedWaypoint}
+            />
 
-            {/* Footer Stats */}
+            {/* Footer */}
             <View style={styles.footer}>
-                <Text style={styles.footerText}>Total: {waypoints.length} marking points</Text>
+                <View style={styles.footerInner}>
+                    <Ionicons name="location" size={12} color="rgba(103, 232, 249, 0.7)" />
+                    <Text style={styles.footerText}>Total: {waypoints.length} marking points</Text>
+                </View>
             </View>
 
             {/* Full Screen Modal for Waypoint Table */}
             <Modal visible={isFullScreenTable} animationType="slide" transparent={false}>
                 <GestureHandlerRootView style={{ flex: 1 }}>
-                    <View style={{ flex: 1, backgroundColor: colors.panelBg, padding: 18 }}>
-                        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 24, backgroundColor: colors.cardBg, borderRadius: 16 }}>
-                            <Text style={{ fontSize: 28, fontWeight: 'bold', color: colors.text }}>Marking Points Table</Text>
-                            <View style={{ flexDirection: 'row', gap: 12 }}>
+                    <View style={styles.fsContainer}>
+                        {/* Modal Header */}
+                        <View style={styles.fsHeader}>
+                            <View style={styles.fsHeaderLeft}>
+                                <View style={styles.fsHeaderIconWrap}>
+                                    <Ionicons name="list" size={20} color={colors.accent} />
+                                </View>
+                                <View>
+                                    <Text style={styles.fsHeaderTitle}>MARKING POINTS TABLE</Text>
+                                    <Text style={styles.fsHeaderSub}>{waypoints.length} waypoints loaded</Text>
+                                </View>
+                            </View>
+                            <View style={styles.fsHeaderActions}>
                                 <TouchableOpacity
                                     onPress={handleReverseWaypoints}
                                     disabled={waypoints.length < 2}
-                                    style={{
-                                        paddingHorizontal: 20,
-                                        paddingVertical: 14,
-                                        backgroundColor: waypoints.length < 2 ? '#555' : colors.blueBtn,
-                                        borderRadius: 12,
-                                        opacity: waypoints.length < 2 ? 0.5 : 1,
-                                        flexDirection: 'row',
-                                        alignItems: 'center',
-                                        justifyContent: 'center'
-                                    }}
+                                    style={[styles.fsActionBtn, styles.fsReverseBtn, waypoints.length < 2 && { opacity: 0.4 }]}
                                 >
-                                    <Text style={{ fontSize: 16, color: '#fff', fontWeight: '700', textAlign: 'center' }}>Reverse Coordinates</Text>
+                                    <MaterialCommunityIcons name="swap-vertical" size={16} color="#fff" />
+                                    <Text style={styles.fsActionBtnText}>Reverse</Text>
                                 </TouchableOpacity>
+                                {/* Edit Mode Toggle */}
                                 <TouchableOpacity
-                                    onPress={() => {
-                                        if (waypoints.length === 0) return;
-                                        if (onUpdateWaypoints) {
-                                            // Show confirmation alert
-                                            Alert.alert(
-                                                'Delete All Marking Points',
-                                                `Are you sure you want to delete all ${waypoints.length} marking points? This action cannot be undone.`,
-                                                [
-                                                    {
-                                                        text: 'Cancel',
-                                                        style: 'cancel'
-                                                    },
-                                                    {
-                                                        text: 'Delete All',
-                                                        style: 'destructive',
-                                                        onPress: () => onUpdateWaypoints([])
-                                                    }
-                                                ]
-                                            );
-                                        }
-                                    }}
-                                    disabled={waypoints.length === 0}
-                                    style={{
-                                        paddingHorizontal: 20,
-                                        paddingVertical: 14,
-                                        backgroundColor: waypoints.length === 0 ? '#555' : '#dc2626',
-                                        borderRadius: 12,
-                                        opacity: waypoints.length === 0 ? 0.5 : 1,
-                                        flexDirection: 'row',
-                                        alignItems: 'center',
-                                        justifyContent: 'center'
-                                    }}
+                                    onPress={() => setIsEditMode(!isEditMode)}
+                                    style={[styles.fsActionBtn, isEditMode ? styles.fsEditBtnActive : styles.fsEditBtn]}
                                 >
-                                    <Text style={{ fontSize: 16, color: '#fff', fontWeight: '700' }}>🗑️ Delete All</Text>
+                                    <Ionicons name={isEditMode ? 'create-outline' : 'eye-outline'} size={18} color={isEditMode ? '#fff' : '#222'} />
+                                    <Text style={[styles.fsActionBtnText, isEditMode && styles.fsActionBtnTextActive]}>
+                                        {isEditMode ? 'Edit' : 'View'}
+                                    </Text>
                                 </TouchableOpacity>
-                                <TouchableOpacity onPress={() => setIsFullScreenTable(false)} style={{ width: 56, height: 56, justifyContent: 'center', alignItems: 'center', padding: 0, backgroundColor: '#FFD600', borderRadius: 16 }}>
-                                    <Text style={{ fontSize: 32, color: '#222' }}>↩</Text>
+                                <TouchableOpacity onPress={() => setIsFullScreenTable(false)} style={[styles.fsActionBtn, styles.fsCloseBtn]}>
+                                    <MaterialCommunityIcons name="arrow-collapse" size={18} color="#222" />
                                 </TouchableOpacity>
                             </View>
                         </View>
-                        {/* Table Header */}
-                        <View style={{ flex: 1, marginTop: 12, borderRadius: 16 }}>
-                            <View style={{ flexDirection: 'row', backgroundColor: '#0a2540', paddingVertical: 10, borderBottomWidth: 2, borderBottomColor: colors.border, width: '100%', alignItems: 'center', borderTopLeftRadius: 16, borderTopRightRadius: 16 }}>
+
+                        {/* Table */}
+                        <View style={styles.fsTableWrap}>
+                            {/* Table Header */}
+                            <View style={styles.fsTableHeader}>
                                 <View style={{ width: 36 }} />
-                                <Text style={{ flex: 0.7, color: '#67E8F9', fontWeight: 'bold', textAlign: 'center', fontSize: 20 }}>S/No</Text>
+                                <Text style={[styles.fsColHeader, { flex: 0.7 }]}>S/No</Text>
                                 <TouchableOpacity style={{ flex: 1.2 }} onPress={() => setShowBlockDialog(true)}>
-                                    <Text style={{ color: '#67E8F9', fontWeight: 'bold', textAlign: 'center', fontSize: 20 }}>Block</Text>
+                                    <Text style={styles.fsColHeaderTap}>Block</Text>
                                 </TouchableOpacity>
                                 <TouchableOpacity style={{ flex: 1.2 }} onPress={() => setShowRowDialog(true)}>
-                                    <Text style={{ color: '#67E8F9', fontWeight: 'bold', textAlign: 'center', fontSize: 20 }}>Row</Text>
+                                    <Text style={styles.fsColHeaderTap}>Row</Text>
                                 </TouchableOpacity>
                                 <TouchableOpacity style={{ flex: 1.2 }} onPress={() => setShowPileDialog(true)}>
-                                    <Text style={{ color: '#67E8F9', fontWeight: 'bold', textAlign: 'center', fontSize: 20 }}>Pile</Text>
+                                    <Text style={styles.fsColHeaderTap}>Pile</Text>
                                 </TouchableOpacity>
-                                <Text style={{ flex: 2, color: '#67E8F9', fontWeight: 'bold', textAlign: 'center', fontSize: 20 }}>Latitude</Text>
-                                <Text style={{ flex: 2, color: '#67E8F9', fontWeight: 'bold', textAlign: 'center', fontSize: 20 }}>Longitude</Text>
-                                <Text style={{ flex: 1.2, color: '#67E8F9', fontWeight: 'bold', textAlign: 'center', fontSize: 20 }}>Altitude</Text>
-                                <Text style={{ flex: 1.2, color: '#67E8F9', fontWeight: 'bold', textAlign: 'center', fontSize: 20 }}>Distance</Text>
-                                {!isMarkHidden && <Text style={{ flex: 0.8, color: '#67E8F9', fontWeight: 'bold', textAlign: 'center', fontSize: 20 }}>Mark</Text>}
+                                <Text style={[styles.fsColHeader, { flex: 2 }]}>Latitude</Text>
+                                <Text style={[styles.fsColHeader, { flex: 2 }]}>Longitude</Text>
+                                <Text style={[styles.fsColHeader, { flex: 1.2 }]}>Altitude</Text>
+                                <Text style={[styles.fsColHeader, { flex: 1.2 }]}>Distance</Text>
+                                {!isMarkHidden && <Text style={[styles.fsColHeader, { flex: 0.8 }]}>Mark</Text>}
                                 <View style={{ flex: 0.8 }} />
                             </View>
                             {/* Draggable Table */}
@@ -379,6 +406,7 @@ export const PathSequenceSidebar: React.FC<Props> = ({
                                 onToggleMark={onToggleMark}
                                 globalServoEnabled={globalServoEnabled}
                                 missionMode={missionMode}
+                                isEditMode={isEditMode}
                             />
                         </View>
                     </View>
@@ -409,7 +437,7 @@ export const PathSequenceSidebar: React.FC<Props> = ({
             />
         </View>
     );
-};
+});
 
 const styles = StyleSheet.create({
     container: {
@@ -420,84 +448,100 @@ const styles = StyleSheet.create({
         borderColor: colors.border,
         overflow: 'hidden',
     },
+
+    // ── HEADER ──
     header: {
-        backgroundColor: '#003366',
-        paddingVertical: 12,
-        paddingHorizontal: 12,
+        padding: 12,
         borderBottomWidth: 1,
         borderBottomColor: colors.border,
     },
-    nameContainer: {
-        minHeight: 40,
+    headerTop: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+    },
+    headerLeft: {
+        flex: 1,
+        marginRight: 8,
+    },
+    headerIconWrap: {
+        width: 32,
+        height: 32,
+        borderRadius: 10,
+        backgroundColor: 'rgba(59, 130, 246, 0.15)',
+        borderWidth: 1,
+        borderColor: 'rgba(59, 130, 246, 0.3)',
         justifyContent: 'center',
+        alignItems: 'center',
+    },
+    nameContainer: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 10,
     },
     missionName: {
-        color: colors.text,
-        fontSize: 14,
-        fontWeight: '600',
-        marginBottom: 2,
+        color: '#ffffff',
+        fontSize: 12,
+        fontWeight: '700',
+        letterSpacing: 1,
     },
     editHint: {
         color: colors.textSecondary,
-        fontSize: 10,
+        fontSize: 8,
+        letterSpacing: 0.5,
         opacity: 0.6,
     },
     editContainer: {
-        minHeight: 40,
+        flex: 1,
     },
     nameInput: {
-        backgroundColor: colors.inputBg,
+        backgroundColor: colors.cardBg,
         color: colors.text,
-        fontSize: 14,
+        fontSize: 13,
         fontWeight: '600',
-        paddingHorizontal: 8,
+        paddingHorizontal: 10,
         paddingVertical: 8,
-        borderRadius: 6,
+        borderRadius: 8,
         borderWidth: 1,
         borderColor: colors.accent,
     },
-    toolbar: {
+    headerActions: {
         flexDirection: 'row',
-        padding: 8,
-        gap: 8,
-        borderBottomWidth: 1,
-        borderBottomColor: colors.border,
-        backgroundColor: 'rgba(0, 51, 102, 0.5)',
+        alignItems: 'center',
+        gap: 6,
     },
-    toolBtn: {
-        flex: 1,
-        backgroundColor: colors.cardBg,
-        paddingVertical: 6,
-        borderRadius: 4,
+    headerBtn: {
+        width: 34,
+        height: 34,
+        borderRadius: 10,
+        justifyContent: 'center',
         alignItems: 'center',
         borderWidth: 1,
-        borderColor: colors.border,
     },
-    toolBtnText: {
-        color: colors.text,
-        fontSize: 11,
-        fontWeight: '600',
+    deleteAllBtn: {
+        backgroundColor: colors.danger,
+        borderColor: 'rgba(239, 68, 68, 0.5)',
     },
+    expandBtn: {
+        backgroundColor: '#FFD600',
+        borderColor: 'rgba(255, 214, 0, 0.5)',
+    },
+
+    // ── TABLE ──
     tableHeaderRow: {
         flexDirection: 'row',
-        backgroundColor: 'rgba(0, 51, 102, 0.7)',
+        backgroundColor: colors.cardBg,
         borderBottomWidth: 1,
         borderBottomColor: colors.border,
         paddingHorizontal: 6,
         paddingVertical: 8,
     },
-    tableHeader: {
-        flex: 1,
-        paddingVertical: 10,
-        alignItems: 'center',
-        borderRightWidth: 1,
-        borderRightColor: colors.border,
-    },
     tableHeaderText: {
-        color: colors.accent,
-        fontSize: 11,
-        fontWeight: '600',
+        color: 'rgba(103, 232, 249, 0.8)',
+        fontSize: 10,
+        fontWeight: '700',
         textAlign: 'center',
+        letterSpacing: 0.5,
     },
     waypointsList: {
         flex: 1,
@@ -508,11 +552,11 @@ const styles = StyleSheet.create({
         paddingVertical: 8,
         paddingHorizontal: 6,
         borderBottomWidth: 1,
-        borderBottomColor: 'rgba(34, 211, 238, 0.1)',
+        borderBottomColor: 'rgba(255, 255, 255, 0.03)',
         gap: 4,
     },
     waypointItemSelected: {
-        backgroundColor: 'rgba(59, 130, 246, 0.2)',
+        backgroundColor: 'rgba(59, 130, 246, 0.15)',
         borderLeftWidth: 3,
         borderLeftColor: colors.accent,
     },
@@ -520,30 +564,6 @@ const styles = StyleSheet.create({
         color: colors.textPrimary,
         fontSize: 11,
         textAlign: 'center',
-    },
-    waypointMeta: {
-        flexDirection: 'row',
-        flexWrap: 'wrap',
-        gap: 4,
-        marginBottom: 4,
-    },
-    metaTag: {
-        color: '#67E8F9',
-        fontSize: 9,
-        backgroundColor: 'rgba(103, 232, 249, 0.1)',
-        paddingHorizontal: 6,
-        paddingVertical: 2,
-        borderRadius: 4,
-    },
-    waypointDistance: {
-        color: colors.textSecondary,
-        fontSize: 10,
-    },
-    deleteButton: {
-        padding: 6,
-    },
-    deleteIcon: {
-        fontSize: 16,
     },
     emptyState: {
         flex: 1,
@@ -560,26 +580,146 @@ const styles = StyleSheet.create({
         color: colors.textMuted,
         fontSize: 12,
     },
-    footer: {
-        backgroundColor: '#003366',
-        paddingVertical: 10,
-        paddingHorizontal: 12,
-        borderTopWidth: 1,
-        borderTopColor: colors.border,
-    },
-    footerText: {
-        color: '#67E8F9',
-        fontSize: 11,
-        fontWeight: '600',
-    },
-    actionButtons: {
-        flexDirection: 'row',
-        gap: 4,
-    },
     actionBtn: {
         padding: 4,
     },
-    actionIcon: {
+
+    // ── FOOTER ──
+    footer: {
+        paddingVertical: 8,
+        paddingHorizontal: 12,
+        borderTopWidth: 1,
+        borderTopColor: colors.border,
+        backgroundColor: colors.cardBg,
+    },
+    footerInner: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 6,
+    },
+    footerText: {
+        color: 'rgba(103, 232, 249, 0.7)',
+        fontSize: 10,
+        fontWeight: '700',
+        letterSpacing: 1,
+    },
+
+    // ── FULLSCREEN MODAL ──
+    fsContainer: {
+        flex: 1,
+        backgroundColor: colors.panelBg,
+        padding: 18,
+    },
+    fsHeader: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        padding: 16,
+        backgroundColor: colors.cardBg,
+        borderRadius: 12,
+        borderWidth: 1,
+        borderColor: colors.border,
+    },
+    fsHeaderLeft: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 12,
+    },
+    fsHeaderIconWrap: {
+        width: 40,
+        height: 40,
+        borderRadius: 12,
+        backgroundColor: 'rgba(59, 130, 246, 0.15)',
+        borderWidth: 1,
+        borderColor: 'rgba(59, 130, 246, 0.3)',
+        justifyContent: 'center',
+        alignItems: 'center',
+    },
+    fsHeaderTitle: {
+        color: '#ffffff',
         fontSize: 16,
+        fontWeight: '700',
+        letterSpacing: 2,
+    },
+    fsHeaderSub: {
+        color: 'rgba(103, 232, 249, 0.6)',
+        fontSize: 10,
+        fontWeight: '600',
+        letterSpacing: 1,
+        marginTop: 2,
+    },
+    fsHeaderActions: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 10,
+    },
+    fsActionBtn: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 6,
+        paddingHorizontal: 16,
+        paddingVertical: 12,
+        borderRadius: 10,
+        borderWidth: 1,
+    },
+    fsReverseBtn: {
+        backgroundColor: colors.accent,
+        borderColor: 'rgba(59, 130, 246, 0.5)',
+    },
+    fsEditBtn: {
+        backgroundColor: colors.cardBg,
+        borderColor: colors.border,
+        paddingHorizontal: 14,
+    },
+    fsEditBtnActive: {
+        backgroundColor: colors.accent,
+        borderColor: 'rgba(59, 130, 246, 0.5)',
+    },
+    fsCloseBtn: {
+        backgroundColor: '#FFD600',
+        borderColor: 'rgba(255, 214, 0, 0.5)',
+        paddingHorizontal: 14,
+    },
+    fsActionBtnTextActive: {
+        color: '#ffffff',
+    },
+    fsActionBtnText: {
+        color: '#ffffff',
+        fontSize: 12,
+        fontWeight: '700',
+        letterSpacing: 0.5,
+    },
+    fsTableWrap: {
+        flex: 1,
+        marginTop: 12,
+        borderRadius: 12,
+        overflow: 'hidden',
+        borderWidth: 1,
+        borderColor: colors.border,
+    },
+    fsTableHeader: {
+        flexDirection: 'row',
+        backgroundColor: colors.cardBg,
+        paddingVertical: 12,
+        borderBottomWidth: 2,
+        borderBottomColor: colors.border,
+        alignItems: 'center',
+    },
+    fsColHeader: {
+        color: 'rgba(103, 232, 249, 0.8)',
+        fontWeight: '700',
+        textAlign: 'center',
+        fontSize: 13,
+        letterSpacing: 0.5,
+    },
+    fsColHeaderTap: {
+        color: 'rgba(103, 232, 249, 0.8)',
+        fontWeight: '700',
+        textAlign: 'center',
+        fontSize: 13,
+        letterSpacing: 0.5,
+        textDecorationLine: 'underline',
+        textDecorationColor: 'rgba(103, 232, 249, 0.3)',
     },
 });

@@ -1,5 +1,7 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo, memo } from 'react';
 import { View, StyleSheet, SafeAreaView, StatusBar, Alert, Modal, ScrollView, TouchableOpacity, Text } from 'react-native';
+import { MaterialCommunityIcons } from '@expo/vector-icons';
+import { LegendList } from '@legendapp/list';
 import { colors } from '../theme/colors';
 import { PathPlanWaypoint } from '../types/pathplan';
 import { useRover } from '../context/RoverContext';
@@ -11,9 +13,13 @@ import { DrawingToolsPanel } from '../components/pathplan/DrawingToolsPanel';
 import { CircleGeneratorDialog } from '../components/pathplan/CircleGeneratorDialog';
 import { SurveyGridDialog } from '../components/pathplan/SurveyGridDialog';
 import { TextAnnotationDialog } from '../components/pathplan/TextAnnotationDialog';
-import { FreeDrawDialog, DrawSettings } from '../components/pathplan/FreeDrawDialog';
-import { DrawingCanvas } from '../components/pathplan/DrawingCanvas';
+import { CADDrawingCanvas } from '../components/pathplan/CADDrawingCanvas';
 import { ManualPathConnectionCanvas } from '../components/pathplan/ManualPathConnectionCanvas';
+import { ReverseWaypointsDialog } from '../components/pathplan/ReverseWaypointsDialog';
+import { CornerExtensionDialog } from '../components/pathplan/CornerExtensionDialog';
+import { SolarTableDialog } from '../components/pathplan/SolarTableDialog';
+import { TemplateManagerDialog } from '../components/pathplan/TemplateManagerDialog';
+import { detectCorners, generateCornerExtensionWaypoints, DEFAULT_EXTENSION_OPTIONS, CornerExtensionOptions } from '../utils/cornerExtension';
 import { ManualMapConnection } from '../components/pathplan/ManualMapConnection';
 import { ManualConnectionChoice } from '../components/pathplan/ManualConnectionChoice';
 import { ManualControlPanel } from '../components/pathplan/ManualControlPanel';
@@ -21,7 +27,7 @@ import { FailsafeModeSelector } from '../components/pathplan/FailsafeModeSelecto
 import { FailsafeStrictPopup } from '../components/pathplan/FailsafeStrictPopup';
 import { FailsafeRelaxNotification } from '../components/pathplan/FailsafeRelaxNotification';
 import { MapVisualizationControls, MapVisualization } from '../components/pathplan/MapVisualizationControls';
-import { vincentyDistance, recalculateWaypointDistances, calcBearing } from '../utils/missionCalculator';
+import { vincentyDistance, haversineDistance, recalculateWaypointDistances, calcBearing } from '../utils/missionCalculator';
 import { textToWaypointPath } from '../utils/textToPath';
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system/legacy';
@@ -37,11 +43,36 @@ import {
   sanitizeWaypointsForUpload,
   ValidationError,
 } from '../utils/waypointValidator';
+import { CADAlignmentCanvas } from '../components/pathplan/CADAlignmentCanvas';
+import { useCADAlignment } from '../application/hooks/useCADAlignment';
+import { GeoPoint, Point2D } from '../core/geometry/types';
+import { parseCSVChunked } from '../utils/chunkedParser';
+import { parseKML as coreParseKML } from '../core/parsers/kmlParser';
+import { convertToPathPlanWaypoints } from '../core/parsers/adapter';
+import { useWaypointHistory } from '../hooks/pathplan/useWaypointHistory';
+
+// ─── Virtualized preview row (memoized for LegendList recycling) ────────────
+const PreviewRow = memo(({ item }: { item: PathPlanWaypoint }) => (
+  <View style={{ flexDirection: 'row', paddingVertical: 6, borderBottomWidth: 1, borderBottomColor: 'rgba(255,255,255,0.03)' }}>
+    <Text style={{ flex: 0.4, color: colors.text, fontSize: 11 }}>{item.id}</Text>
+    <Text style={{ flex: 1.8, color: colors.text, fontFamily: 'monospace', fontSize: 10 }}>{item.lat.toFixed(6)}</Text>
+    <Text style={{ flex: 1.8, color: colors.text, fontFamily: 'monospace', fontSize: 10 }}>{item.lon.toFixed(6)}</Text>
+    <Text style={{ flex: 0.8, color: colors.text, fontSize: 10 }}>{item.alt?.toFixed(1) || '0.0'}</Text>
+    <Text style={{ flex: 0.8, color: colors.text, fontSize: 10 }}>{(item.distance || 0).toFixed(0)}</Text>
+    <Text style={{ flex: 1, color: colors.textSecondary, fontSize: 9 }}>
+      {item.block || '—'}/{item.row || '—'}
+    </Text>
+  </View>
+));
 
 // Toggle debug logging for this screen
 const DEBUG_LOG = true;
 
-export default function PathPlanScreen() {
+interface PathPlanScreenProps {
+  isVisible?: boolean;
+}
+
+export default function PathPlanScreen({ isVisible = true }: PathPlanScreenProps) {
   const {
     telemetry,
     roverPosition,
@@ -90,26 +121,55 @@ export default function PathPlanScreen() {
     timersRef.current.clear();
   };
 
+  // Poll servo config, but pause when app is backgrounded to avoid unnecessary
+  // network requests and state updates that trigger re-renders.
   useEffect(() => {
+    const { AppState } = require('react-native');
+
+    let interval: ReturnType<typeof setInterval> | null = null;
+    let appStateSubscription: any = null;
+
     const fetchServoConfig = async () => {
       try {
         const res: any = await services.getMissionServoConfig();
         const cfg = res?.message || res?.config || res?.data || res;
         if (typeof cfg?.servo_enabled === 'boolean') {
           setGlobalServoEnabled(cfg.servo_enabled);
-          //console.log('[PathPlan] Servo config loaded:', cfg.servo_enabled);
         }
       } catch (err) {
-        console.error('[PathPlan] Failed to fetch servo config:', err);
+        // Silently ignore — servo config fetch failure is non-critical
       }
     };
 
-    fetchServoConfig();
+    const startPolling = () => {
+      if (interval) clearInterval(interval);
+      fetchServoConfig(); // Fetch immediately on start/resume
+      interval = setInterval(fetchServoConfig, 2000);
+    };
 
-    // Poll for servo config changes every 2 seconds
-    const interval = setInterval(fetchServoConfig, 2000);
+    const stopPolling = () => {
+      if (interval) {
+        clearInterval(interval);
+        interval = null;
+      }
+    };
 
-    return () => clearInterval(interval);
+    // Start polling immediately
+    startPolling();
+
+    // Pause/resume polling on app background/foreground
+    appStateSubscription = AppState.addEventListener('change', (nextAppState: string) => {
+      if (nextAppState === 'active') {
+        startPolling();
+      } else {
+        stopPolling();
+      }
+    });
+
+    return () => {
+      stopPolling();
+      appStateSubscription?.remove();
+    };
   }, [services]);
 
   useEffect(() => {
@@ -184,6 +244,10 @@ export default function PathPlanScreen() {
       }))
     );
   }, [setMissionWaypoints]);
+
+  // Undo/Redo history — wraps updateWaypoints for all user-initiated changes
+  const { undo, redo, canUndo, canRedo, recordAndApply } = useWaypointHistory(waypoints, updateWaypoints);
+
   const [selectedWaypoint, setSelectedWaypoint] = useState<number | null>(null);
 
   // GPS Failsafe state
@@ -213,11 +277,48 @@ export default function PathPlanScreen() {
   const [showCircleDialog, setShowCircleDialog] = useState(false);
   const [showSurveyGridDialog, setShowSurveyGridDialog] = useState(false);
   const [showTextDialog, setShowTextDialog] = useState(false);
-  const [showDrawDialog, setShowDrawDialog] = useState(false);
+  const [showCADCanvas, setShowCADCanvas] = useState(false);
+  const [showPrecisePathDialog, setShowPrecisePathDialog] = useState(false);
+  const [precisePathPreview, setPrecisePathPreview] = useState<PathPlanWaypoint[] | null>(null);
+
+  // When precise path mode is active, the map shows preview waypoints instead
+  const displayedWaypoints = precisePathPreview ?? waypoints;
+
+  const handlePrecisePathPreviewChange = React.useCallback((preview: PathPlanWaypoint[]) => {
+    setPrecisePathPreview(preview);
+  }, []);
+
+  const handlePrecisePathApply = React.useCallback((optimized: PathPlanWaypoint[]) => {
+    recordAndApply(optimized);
+    setPrecisePathPreview(null);
+    setShowPrecisePathDialog(false);
+  }, [updateWaypoints]);
+
+  const handlePrecisePathClose = React.useCallback(() => {
+    setPrecisePathPreview(null);
+    setShowPrecisePathDialog(false);
+  }, []);
+
+  // ── CAD Georeferencing state ──────────────────────────────
+  const [isCADMode, setIsCADMode] = useState(false);
+  const [showGPSInput, setShowGPSInput] = useState(false);
+
+  const cadAlignment = useCADAlignment({
+    includeLines: true,
+    includePolylines: true,
+    includeArcCenters: true,
+    includePoints: true,
+    defaultAlt: 0,
+  });
+
+  const [gpsInputA, setGpsInputA] = useState<{ lat: string; lon: string }>({ lat: '', lon: '' });
+  const [gpsInputB, setGpsInputB] = useState<{ lat: string; lon: string }>({ lat: '', lon: '' });
+  const [showReverseDialog, setShowReverseDialog] = useState(false);
+  const [showCornerExtensionDialog, setShowCornerExtensionDialog] = useState(false);
+  const [showSolarTableDialog, setShowSolarTableDialog] = useState(false);
+  const [showTemplateManager, setShowTemplateManager] = useState(false);
   const [isDrawingMode, setIsDrawingMode] = useState(false);
-  const [drawSettings, setDrawSettings] = useState<DrawSettings | null>(null);
   const [homePosition, setHomePosition] = useState<{ lat: number; lng: number } | null>(null);
-  const [isPinningHome, setIsPinningHome] = useState(false);
 
   // Measure tool state
   const [measurePoints, setMeasurePoints] = useState<{ lat: number; lon: number; seq: number; waypointId?: number }[]>([]);
@@ -274,9 +375,8 @@ export default function PathPlanScreen() {
   useEffect(() => {
     const loadPersistedState = async () => {
       try {
-        const [savedHomePosition, savedDrawSettings, savedDrawingMode, savedActiveTool, savedUIState, savedMapVisualization] = await Promise.all([
+        const [savedHomePosition, savedDrawingMode, savedActiveTool, savedUIState, savedMapVisualization] = await Promise.all([
           PersistentStorage.loadHomePosition(),
-          PersistentStorage.loadDrawSettings(),
           PersistentStorage.loadDrawingMode(),
           PersistentStorage.loadActiveTool(),
           PersistentStorage.loadPathPlanUIState(),
@@ -286,11 +386,6 @@ export default function PathPlanScreen() {
         if (savedHomePosition) {
           setHomePosition(savedHomePosition);
           console.log('[PathPlanScreen] 📂 Restored home position');
-        }
-
-        if (savedDrawSettings) {
-          setDrawSettings(savedDrawSettings);
-          console.log('[PathPlanScreen] 📂 Restored draw settings');
         }
 
         if (savedDrawingMode) {
@@ -372,6 +467,9 @@ export default function PathPlanScreen() {
 
   // Consolidated auto-save using refs to prevent multiple useEffect triggers
   // This prevents infinite loops from cascading state updates
+  // NOTE: selectedWaypoint is intentionally excluded from this callback's deps.
+  // It's saved in a separate effect to avoid triggering 5 AsyncStorage writes
+  // on every waypoint click.
   const autoSaveTimersRef = useRef<Record<string, NodeJS.Timeout>>({});
 
   const debouncedAutoSave = useCallback(() => {
@@ -384,15 +482,6 @@ export default function PathPlanScreen() {
       autoSaveTimersRef.current.homePosition = setTimeout(() => {
         PersistentStorage.saveHomePosition(homePosition).catch(error => {
           console.error('[PathPlanScreen] Failed to persist home position:', error);
-        });
-      }, 500);
-    }
-
-    // Draw settings - 500ms debounce
-    if (drawSettings) {
-      autoSaveTimersRef.current.drawSettings = setTimeout(() => {
-        PersistentStorage.saveDrawSettings(drawSettings).catch(error => {
-          console.error('[PathPlanScreen] Failed to persist draw settings:', error);
         });
       }, 500);
     }
@@ -413,10 +502,10 @@ export default function PathPlanScreen() {
       }, 300);
     }
 
-    // UI state - 300ms debounce
+    // UI state (collapsed state only) - 300ms debounce
     autoSaveTimersRef.current.uiState = setTimeout(() => {
       PersistentStorage.savePathPlanUIState({
-        selectedWaypoint,
+        selectedWaypoint: null, // Don't save selectedWaypoint here — saved separately
         isDrawingToolsCollapsed,
       }).catch(error => {
         console.error('[PathPlanScreen] Failed to persist UI state:', error);
@@ -429,7 +518,21 @@ export default function PathPlanScreen() {
         console.error('[PathPlanScreen] Failed to persist map visualization settings:', error);
       });
     }, 300);
-  }, [homePosition, drawSettings, isDrawingMode, activeDrawingTool, selectedWaypoint, isDrawingToolsCollapsed, mapVisualization]);
+  }, [homePosition, isDrawingMode, activeDrawingTool, isDrawingToolsCollapsed, mapVisualization]);
+
+  // Separate effect for selectedWaypoint — only saves when it actually changes,
+  // avoids triggering the full debouncedAutoSave cascade on every waypoint click.
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      PersistentStorage.savePathPlanUIState({
+        selectedWaypoint,
+        isDrawingToolsCollapsed,
+      }).catch(error => {
+        console.error('[PathPlanScreen] Failed to persist selected waypoint:', error);
+      });
+    }, 500);
+    return () => clearTimeout(timer);
+  }, [selectedWaypoint]);
 
   // Single consolidated useEffect for all auto-saves
   useEffect(() => {
@@ -468,13 +571,15 @@ export default function PathPlanScreen() {
       return;
     }
 
-    // Check if we're in home pinning mode
-    if (isPinningHome) {
-      setHomePosition({ lat: coord.latitude, lng: coord.longitude });
-      setIsPinningHome(false);
-      Alert.alert('Home Position Set', `Home set at ${coord.latitude.toFixed(6)}, ${coord.longitude.toFixed(6)}`);
-      // Reopen draw dialog
-      setShowDrawDialog(true);
+    // Block waypoint creation when any manual connection overlay is open
+    // (Android WebView can leak touch events through native overlays)
+    if (showManualConnectionCanvas || isConnectingPath) {
+      return;
+    }
+
+    // Point tool validation: Only create waypoints if point tool is active
+    // Silently ignore if point tool is not active (no alert, no UI change)
+    if (activeDrawingTool !== 'line') {
       return;
     }
 
@@ -500,7 +605,7 @@ export default function PathPlanScreen() {
       mark: undefined,
     };
 
-    updateWaypoints([...waypoints, newWp]);
+    recordAndApply([...waypoints, newWp]);
   };
 
   const handleWaypointClick = (id: number) => {
@@ -517,6 +622,12 @@ export default function PathPlanScreen() {
   };
 
   const handleWaypointDrag = (id: number, coord: { latitude: number; longitude: number }) => {
+    // Point tool validation: Only allow dragging if point tool is active
+    // Silently ignore if point tool is not active (user can drag but changes won't register)
+    if (activeDrawingTool !== 'line') {
+      return;
+    }
+
     // Update waypoint coordinates and recalculate distances
     const updatedWaypoints = waypoints.map((wp, index) => {
       if (wp.id === id) {
@@ -550,11 +661,11 @@ export default function PathPlanScreen() {
       return wp;
     });
 
-    updateWaypoints(updatedWaypoints);
+    recordAndApply(updatedWaypoints);
   };
 
   const handleDeleteWaypoint = (id: number) => {
-    updateWaypoints(waypoints.filter(wp => wp.id !== id));
+    recordAndApply(waypoints.filter(wp => wp.id !== id));
   };
 
   const handleToggleMark = React.useCallback((id: number, newMarkValue: boolean) => {
@@ -566,6 +677,11 @@ export default function PathPlanScreen() {
   }, [missionWaypoints, setMissionWaypoints]);
 
   const handleAddWaypoints = (coords: { latitude: number; longitude: number }[]) => {
+    // Block adding waypoints when manual connection overlay is open
+    if (showManualConnectionCanvas || isConnectingPath) {
+      return;
+    }
+
     if (coords.length === 0) {
       Alert.alert('No Marking Points', 'No coordinates to add.');
       return;
@@ -596,7 +712,7 @@ export default function PathPlanScreen() {
     });
 
     if (DEBUG_LOG) console.log('[PathPlan] Adding', newWaypoints.length, 'waypoints from drawing tool');
-    updateWaypoints([...waypoints, ...newWaypoints]);
+    recordAndApply([...waypoints, ...newWaypoints]);
     setActiveDrawingTool(null); // Clear active tool after adding waypoints
 
     Alert.alert('Marking Points Added', `✓ ${newWaypoints.length} marking points added to mission`);
@@ -657,7 +773,7 @@ export default function PathPlanScreen() {
       lastValidWp = { lat: coord.latitude, lon: coord.longitude };
     }
 
-    updateWaypoints([...waypoints, ...newWaypoints]);
+    recordAndApply([...waypoints, ...newWaypoints]);
     Alert.alert('Text Path Created', `${newWaypoints.length} marking points generated for "${text}"`);
   };
 
@@ -665,7 +781,6 @@ export default function PathPlanScreen() {
   const handleDrawingComplete = (coords: { latitude: number; longitude: number }[]) => {
     if (coords.length === 0) {
       setIsDrawingMode(false);
-      setDrawSettings(null);
       return;
     }
 
@@ -715,30 +830,13 @@ export default function PathPlanScreen() {
 
     if (newWaypoints.length > 0) {
       if (DEBUG_LOG) console.log('[PathPlan] Adding', newWaypoints.length, 'waypoints from drawing');
-      updateWaypoints([...waypoints, ...newWaypoints]);
+      recordAndApply([...waypoints, ...newWaypoints]);
       Alert.alert('Drawing Complete', `✓ ${newWaypoints.length} marking points created from your drawing`);
     } else {
       Alert.alert('No Marking Points', 'Drawing did not generate any marking points. Try drawing a longer path.');
     }
 
     setIsDrawingMode(false);
-    setDrawSettings(null);
-  };
-
-  const handleStartDrawing = (settings: DrawSettings) => {
-    setDrawSettings(settings);
-    setIsDrawingMode(true);
-    setActiveDrawingTool('draw');
-    Alert.alert(
-      'Drawing Mode Active',
-      `Draw area: ${settings.drawingWidth}m × ${settings.drawingHeight}m\nMarking point spacing: ${settings.waypointSpacing}m\n\nTouch and drag on the map to draw. Double-tap to finish.`
-    );
-  };
-
-  const handlePinHomeMode = () => {
-    setShowDrawDialog(false);
-    setIsPinningHome(true);
-    Alert.alert('Pin Home Position', 'Tap on the map to set the home/start position for your drawing.');
   };
 
   // Manual control handlers
@@ -751,7 +849,7 @@ export default function PathPlanScreen() {
   };
 
   const handleUpdateWaypoints = (updatedWaypoints: PathPlanWaypoint[]) => {
-    updateWaypoints(updatedWaypoints);
+    recordAndApply(updatedWaypoints);
   };
 
   // Map visualization toggle handler
@@ -774,6 +872,41 @@ export default function PathPlanScreen() {
   const handleReverseUploadPreviewWaypoints = useCallback(() => {
     setUploadPreviewWaypoints(prev => (prev ? reverseWaypointOrder(prev) : prev));
   }, [reverseWaypointOrder]);
+
+  const handleReverseAllWaypoints = useCallback(() => {
+    const reversed = reverseWaypointOrder(waypoints);
+    recordAndApply(reversed);
+  }, [reverseWaypointOrder, waypoints, updateWaypoints]);
+
+  // Corner extension preview
+  const [cornerExtensionOptions, setCornerExtensionOptions] = useState<CornerExtensionOptions>(DEFAULT_EXTENSION_OPTIONS);
+
+  const cornerDetectionResult = useMemo(() => {
+    if (waypoints.length < 3) return { count: 0, shortWarnings: 0 };
+    const corners = detectCorners(waypoints, cornerExtensionOptions.turnAngleThreshold, cornerExtensionOptions.extensionDistance);
+    return {
+      count: corners.length,
+      shortWarnings: corners.filter(c => c.shortSegment).length,
+    };
+  }, [waypoints, cornerExtensionOptions.turnAngleThreshold, cornerExtensionOptions.extensionDistance]);
+
+  const handleApplyCornerExtension = useCallback((options: CornerExtensionOptions) => {
+    if (waypoints.length < 3) {
+      Alert.alert('Not Enough Waypoints', 'At least 3 waypoints are required for corner extension.');
+      return;
+    }
+    const extended = generateCornerExtensionWaypoints(waypoints, options);
+    if (extended.length === waypoints.length) {
+      Alert.alert('No Corners Detected', 'No corners above the threshold were found. No extension points added.');
+      return;
+    }
+    recordAndApply(extended);
+    setShowCornerExtensionDialog(false);
+    Alert.alert(
+      'Corner Extension Applied',
+      `${extended.length - waypoints.length} extension point(s) added. Total: ${extended.length} waypoints.`
+    );
+  }, [waypoints, updateWaypoints]);
 
   // File type validation
   const ACCEPTED_EXTENSIONS = ['waypoint', 'waypoints', 'csv', 'dxf', 'json', 'kml'];
@@ -945,109 +1078,59 @@ export default function PathPlanScreen() {
   };
 
   const parseKML = (content: string): PathPlanWaypoint[] => {
-    // Basic KML parsing for <coordinates> tags
-    const coordsRegex = /<coordinates>([\s\S]*?)<\/coordinates>/g;
-    const matches = [...content.matchAll(coordsRegex)];
+    // Delegate to the core KML parser (fast-xml-parser based).
+    // It handles namespaces, extracts only Point geometry (skips
+    // LineString/Polygon/etc.), validates XML, and preserves
+    // Placemark names as pile labels.
+    const result = coreParseKML(content, 'upload.kml');
 
-    if (matches.length === 0) {
-      throw new Error('No <coordinates> tags found in KML file.');
+    if (result.warnings.length > 0 && DEBUG_LOG) {
+      result.warnings.forEach(w => console.log('[PathPlan] KML warning:', w));
     }
 
-    const waypoints: PathPlanWaypoint[] = [];
-    let wpId = 1;
+    if (result.valid_points === 0) {
+      const detail = result.warnings.length > 0
+        ? result.warnings[0]
+        : 'No valid Point placemarks found';
+      throw new Error(`KML import failed: ${detail}`);
+    }
 
-    matches.forEach((match) => {
-      const coordsText = match[1].trim();
-      const coordLines = coordsText.split(/\s+/).filter(Boolean);
+    const waypoints = convertToPathPlanWaypoints(result.coordinates);
 
-      coordLines.forEach((coordStr, idx) => {
-        const [lonStr, latStr, altStr] = coordStr.split(',');
-        const lon = parseFloat(lonStr);
-        const lat = parseFloat(latStr);
-        const alt = altStr ? parseFloat(altStr) : 0;
-
-        const wp = { lat, lon, alt: isNaN(alt) ? 0 : alt };
-        validateWaypoint(wp, wpId - 1);
-
-        waypoints.push({
-          id: wpId++,
-          lat,
-          lon,
-          alt: wp.alt,
-          distance: 0,
-          block: '',
-          row: '',
-          pile: String(wpId - 1),
-        });
-      });
-    });
-
-    if (DEBUG_LOG) console.log('[PathPlan] parseKML -> parsed', waypoints.length, waypoints.slice(0, 6));
+    if (DEBUG_LOG) console.log('[PathPlan] parseKML -> parsed', waypoints.length, 'from', result.total_rows, 'placemarks (skipped:', result.skipped_rows, ')');
 
     return waypoints;
   };
 
-  const parseDXF = (content: string): PathPlanWaypoint[] => {
-    const lines = content.split(/\r?\n/).map(l => l.trim());
-    const waypoints: PathPlanWaypoint[] = [];
-    let currentPoint: any = {};
-    let wpId = 1;
+  // ── DXF import is now handled via CAD Mode workflow ──────
+  // The old parseDXF function that directly converted DXF
+  // coordinates to GPS waypoints has been REMOVED.
+  //
+  // New flow:
+  //   1. DXF → parseDXF() → CADModel (CAD space only)
+  //   2. User selects 2 CAD points on canvas
+  //   3. User enters 2 GPS points
+  //   4. georeferenceCAD() → GeoEntity[] (lat/lon)
+  //   5. geoEntitiesToWaypoints() → PathPlanWaypoint[]
+  //
+  // See: useCADAlignment hook, CADAlignmentCanvas component
 
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i];
-
-      if (line === '10') {
-        // X coordinate (longitude)
-        currentPoint.lon = parseFloat(lines[i + 1]);
-      } else if (line === '20') {
-        // Y coordinate (latitude)
-        currentPoint.lat = parseFloat(lines[i + 1]);
-      } else if (line === '30') {
-        // Z coordinate (altitude)
-        currentPoint.alt = parseFloat(lines[i + 1]);
-
-        // Complete point found
-        if (currentPoint.lat !== undefined && currentPoint.lon !== undefined) {
-          const wp = {
-            lat: currentPoint.lat,
-            lon: currentPoint.lon,
-            alt: isNaN(currentPoint.alt) ? 0 : currentPoint.alt,
-          };
-
-          validateWaypoint(wp, wpId - 1);
-
-          waypoints.push({
-            id: wpId++,
-            lat: wp.lat,
-            lon: wp.lon,
-            alt: wp.alt,
-            distance: 0,
-            block: '',
-            row: '',
-            pile: String(wpId - 1),
-          });
-        }
-
-        currentPoint = {};
-      }
-    }
-
-    if (waypoints.length === 0) {
-      throw new Error('No valid POINT entities found in DXF file.');
-    }
-
-    if (DEBUG_LOG) console.log('[PathPlan] parseDXF -> parsed', waypoints.length, waypoints.slice(0, 6));
-
-    return waypoints;
+  const handleDXFUpload = (content: string, fileName: string) => {
+    if (DEBUG_LOG) console.log('[PathPlan] DXF file selected:', fileName, '— entering CAD mode');
+    cadAlignment.loadDXF(content);
+    setIsCADMode(true);
   };
 
-  const calculateDistances = (waypoints: PathPlanWaypoint[]): PathPlanWaypoint[] => {
+  const calculateDistances = (waypoints: PathPlanWaypoint[], useFast = true): PathPlanWaypoint[] => {
+    // Haversine is ~5-10x faster than Vincenty with <0.5% error.
+    // Use fast mode for preview/recalculation; Vincenty for final upload accuracy.
+    const distanceFn = useFast ? haversineDistance : vincentyDistance;
     return waypoints.map((wp, idx) => {
       if (idx === 0) {
         return { ...wp, distance: 0 };
       }
       const prev = waypoints[idx - 1];
-      const dist = vincentyDistance(
+      const dist = distanceFn(
         { lat: prev.lat, lon: prev.lon },
         { lat: wp.lat, lon: wp.lon }
       );
@@ -1292,7 +1375,7 @@ export default function PathPlanScreen() {
       }
 
       const withDistances = calculateDistances(mapped);
-      updateWaypoints(withDistances);
+      recordAndApply(withDistances);
 
       const warningMsg = errors.length > 0 ? `\n\nWarning: ${errors.length} waypoints had errors and were skipped.` : '';
       Alert.alert(
@@ -1506,7 +1589,15 @@ export default function PathPlanScreen() {
 
       const res = await DocumentPicker.getDocumentAsync({
         copyToCacheDirectory: true,
-        type: '*/*' as any
+        type: [
+          'text/csv',                                      // .csv
+          'application/json',                              // .json
+          'application/vnd.google-earth.kml+xml',          // .kml
+          'text/plain',                                    // .waypoint, .waypoints
+          'application/dxf',                               // .dxf (if registered)
+          'application/octet-stream',                      // fallback: .dxf, .waypoints, unknown
+          '*/*',                                           // broad fallback
+        ],
       });
 
       if (DEBUG_LOG) console.log('[PathPlan] DocumentPicker response full:', res);
@@ -1593,9 +1684,19 @@ export default function PathPlanScreen() {
         case 'waypoints':
           parsed = parseQGCWaypoints(content);
           break;
-        case 'csv':
-          parsed = parseCSV(content);
+        case 'csv': {
+          // Use chunked parser only for very large files (1000+ rows) to avoid JS thread freeze.
+          // requestIdleCallback adds 800ms-1s overhead per chunk on field tablets;
+          // inline parsing handles 400 rows in ~4ms, so chunking is counterproductive below 1000.
+          const csvRows = content.split(/\r?\n/).filter(Boolean).length;
+          if (csvRows > 1000) {
+            if (DEBUG_LOG) console.log('[PathPlan] Using chunked parser for', csvRows, 'rows');
+            parsed = await parseCSVChunked(content, name);
+          } else {
+            parsed = parseCSV(content);
+          }
           break;
+        }
         case 'json':
           parsed = parseJSON(content);
           break;
@@ -1603,8 +1704,8 @@ export default function PathPlanScreen() {
           parsed = parseKML(content);
           break;
         case 'dxf':
-          parsed = parseDXF(content);
-          break;
+          handleDXFUpload(content, name);
+          return; // Don't continue to preview flow — CAD mode handles it
         default:
           throw new Error(`Unsupported file format: ${ext}`);
       }
@@ -1619,25 +1720,9 @@ export default function PathPlanScreen() {
       // Calculate distances between waypoints
       const waypointsWithDistances = calculateDistances(parsed);
 
-      // Auto-set mark based on global servo_enabled setting
-      // Wrapped in a 3s timeout — getMissionServoConfig() hangs indefinitely when
-      // the backend is unreachable, silently blocking the entire upload flow.
-      let globalServoEnabled = true;
-      try {
-        const response: any = await Promise.race([
-          services.getMissionServoConfig(),
-          new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 1500)),
-        ]);
-        const config = response.message || response.config || response.data || response;
-        globalServoEnabled = config.servo_enabled ?? true;
-      } catch (e) {
-        console.warn('[PathPlan] Could not fetch servo config for mark defaults, using default (true)');
-      }
-
-      // Guard: component may have unmounted during the async call above
-      // (e.g. socket error causes context reset → screen unmount)
-      if (!mountedRef.current) return;
-
+      // Use the already-polled globalServoEnabled state (refreshed every 2s at mount)
+      // instead of re-fetching servo config here, which blocked the upload for 1.5s
+      // when the backend was unreachable.
       const waypointsWithMark = waypointsWithDistances.map(wp => ({
         ...wp,
         mark: wp.mark ?? globalServoEnabled,
@@ -1703,10 +1788,225 @@ export default function PathPlanScreen() {
     }
   };
 
-  // Commented out - too noisy on every render
-  // if (DEBUG_LOG) {
-  //   try { console.log('[PathPlan] handleRequestUpload ready (component render)'); } catch (e) {}
-  // }
+  const handleGPSSubmit = () => {
+    const latA = parseFloat(gpsInputA.lat);
+    const lonA = parseFloat(gpsInputA.lon);
+    const latB = parseFloat(gpsInputB.lat);
+    const lonB = parseFloat(gpsInputB.lon);
+
+    if (isNaN(latA) || isNaN(lonA) || isNaN(latB) || isNaN(lonB)) {
+      Alert.alert('Invalid GPS', 'Please enter valid latitude and longitude values for both points.');
+      return;
+    }
+
+    cadAlignment.setGPSPoints(
+      { lat: latA, lon: lonA },
+      { lat: latB, lon: lonB }
+    );
+    setShowGPSInput(false);
+    cadAlignment.computeAlignment();
+  };
+
+  const handleApplyCADAlignment = () => {
+    if (!cadAlignment.computedWaypoints) return;
+
+    const waypoints = cadAlignment.computedWaypoints;
+
+    if (waypoints.length === 0) {
+      Alert.alert('No Waypoints', 'No convertible entities found. The DXF may contain only unsupported entity types.');
+      return;
+    }
+
+    if (pathAssignmentMode === 'manual') {
+      recordAndApply(waypoints);
+      setManualPathConnections([]);
+      setShowConnectionChoice(true);
+      Alert.alert(
+        '✏️ Manual Path Mode',
+        `${waypoints.length} marking points imported from CAD. Choose your connection method.`,
+        [{ text: 'Choose Method' }]
+      );
+    } else {
+      recordAndApply(waypoints);
+      Alert.alert('✓ CAD Import Complete', `Successfully georeferenced ${waypoints.length} marking points.`);
+    }
+
+    // Exit CAD mode
+    setIsCADMode(false);
+    cadAlignment.reset();
+    setGpsInputA({ lat: '', lon: '' });
+    setGpsInputB({ lat: '', lon: '' });
+  };
+
+  const handleCancelCADMode = () => {
+    Alert.alert(
+      'Cancel CAD Alignment',
+      'Are you sure you want to cancel? All alignment progress will be lost.',
+      [
+        { text: 'Continue', style: 'cancel' },
+        {
+          text: 'Cancel Alignment',
+          style: 'destructive',
+          onPress: () => {
+            setIsCADMode(false);
+            cadAlignment.reset();
+            setShowGPSInput(false);
+            setGpsInputA({ lat: '', lon: '' });
+            setGpsInputB({ lat: '', lon: '' });
+          },
+        },
+      ]
+    );
+  };
+
+  const renderCADModeUI = () => {
+    const { state, cadModel, computedWaypoints, errorMessage } = cadAlignment;
+
+    return (
+      <Modal visible={isCADMode} transparent animationType="slide" onRequestClose={handleCancelCADMode}>
+        <View style={cadStyles.modalOverlay}>
+          <View style={cadStyles.modalContent}>
+            {/* Header */}
+            <View style={cadStyles.header}>
+              <MaterialCommunityIcons name="vector-polyline" size={24} color={colors.cyan} />
+              <Text style={cadStyles.headerTitle}>CAD Georeferencing</Text>
+              <TouchableOpacity onPress={handleCancelCADMode} style={cadStyles.closeButton}>
+                <MaterialCommunityIcons name="close" size={20} color={colors.textSecondary} />
+              </TouchableOpacity>
+            </View>
+
+            {/* Error State */}
+            {state === 'error' && errorMessage && (
+              <View style={cadStyles.errorBox}>
+                <MaterialCommunityIcons name="alert-circle" size={20} color={colors.red} />
+                <Text style={cadStyles.errorText}>{errorMessage}</Text>
+                <TouchableOpacity style={cadStyles.errorRetryButton} onPress={handleCancelCADMode}>
+                  <Text style={cadStyles.errorRetryText}>Back to Map</Text>
+                </TouchableOpacity>
+              </View>
+            )}
+
+            {/* CAD Canvas — shown when model is loaded */}
+            {state !== 'idle' && state !== 'error' && cadModel && (
+              <CADAlignmentCanvas
+                model={cadModel}
+                onPointsSelected={(cadA, cadB) => {
+                  cadAlignment.setCADPoints(cadA, cadB);
+                  setShowGPSInput(true);
+                }}
+                onCancel={handleCancelCADMode}
+              />
+            )}
+
+            {/* Quick Align — auto-place using rover position + North */}
+            {state === 'cad_loaded' && cadModel && (
+              <View style={{ flexDirection: 'row', justifyContent: 'center', marginTop: 8 }}>
+                <TouchableOpacity
+                  style={[cadStyles.gpsComputeButton, { flexDirection: 'row', alignItems: 'center', gap: 6 }]}
+                  onPress={() => {
+                    const roverLat = telemetry?.global?.lat ?? 0;
+                    const roverLon = telemetry?.global?.lon ?? 0;
+                    cadAlignment.autoAlign({ lat: roverLat, lon: roverLon });
+                    setShowGPSInput(false);
+                  }}
+                >
+                  <MaterialCommunityIcons name="crosshairs-gps" size={18} color={colors.text} />
+                  <Text style={cadStyles.gpsComputeText}>Quick Align (Rover Position)</Text>
+                </TouchableOpacity>
+              </View>
+            )}
+
+            {/* GPS Input Dialog */}
+            {showGPSInput && (
+              <View style={cadStyles.gpsInputContainer}>
+                <Text style={cadStyles.sectionTitle}>Enter GPS Reference Points</Text>
+
+                {/* Point A */}
+                <View style={cadStyles.gpsRow}>
+                  <Text style={cadStyles.gpsLabel}>Point A — Lat:</Text>
+                  <TouchableOpacity
+                    style={cadStyles.gpsInput}
+                    onPress={() => {
+                      // Use current rover position as default
+                      const curLat = telemetry?.global?.lat?.toFixed(6) ?? '';
+                      const curLon = telemetry?.global?.lon?.toFixed(6) ?? '';
+                      setGpsInputA(prev => ({ ...prev, lat: curLat }));
+                    }}
+                  >
+                    <Text style={cadStyles.gpsInputText}>{gpsInputA.lat || 'tap to use current'}</Text>
+                  </TouchableOpacity>
+                  <Text style={cadStyles.gpsLabel}>Lon:</Text>
+                  <TouchableOpacity
+                    style={cadStyles.gpsInput}
+                    onPress={() => {
+                      const curLon = telemetry?.global?.lon?.toFixed(6) ?? '';
+                      setGpsInputA(prev => ({ ...prev, lon: curLon }));
+                    }}
+                  >
+                    <Text style={cadStyles.gpsInputText}>{gpsInputB.lon || 'tap to use current'}</Text>
+                  </TouchableOpacity>
+                </View>
+
+                {/* Point B */}
+                <View style={cadStyles.gpsRow}>
+                  <Text style={cadStyles.gpsLabel}>Point B — Lat:</Text>
+                  <TouchableOpacity style={cadStyles.gpsInput} onPress={() => {}}>
+                    <Text style={cadStyles.gpsInputText}>{gpsInputB.lat || 'enter value'}</Text>
+                  </TouchableOpacity>
+                  <Text style={cadStyles.gpsLabel}>Lon:</Text>
+                  <TouchableOpacity style={cadStyles.gpsInput} onPress={() => {}}>
+                    <Text style={cadStyles.gpsInputText}>{gpsInputB.lon || 'enter value'}</Text>
+                  </TouchableOpacity>
+                </View>
+
+                <View style={cadStyles.gpsButtons}>
+                  <TouchableOpacity style={cadStyles.gpsComputeButton} onPress={handleGPSSubmit}>
+                    <Text style={cadStyles.gpsComputeText}>Compute Alignment</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            )}
+
+            {/* Computed Result — show waypoint count and apply button */}
+            {state === 'computed' && computedWaypoints && (
+              <View style={cadStyles.resultBox}>
+                <MaterialCommunityIcons name="check-circle" size={28} color={colors.green} />
+                <Text style={cadStyles.resultTitle}>Alignment Complete</Text>
+                <Text style={cadStyles.resultCount}>{computedWaypoints.length} waypoints generated</Text>
+
+                <View style={cadStyles.resultActions}>
+                  <TouchableOpacity style={cadStyles.applyButton} onPress={handleApplyCADAlignment}>
+                    <MaterialCommunityIcons name="check" size={18} color={colors.text} />
+                    <Text style={cadStyles.applyButtonText}>Apply to Map</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity style={cadStyles.retryButton} onPress={() => {
+                    cadAlignment.reset();
+                    setShowGPSInput(false);
+                    setIsCADMode(false);
+                    // Re-load the DXF
+                    if (cadAlignment.cadModel) {
+                      // Reset to just CAD loaded state
+                      cadAlignment.loadDXF(JSON.stringify(cadAlignment.cadModel));
+                    }
+                  }}>
+                    <Text style={cadStyles.retryText}>Start Over</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            )}
+
+            {/* Idle / Loading state */}
+            {state === 'idle' && (
+              <View style={cadStyles.loadingBox}>
+                <MaterialCommunityIcons name="loading" size={24} color={colors.yellow} />
+                <Text style={cadStyles.loadingText}>Loading CAD drawing...</Text>
+              </View>
+            )}
+          </View>
+        </View>
+      </Modal>
+    );
+  };
 
   return (
     <SafeAreaView style={styles.container}>
@@ -1718,17 +2018,16 @@ export default function PathPlanScreen() {
           /* Full Screen Map Mode */
           <View style={styles.fullscreenMap}>
             <PathPlanMap
-              waypoints={waypoints}
-              onMapPress={handleMapPress}
-              onWaypointDrag={handleWaypointDrag}
-              onWaypointClick={handleWaypointClick}
-              onAddWaypoints={handleAddWaypoints}
+              waypoints={displayedWaypoints}
+              onMapPress={showPrecisePathDialog ? undefined : handleMapPress}
+              onWaypointDrag={showPrecisePathDialog ? undefined : handleWaypointDrag}
+              onWaypointClick={showPrecisePathDialog ? undefined : handleWaypointClick}
+              onAddWaypoints={showPrecisePathDialog ? undefined : handleAddWaypoints}
               roverPosition={roverPosition ? { lat: roverPosition.lat, lon: roverPosition.lng } : { lat: 0, lon: 0 }}
               heading={telemetry.attitude?.yaw_deg ?? null}
-              activeDrawingTool={activeDrawingTool}
-              onDrawingComplete={handleDrawingComplete}
+              activeDrawingTool={showPrecisePathDialog ? null : activeDrawingTool}
+              onDrawingComplete={showPrecisePathDialog ? undefined : handleDrawingComplete}
               isDrawingMode={false}
-              drawSettings={null}
               onToggleFullscreen={toggleMapFullscreen}
               isManualConnectionMode={isConnectingPath}
               manualConnections={manualPathConnections}
@@ -1738,6 +2037,7 @@ export default function PathPlanScreen() {
               measureResult={measureResult}
               onMeasureClear={() => { setMeasurePoints([]); setMeasureResult(null); }}
               onMeasureWaypointSelect={handleMeasureWaypointSelect}
+              isVisible={isVisible}
             />
           </View>
         ) : (
@@ -1749,12 +2049,28 @@ export default function PathPlanScreen() {
                   activeDrawingTool={activeDrawingTool}
                   onToolSelect={setActiveDrawingTool}
                   onShowCircleTool={() => setShowCircleDialog(true)}
-                  onShowSurveyGridTool={() => setShowSurveyGridDialog(true)}
                   onShowTextTool={() => setShowTextDialog(true)}
-                  onShowDrawTool={() => setShowDrawDialog(true)}
-                  onShowManualConnection={() => setShowManualConnectionCanvas(true)}
+                  onShowCADDrawing={() => setShowCADCanvas(true)}
+                  onShowManualConnection={() => {
+                    setActiveDrawingTool(null); // Clear drawing tool to prevent map from creating new waypoints
+                    setShowManualConnectionCanvas(true);
+                  }}
+                  onShowReverseTool={() => setShowReverseDialog(true)}
+                  onShowCornerExtension={() => setShowCornerExtensionDialog(true)}
+                  onShowSolarTableTool={() => setShowSolarTableDialog(true)}
+                  onShowTemplateManager={() => setShowTemplateManager(true)}
+                  canUndo={canUndo}
+                  canRedo={canRedo}
+                  onUndo={undo}
+                  onRedo={redo}
                   isCollapsed={isDrawingToolsCollapsed}
                   onToggleCollapse={() => setIsDrawingToolsCollapsed(!isDrawingToolsCollapsed)}
+                  isPrecisePathActive={showPrecisePathDialog}
+                  precisePathWaypoints={waypoints}
+                  onPrecisePathPreviewChange={handlePrecisePathPreviewChange}
+                  onPrecisePathApply={handlePrecisePathApply}
+                  onPrecisePathClose={handlePrecisePathClose}
+                  onPrecisePathActivate={() => setShowPrecisePathDialog(true)}
                 />
               </View>
               {/* PathSequenceSidebar - Always shown; collapses the DrawingToolsPanel to free up vertical space */}
@@ -1772,6 +2088,7 @@ export default function PathPlanScreen() {
                 missionName={missionName}
                 onMissionNameChange={setMissionName}
                 missionMode={missionMode}
+                roverPosition={roverPosition ? { lat: roverPosition.lat, lon: roverPosition.lng } : null}
               />
             </View>
 
@@ -1779,17 +2096,16 @@ export default function PathPlanScreen() {
             <View style={styles.centerPanel}>
               <View style={styles.mapWrapper}>
                 <PathPlanMap
-                  waypoints={waypoints}
-                  onMapPress={handleMapPress}
-                  onWaypointDrag={handleWaypointDrag}
-                  onWaypointClick={handleWaypointClick}
-                  onAddWaypoints={handleAddWaypoints}
+                  waypoints={displayedWaypoints}
+                  onMapPress={showPrecisePathDialog ? undefined : handleMapPress}
+                  onWaypointDrag={showPrecisePathDialog ? undefined : handleWaypointDrag}
+                  onWaypointClick={showPrecisePathDialog ? undefined : handleWaypointClick}
+                  onAddWaypoints={showPrecisePathDialog ? undefined : handleAddWaypoints}
                   roverPosition={roverPosition ? { lat: roverPosition.lat, lon: roverPosition.lng } : { lat: 0, lon: 0 }}
                   heading={telemetry.attitude?.yaw_deg ?? null}
                   activeDrawingTool={activeDrawingTool}
                   onDrawingComplete={handleDrawingComplete}
                   isDrawingMode={false}
-                  drawSettings={null}
                   onToggleFullscreen={toggleMapFullscreen}
                   isManualConnectionMode={isConnectingPath}
                   manualConnections={manualPathConnections}
@@ -1799,22 +2115,10 @@ export default function PathPlanScreen() {
                   measureResult={measureResult}
                   onMeasureClear={() => { setMeasurePoints([]); setMeasureResult(null); }}
               onMeasureWaypointSelect={handleMeasureWaypointSelect}
+                  isVisible={isVisible}
                 />
               </View>
             </View>
-
-            {/* White Canvas Drawing Mode Overlay */}
-            {isDrawingMode && drawSettings && (
-              <DrawingCanvas
-                visible={isDrawingMode}
-                drawSettings={drawSettings}
-                onDrawingComplete={handleDrawingComplete}
-                onCancel={() => {
-                  setIsConnectingPath(false);
-                  setManualPathConnections([]);
-                }}
-              />
-            )}
 
             {/* Manual Connection Choice Dialog */}
             <ManualConnectionChoice
@@ -1868,7 +2172,7 @@ export default function PathPlanScreen() {
                 });
 
                 // Update waypoints to ONLY show connected ones with recalculated distances
-                updateWaypoints(waypointsWithDistances);
+                recordAndApply(waypointsWithDistances);
                 setShowManualConnectionCanvas(false);
                 Alert.alert('✓ Path Created', `Path created with ${uniqueConnectedIds.length} marking points. Unconnected marking points removed.`);
               }}
@@ -1878,7 +2182,7 @@ export default function PathPlanScreen() {
               }}
               onDeleteWaypoints={(deletedIds) => {
                 const remaining = waypoints.filter(wp => !deletedIds.includes(wp.id));
-                updateWaypoints(remaining);
+                recordAndApply(remaining);
               }}
             />
 
@@ -1916,7 +2220,7 @@ export default function PathPlanScreen() {
                   });
 
                   // Update waypoints to ONLY show connected ones with recalculated distances
-                  updateWaypoints(waypointsWithDistances);
+                  recordAndApply(waypointsWithDistances);
                   setIsConnectingPath(false);
                   Alert.alert('✓ Path Created', `Path created with ${uniqueConnectedIds.length} marking points. Unconnected marking points removed.`);
                 }}
@@ -1926,7 +2230,7 @@ export default function PathPlanScreen() {
                 }}
                 onDeleteWaypoints={(deletedIds) => {
                   const remaining = waypoints.filter(wp => !deletedIds.includes(wp.id));
-                  updateWaypoints(remaining);
+                  recordAndApply(remaining);
                 }}
               />
             )}
@@ -1965,7 +2269,7 @@ export default function PathPlanScreen() {
                   });
 
                   // Update waypoints to ONLY show connected ones with recalculated distances
-                  updateWaypoints(waypointsWithDistances);
+                  recordAndApply(waypointsWithDistances);
                   setIsConnectingPath(false);
                   setUseMapForConnection(false);
                   Alert.alert('✓ Path Created', `Path created with ${uniqueConnectedIds.length} marking points. Unconnected marking points removed.`);
@@ -1999,6 +2303,7 @@ export default function PathPlanScreen() {
                     ? manualPathConnections.map(id => waypoints.find(wp => wp.id === id)).filter(Boolean) as PathPlanWaypoint[]
                     : waypoints
                   }
+                  roverPosition={roverPosition ? { lat: roverPosition.lat, lon: roverPosition.lng } : null}
                 />
               </View>
             </View>
@@ -2109,10 +2414,10 @@ export default function PathPlanScreen() {
               </View>
             )}
 
-            {/* Waypoints Table */}
+            {/* Waypoints Table — virtualized with LegendList for instant modal open */}
             <Text style={{ color: colors.accent, fontSize: 12, fontWeight: '600', marginBottom: 6 }}>Marking Point Details:</Text>
-            <ScrollView style={{ maxHeight: 280, borderWidth: 1, borderColor: colors.border, borderRadius: 8, padding: 8, backgroundColor: colors.cardBg }}>
-              <View style={{ flexDirection: 'row', paddingVertical: 6, borderBottomWidth: 1, borderBottomColor: colors.border }}>
+            <View style={{ maxHeight: 280, borderWidth: 1, borderColor: colors.border, borderRadius: 8, backgroundColor: colors.cardBg }}>
+              <View style={{ flexDirection: 'row', paddingVertical: 6, paddingHorizontal: 8, borderBottomWidth: 1, borderBottomColor: colors.border }}>
                 <Text style={{ flex: 0.4, color: '#67E8F9', fontWeight: '700', fontSize: 11 }}>#</Text>
                 <Text style={{ flex: 1.8, color: '#67E8F9', fontWeight: '700', fontSize: 11 }}>Latitude</Text>
                 <Text style={{ flex: 1.8, color: '#67E8F9', fontWeight: '700', fontSize: 11 }}>Longitude</Text>
@@ -2120,19 +2425,18 @@ export default function PathPlanScreen() {
                 <Text style={{ flex: 0.8, color: '#67E8F9', fontWeight: '700', fontSize: 11 }}>Dist(m)</Text>
                 <Text style={{ flex: 1, color: '#67E8F9', fontWeight: '700', fontSize: 11 }}>Block/Row</Text>
               </View>
-              {uploadPreviewWaypoints && uploadPreviewWaypoints.map((wp) => (
-                <View key={wp.id} style={{ flexDirection: 'row', paddingVertical: 6, borderBottomWidth: 1, borderBottomColor: 'rgba(255,255,255,0.03)' }}>
-                  <Text style={{ flex: 0.4, color: colors.text, fontSize: 11 }}>{wp.id}</Text>
-                  <Text style={{ flex: 1.8, color: colors.text, fontFamily: 'monospace', fontSize: 10 }}>{wp.lat.toFixed(6)}</Text>
-                  <Text style={{ flex: 1.8, color: colors.text, fontFamily: 'monospace', fontSize: 10 }}>{wp.lon.toFixed(6)}</Text>
-                  <Text style={{ flex: 0.8, color: colors.text, fontSize: 10 }}>{wp.alt?.toFixed(1) || '0.0'}</Text>
-                  <Text style={{ flex: 0.8, color: colors.text, fontSize: 10 }}>{(wp.distance || 0).toFixed(0)}</Text>
-                  <Text style={{ flex: 1, color: colors.textSecondary, fontSize: 9 }}>
-                    {wp.block || '—'}/{wp.row || '—'}
-                  </Text>
-                </View>
-              ))}
-            </ScrollView>
+              <LegendList
+                data={uploadPreviewWaypoints ?? []}
+                renderItem={({ item }) => <PreviewRow item={item} />}
+                keyExtractor={(item) => String(item.id)}
+                recycleItems
+                estimatedItemSize={40}
+                drawDistance={150}
+                waitForInitialLayout={false}
+                style={{ maxHeight: 240 }}
+                contentContainerStyle={{ paddingHorizontal: 8 }}
+              />
+            </View>
 
             <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 14, gap: 8 }}>
               <TouchableOpacity onPress={() => {
@@ -2172,24 +2476,32 @@ export default function PathPlanScreen() {
                           text: 'Proceed Anyway', onPress: () => {
                             const sanitized = sanitizeWaypointsForUpload(uploadPreviewWaypoints);
 
+                            // Close modal first for instant visual response, then apply waypoints.
+                            // Without this order swap, recordAndApply (394+ object transforms +
+                            // context re-render) blocks the modal close for seconds.
+                            setShowUploadPreview(false);
+
                             // Check pathAssignmentMode even when there are warnings
                             if (pathAssignmentMode === 'manual') {
                               if (DEBUG_LOG) console.log('[PathPlan] Importing waypoints in MANUAL mode (with warnings):', sanitized.length);
-                              updateWaypoints(sanitized);
-                              setManualPathConnections([]);
-                              setShowConnectionChoice(true);
+                              // Defer heavy waypoint update to next frame so modal close renders first
+                              requestAnimationFrame(() => {
+                                recordAndApply(sanitized);
+                                setManualPathConnections([]);
+                                setShowConnectionChoice(true);
+                              });
                               Alert.alert(
                                 '✏️ Manual Path Mode',
                                 `${sanitized.length} marking points imported. Choose your preferred connection method.`,
                                 [{ text: 'Choose Method' }]
                               );
-                              setShowUploadPreview(false);
                             } else {
                               // Auto mode: Sequential import as usual
                               if (DEBUG_LOG) console.log('[PathPlan] Applying imported waypoints (Proceed with warnings):', sanitized.length, sanitized.slice(0, 3));
-                              updateWaypoints(sanitized);
+                              requestAnimationFrame(() => {
+                                recordAndApply(sanitized);
+                              });
                               Alert.alert('✓ Import Complete', `Successfully imported ${sanitized.length} marking points.`);
-                              setShowUploadPreview(false);
                             }
                           }
                         }
@@ -2197,26 +2509,31 @@ export default function PathPlanScreen() {
                     );
                   } else {
                     // Handle mode-specific import
+                    // Close modal first for instant visual response, then apply waypoints.
+                    setShowUploadPreview(false);
+
                     if (pathAssignmentMode === 'manual') {
                       // Manual mode: Import waypoints without sequential ordering, enable connection mode
                       const sanitized = sanitizeWaypointsForUpload(uploadPreviewWaypoints);
                       if (DEBUG_LOG) console.log('[PathPlan] Importing waypoints in MANUAL mode:', sanitized.length);
-                      updateWaypoints(sanitized);
-                      setManualPathConnections([]);
-                      setShowConnectionChoice(true);
+                      requestAnimationFrame(() => {
+                        recordAndApply(sanitized);
+                        setManualPathConnections([]);
+                        setShowConnectionChoice(true);
+                      });
                       Alert.alert(
                         '✏️ Manual Path Mode',
                         `${sanitized.length} marking points imported. Choose your preferred connection method.`,
                         [{ text: 'Choose Method' }]
                       );
-                      setShowUploadPreview(false);
                     } else {
                       // Auto mode: Sequential import as usual
                       const sanitized = sanitizeWaypointsForUpload(uploadPreviewWaypoints);
                       if (DEBUG_LOG) console.log('[PathPlan] Applying imported waypoints (Proceed clean):', sanitized.length, sanitized.slice(0, 3));
-                      updateWaypoints(sanitized);
+                      requestAnimationFrame(() => {
+                        recordAndApply(sanitized);
+                      });
                       Alert.alert('✓ Import Complete', `Successfully imported ${sanitized.length} marking points.`);
-                      setShowUploadPreview(false);
                     }
                   }
                 }
@@ -2233,7 +2550,13 @@ export default function PathPlanScreen() {
                 }, 200);
                 addTimer(timer);
               }} style={{ flex: 1, paddingVertical: 12, paddingHorizontal: 12, backgroundColor: colors.blueBtn, borderRadius: 8 }}>
-                <Text style={{ color: colors.text, fontWeight: '700', textAlign: 'center' }}>📤 Upload New</Text>
+                <MaterialCommunityIcons
+                  name="upload-circle-outline"
+                  size={20}
+                  color={colors.text}
+                  style={{ marginBottom: 4 }}
+                />
+                <Text style={{ color: colors.text, fontWeight: '700', textAlign: 'center' }}>Upload New</Text>
               </TouchableOpacity>
 
               <TouchableOpacity onPress={() => {
@@ -2270,6 +2593,30 @@ export default function PathPlanScreen() {
         }
       />
 
+      {/* Solar Table Generator Dialog */}
+      <SolarTableDialog
+        visible={showSolarTableDialog}
+        onClose={() => setShowSolarTableDialog(false)}
+        onGenerate={handleAddWaypoints}
+        defaultCenter={
+          roverPosition
+            ? { lat: roverPosition.lat, lng: roverPosition.lng }
+            : undefined
+        }
+      />
+
+      {/* Template Manager Dialog */}
+      <TemplateManagerDialog
+        visible={showTemplateManager}
+        onClose={() => setShowTemplateManager(false)}
+        onGenerate={handleAddWaypoints}
+        defaultCenter={
+          roverPosition
+            ? { lat: roverPosition.lat, lng: roverPosition.lng }
+            : undefined
+        }
+      />
+
       {/* Text Annotation Dialog */}
       <TextAnnotationDialog
         visible={showTextDialog}
@@ -2282,27 +2629,45 @@ export default function PathPlanScreen() {
         }
       />
 
-      {/* Free Draw Dialog */}
-      <FreeDrawDialog
-        visible={showDrawDialog}
-        onClose={() => setShowDrawDialog(false)}
-        onStartDrawing={handleStartDrawing}
-        onPinHome={handlePinHomeMode}
-        hasHomePosition={!!(homePosition || roverPosition)}
-        homePosition={homePosition || (roverPosition ? { lat: roverPosition.lat, lng: roverPosition.lng } : null)}
+      {/* CAD Drawing Canvas */}
+      <CADDrawingCanvas
+        visible={showCADCanvas}
+        onClose={() => setShowCADCanvas(false)}
+        onSaveWaypoints={(cadWaypoints) => {
+          // Add waypoints to the mission using PathPlanWaypoint type
+          const newWaypoints: PathPlanWaypoint[] = cadWaypoints.map((wp, index) => ({
+            id: Date.now() + index,
+            lat: wp.lat,
+            lon: wp.lng,
+            alt: 0,
+            distance: 0,
+            block: '',
+            row: '',
+            pile: String(index + 1),
+          }));
+          recordAndApply([...waypoints, ...newWaypoints]);
+        }}
+        currentPosition={roverPosition || { lat: 13.0827, lng: 80.2707 }}
+        onShowSurveyGrid={() => setShowSurveyGridDialog(true)}
       />
 
-      {/* Home Pinning Overlay */}
-      {isPinningHome && (
-        <View style={styles.pinningOverlay}>
-          <View style={styles.pinningBanner}>
-            <Text style={styles.pinningText}>📍 Tap on map to set home position</Text>
-            <TouchableOpacity onPress={() => setIsPinningHome(false)} style={styles.pinningCancel}>
-              <Text style={styles.pinningCancelText}>Cancel</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      )}
+      {/* Reverse Waypoints Dialog */}
+      <ReverseWaypointsDialog
+        visible={showReverseDialog}
+        waypointCount={waypoints.length}
+        onReverse={handleReverseAllWaypoints}
+        onClose={() => setShowReverseDialog(false)}
+      />
+
+      {/* Corner Extension Dialog */}
+      <CornerExtensionDialog
+        visible={showCornerExtensionDialog}
+        onClose={() => setShowCornerExtensionDialog(false)}
+        onApply={handleApplyCornerExtension}
+        waypointCount={waypoints.length}
+        cornersDetected={cornerDetectionResult.count}
+        shortSegmentWarnings={cornerDetectionResult.shortWarnings}
+      />
 
       {/* Manual Control Modal */}
       <Modal
@@ -2329,7 +2694,7 @@ export default function PathPlanScreen() {
         currentMode={gpsFailsafeMode}
         onModeChange={setGpsFailsafeMode}
         onClose={() => setShowFailsafeModeSelector(false)}
-        disabled={telemetry.mission.status !== 'IDLE'}
+        disabled={['running', 'RUNNING', 'active', 'ACTIVE'].includes(telemetry.mission.status)}
       />
 
       {/* GPS Failsafe Strict Mode Popup */}
@@ -2389,6 +2754,9 @@ export default function PathPlanScreen() {
         </View>
       )}
 
+      {/* ── CAD Georeferencing Mode Overlay ─────────────────── */}
+      {isCADMode && renderCADModeUI()}
+
     </SafeAreaView>
   );
 
@@ -2424,7 +2792,12 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     overflow: 'hidden',
     borderWidth: 1,
-    borderColor: colors.border,
+    borderColor: 'rgba(59, 130, 246, 0.25)',
+    shadowColor: '#3B82F6',
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.15,
+    shadowRadius: 12,
+    elevation: 4,
   },
   rightPanel: {
     width: '25%',
@@ -2446,38 +2819,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingTop: 12,
     paddingBottom: 12,
-  },
-  pinningOverlay: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    zIndex: 1000,
-  },
-  pinningBanner: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: 'rgba(59, 130, 246, 0.95)',
-    paddingVertical: 12,
-    paddingHorizontal: 16,
-    gap: 16,
-  },
-  pinningText: {
-    color: colors.text,
-    fontSize: 14,
-    fontWeight: '600',
-  },
-  pinningCancel: {
-    backgroundColor: 'rgba(255,255,255,0.2)',
-    paddingVertical: 6,
-    paddingHorizontal: 12,
-    borderRadius: 6,
-  },
-  pinningCancelText: {
-    color: colors.text,
-    fontSize: 12,
-    fontWeight: '600',
   },
   // Drawing mode overlay styles
   drawingOverlay: {
@@ -2561,5 +2902,175 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '500',
     color: '#333',
+  },
+});
+
+// ── CAD Mode Styles ─────────────────────────────────────────
+const cadStyles = StyleSheet.create({
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: colors.background + 'EE',
+    justifyContent: 'center',
+    padding: 16,
+  },
+  modalContent: {
+    backgroundColor: colors.surface,
+    borderRadius: 16,
+    padding: 16,
+    maxHeight: '90%',
+  },
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginBottom: 12,
+  },
+  headerTitle: {
+    flex: 1,
+    fontSize: 18,
+    fontWeight: '700',
+    color: colors.text,
+    fontFamily: 'monospace',
+  },
+  closeButton: {
+    padding: 4,
+  },
+  errorBox: {
+    backgroundColor: colors.red + '15',
+    borderRadius: 8,
+    padding: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 12,
+  },
+  errorText: {
+    flex: 1,
+    color: colors.red,
+    fontFamily: 'monospace',
+    fontSize: 12,
+  },
+  errorRetryButton: {
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    backgroundColor: colors.redBtn,
+    borderRadius: 6,
+  },
+  errorRetryText: {
+    color: colors.text,
+    fontWeight: '600',
+    fontSize: 11,
+  },
+  sectionTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: colors.text,
+    fontFamily: 'monospace',
+    marginBottom: 8,
+  },
+  gpsInputContainer: {
+    marginTop: 8,
+    padding: 12,
+    backgroundColor: colors.background + '80',
+    borderRadius: 8,
+  },
+  gpsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginBottom: 8,
+    flexWrap: 'wrap',
+  },
+  gpsLabel: {
+    color: colors.textSecondary,
+    fontFamily: 'monospace',
+    fontSize: 11,
+    fontWeight: '600',
+  },
+  gpsInput: {
+    backgroundColor: colors.surface,
+    borderRadius: 6,
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderWidth: 1,
+    borderColor: colors.border,
+    minWidth: 100,
+  },
+  gpsInputText: {
+    color: colors.text,
+    fontFamily: 'monospace',
+    fontSize: 11,
+  },
+  gpsButtons: {
+    marginTop: 8,
+  },
+  gpsComputeButton: {
+    backgroundColor: colors.blueBtn,
+    borderRadius: 8,
+    paddingVertical: 12,
+    alignItems: 'center',
+  },
+  gpsComputeText: {
+    color: colors.text,
+    fontWeight: '700',
+    fontSize: 13,
+    fontFamily: 'monospace',
+  },
+  resultBox: {
+    alignItems: 'center',
+    padding: 20,
+    gap: 8,
+  },
+  resultTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: colors.green,
+    fontFamily: 'monospace',
+  },
+  resultCount: {
+    fontSize: 14,
+    color: colors.text,
+    fontFamily: 'monospace',
+  },
+  resultActions: {
+    flexDirection: 'row',
+    gap: 12,
+    marginTop: 12,
+  },
+  applyButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: colors.greenBtn,
+    borderRadius: 8,
+    paddingVertical: 10,
+    paddingHorizontal: 20,
+  },
+  applyButtonText: {
+    color: colors.text,
+    fontWeight: '700',
+    fontSize: 13,
+  },
+  retryButton: {
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: 8,
+  },
+  retryText: {
+    color: colors.textSecondary,
+    fontWeight: '600',
+    fontSize: 12,
+  },
+  loadingBox: {
+    alignItems: 'center',
+    padding: 30,
+    gap: 8,
+  },
+  loadingText: {
+    color: colors.yellow,
+    fontFamily: 'monospace',
+    fontSize: 13,
   },
 });

@@ -1,8 +1,9 @@
 import React, { useMemo } from 'react';
 import { View, Text, StyleSheet } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import { colors } from '../../theme/colors';
 import { Waypoint } from './types';
-import { Geodesic } from 'geographiclib';
+// import { Geodesic } from 'geographiclib'; // COMMENTED OUT: Using backend distance_to_next_m instead
 
 interface Props {
   waypoints: Waypoint[];
@@ -11,7 +12,7 @@ interface Props {
   statusMap?: Record<number, {
     reached?: boolean;
     marked?: boolean;
-    status?: 'completed' | 'loading' | 'skipped' | 'reached' | 'marked' | 'pending';
+    status?: 'completed' | 'loading' | 'skipped' | 'reached' | 'marked' | 'pending' | 'spray_on' | 'spray_off' | 'passed' | 'mission_end';
     timestamp?: string;
     pile?: string | number;
     rowNo?: string | number;
@@ -19,17 +20,18 @@ interface Props {
   }>;
   isMissionActive?: boolean;
   wpDistCm?: number; // DEPRECATED: Legacy backend distance, kept for backward compatibility
-  
-  // NEW REQUIRED PROP: Current rover GPS position for accurate distance calculation
+  distanceToNextM?: number; // Backend mission distance to next waypoint in meters (20Hz)
+
+  // COMMENTED OUT: Frontend geodesic calculation replaced by backend distance_to_next_m
   currentRoverPosition?: {
-    latitude: number;   // Rover's current GPS latitude (decimal degrees)
-    longitude: number;  // Rover's current GPS longitude (decimal degrees)
+    latitude: number;
+    longitude: number;
   };
 }
 
 // Layout constants for quick adjustments
 const PROGRESS_CARD_LAYOUT: { height?: number | string; minHeight?: number; width?: number | string; flex?: number } = {
-  height: 192, // px or percentage string like '25%'
+  height: 200, // px or percentage string like '25%' (192 * 1.1 = 10% increase)
   minHeight: 100,
   width: '100%',
 };
@@ -41,7 +43,8 @@ export const MissionProgressCard: React.FC<Props> = ({
   statusMap = {},
   isMissionActive = false,
   wpDistCm, // DEPRECATED: Legacy backend distance
-  currentRoverPosition, // NEW: Current rover GPS position
+  distanceToNextM, // Backend mission distance to next waypoint in meters
+  currentRoverPosition, // COMMENTED OUT: Frontend geodesic calculation replaced by backend
 }) => {
   const totalWaypoints = waypoints.length;
 
@@ -70,175 +73,94 @@ export const MissionProgressCard: React.FC<Props> = ({
   const currentWp = isMissionActive && currentIndex !== null && currentIndex >= 0 ? waypoints[currentIndex] : null;
   const nextWp = isMissionActive && nextIndex < totalWaypoints ? waypoints[nextIndex] : null;
 
-  /**
-   * HIGH-PRECISION GEODETIC DISTANCE CALCULATION
-   * 
-   * Calculate distance using Karney's formula (WGS84 ellipsoid)
-   * - Accuracy: ~15 nanometers for any distance on Earth
-   * - Method: Solves inverse geodesic problem on WGS84 ellipsoid
-   * - Better than Vincenty: More accurate and handles antipodal points
-   * 
-   * Reference: Karney, C. F. F. (2013). Algorithms for geodesics. 
-   *            Journal of Geodesy, 87(1), 43-55.
-   */
-  const calculateGeodesicDistance = (
-    lat1: number,
-    lon1: number,
-    lat2: number,
-    lon2: number
-  ): number => {
-    try {
-      // Initialize WGS84 ellipsoid (Earth's reference ellipsoid)
-      const geod = Geodesic.WGS84;
-
-      // Solve inverse geodesic problem
-      const result = geod.Inverse(lat1, lon1, lat2, lon2);
-
-      // Return distance in meters (s12 = geodesic distance)
-      // Type assertion: GeographicLib always returns s12 for valid coordinates
-      return (result as any).s12 ?? 0;
-    } catch (error) {
-      console.error('[MissionProgressCard] Geodesic calculation error:', error);
-      return 0;
-    }
-  };
+  // COMMENTED OUT: Frontend geodesic distance calculation
+  // Now using backend distance_to_next_m (20Hz from mission_status events)
+  // const calculateGeodesicDistance = (...) => { ... };
+  // const distanceToCurrent = useMemo(() => { ... }, [isMissionActive, currentIndex, waypoints, currentRoverPosition]);
 
   /**
-   * Calculate distance to current target waypoint (MEMOIZED)
-   * 
-   * Only recalculates when:
-   * - Mission active status changes
-   * - Current waypoint index changes
-   * - Rover position updates
-   * - Waypoints array changes
-   */
-  const distanceToCurrent = useMemo(() => {
-    // Guard: Mission must be active
-    if (!isMissionActive) {
-      return null;
-    }
-
-    // Guard: Must have valid current waypoint index
-    if (currentIndex === null || currentIndex < 0 || currentIndex >= waypoints.length) {
-      return null;
-    }
-
-    // Guard: Must have current rover position
-    if (!currentRoverPosition?.latitude || !currentRoverPosition?.longitude) {
-      console.warn('[MissionProgressCard] Missing rover position for distance calculation');
-      return null;
-    }
-
-    // Get target waypoint
-    const targetWaypoint = waypoints[currentIndex];
-
-    // Guard: Validate waypoint coordinates
-    if (!targetWaypoint?.lat || !targetWaypoint?.lon) {
-      console.error('[MissionProgressCard] Invalid waypoint coordinates at index', currentIndex);
-      return null;
-    }
-
-    /**
-     * Validate coordinate ranges (WGS84 bounds)
-     * Valid latitude: -90 to 90
-     * Valid longitude: -180 to 180
-     */
-    const isValidCoordinate = (lat: number, lon: number): boolean => {
-      return (
-        lat >= -90 &&
-        lat <= 90 &&
-        lon >= -180 &&
-        lon <= 180 &&
-        !isNaN(lat) &&
-        !isNaN(lon) &&
-        isFinite(lat) &&
-        isFinite(lon)
-      );
-    };
-
-    if (!isValidCoordinate(currentRoverPosition.latitude, currentRoverPosition.longitude)) {
-      console.error('[MissionProgressCard] Invalid rover coordinates:', currentRoverPosition);
-      return null;
-    }
-
-    if (!isValidCoordinate(targetWaypoint.lat, targetWaypoint.lon)) {
-      console.error('[MissionProgressCard] Invalid waypoint coordinates:', targetWaypoint);
-      return null;
-    }
-
-    // Calculate geodesic distance using Karney formula
-    const distanceMeters = calculateGeodesicDistance(
-      currentRoverPosition.latitude,
-      currentRoverPosition.longitude,
-      targetWaypoint.lat,
-      targetWaypoint.lon
-    );
-
-    // Convert meters to centimeters for display
-    const distanceCm = distanceMeters * 100;
-
-    return distanceCm;
-  }, [isMissionActive, currentIndex, waypoints, currentRoverPosition]);
-
-  /**
-   * Format distance for display
-   * 
-   * Display Rules:
-   * - Mission inactive: Show "—" (em dash)
-   * - No distance calculated: Show "—"
-   * - Distance ≥ 0: Show with 1 decimal precision (e.g., "245.3cm")
-   * 
-   * Unit: Centimeters (cm) for consistency with original implementation
-   * Precision: 1 decimal place (millimeter accuracy)
+   * Format distance for display using backend distance_to_next_m
+   *
+   * Source: Backend mission_status events at 20Hz
+   * Field: distance_to_next_m (meters)
+   * Display: Converted to centimeters with 1 decimal place
    */
   const distanceText = useMemo(() => {
     if (!isMissionActive) {
-      return '—'; // Mission not active
+      return '—';
     }
 
-    if (distanceToCurrent === null) {
-      return '—'; // No valid distance calculated
+    if (distanceToNextM == null || distanceToNextM < 0) {
+      return '—';
     }
 
-    // Format with 1 decimal place
-    return `${distanceToCurrent.toFixed(1)}cm`;
-  }, [isMissionActive, distanceToCurrent]);
+    // Convert meters to centimeters for display
+    const distanceCm = distanceToNextM * 100;
+    return `${distanceCm.toFixed(1)}cm`;
+  }, [isMissionActive, distanceToNextM]);
 
   return (
     <View style={styles.card}>
       {/* Header */}
       <View style={styles.header}>
-        <Text style={styles.title}>MISSION PROGRESS</Text>
-        <Text style={styles.progressCount}>
-          {currentWp ? currentWp.sn : 0}/{totalWaypoints}
-        </Text>
+        <View style={styles.headerLeft}>
+          <View style={styles.headerIconWrap}>
+            <Ionicons name="analytics" size={14} color={colors.accent} />
+          </View>
+          <Text style={styles.headerTitle}>PROGRESS</Text>
+        </View>
+        <View style={[styles.distanceBadge, { backgroundColor: 'rgba(103, 232, 249, 0.12)', borderColor: colors.accent }]}>
+          <Text style={[styles.distanceBadgeText, { color: colors.accent }]}>
+            {currentWp ? currentWp.sn : 0}/{totalWaypoints}
+          </Text>
+        </View>
       </View>
 
-      {/* Distance Row */}
-      <View style={styles.distanceRow}>
-        <Text style={styles.distanceLabel}>Distance</Text>
-        <Text style={styles.distanceValue}>{distanceText}</Text>
+      {/* Distance Card */}
+      <View style={styles.distanceCard}>
+        <View style={[styles.distanceAccent, { backgroundColor: colors.accent }]} />
+        <View style={styles.distanceCardInner}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+            <View style={[styles.distanceIconWrap, { borderColor: 'rgba(103, 232, 249, 0.3)' }]}>
+              <Ionicons name="navigate-circle-outline" size={16} color={colors.accent} />
+            </View>
+            <Text style={styles.distanceCardLabel}>DISTANCE TO TARGET</Text>
+          </View>
+          <Text style={styles.distanceCardValue}>{distanceText}</Text>
+        </View>
       </View>
 
       {/* Counters Row */}
       <View style={styles.counterRow}>
+        {/* Last Marked */}
         <View style={[styles.counter, styles.markedCounter]}>
-          <Text style={styles.counterLabel}>LAST</Text>
-          <Text style={[styles.counterValue, { color: '#C084FC' }]}>{markedCount}</Text>
+          <View style={[styles.counterAccent, { backgroundColor: colors.accent }]} />
+          <View style={styles.counterInner}>
+              <Text style={[styles.counterLabel, { color: 'rgba(103, 232, 249, 0.8)' }]}>LAST</Text>
+            <Text style={[styles.counterValue, { color: colors.accent }]}>{markedCount}</Text>
+          </View>
         </View>
 
+        {/* Current */}
         <View style={[styles.counter, styles.currentCounter]}>
-          <Text style={styles.counterLabel}>CURRENT</Text>
-          <Text style={[styles.counterValue, { color: '#67E8F9' }]}>
-            {currentWp ? currentWp.sn : '0'}
-          </Text>
+          <View style={[styles.counterAccent, { backgroundColor: colors.accent }]} />
+          <View style={styles.counterInner}>
+              <Text style={[styles.counterLabel, { color: 'rgba(103, 232, 249, 0.8)' }]}>CURRENT</Text>
+            <Text style={[styles.counterValue, { color: colors.accent }]}>
+              {currentWp ? currentWp.sn : '0'}
+            </Text>
+          </View>
         </View>
 
+        {/* Next */}
         <View style={[styles.counter, styles.nextCounter]}>
-          <Text style={styles.counterLabel}>NEXT</Text>
-          <Text style={[styles.counterValue, { color: '#6EE7B7' }]}>
-            {nextWp ? nextWp.sn : '0'}
-          </Text>
+          <View style={[styles.counterAccent, { backgroundColor: colors.accent }]} />
+          <View style={styles.counterInner}>
+              <Text style={[styles.counterLabel, { color: 'rgba(103, 232, 249, 0.8)' }]}>NEXT</Text>
+            <Text style={[styles.counterValue, { color: colors.accent }]}>
+              {nextWp ? nextWp.sn : '0'}
+            </Text>
+          </View>
         </View>
       </View>
     </View>
@@ -248,89 +170,155 @@ export const MissionProgressCard: React.FC<Props> = ({
 const styles = StyleSheet.create({
   card: {
     ...(PROGRESS_CARD_LAYOUT as any),
-    backgroundColor: colors.secondary,
+    backgroundColor: colors.panelBg,
     borderRadius: 12,
-    padding: 12,
-    marginBottom: 12,
     borderWidth: 1,
     borderColor: colors.border,
+    padding: 16,
+    gap: 9,
+    marginBottom: 12,
   },
+
+  // ── HEADER ──
   header: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 10,
+    justifyContent: 'space-between',
+    paddingBottom: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
   },
   headerLeft: {
-    flexDirection: 'column',
-    gap: 4,
-  },
-  title: {
-    fontSize: 13,
-    fontWeight: 'bold',
-    color: '#67E8F9',
-    letterSpacing: 0.5,
-  },
-  progressCount: {
-    fontSize: 13,
-    fontWeight: 'bold',
-    color: '#6EE7B7',
-  },
-  distanceRow: {
-    backgroundColor: colors.primary,
-    borderRadius: 10,
-    paddingVertical: 10,
-    paddingHorizontal: 12,
-    marginBottom: 12,
-    borderWidth: 1,
-    borderColor: colors.border,
     flexDirection: 'row',
-    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: 10,
+  },
+  headerIconWrap: {
+    width: 32,
+    height: 32,
+    borderRadius: 10,
+    backgroundColor: 'rgba(59, 130, 246, 0.15)',
+    borderWidth: 1,
+    borderColor: 'rgba(59, 130, 246, 0.3)',
+    justifyContent: 'center',
     alignItems: 'center',
   },
-  distanceLabel: {
-    fontSize: 13,
-    color: colors.text,
+  headerTitle: {
+    color: colors.accent,
+    fontSize: 14,
+    fontWeight: '700',
+    letterSpacing: 3,
   },
-  distanceValue: {
-    fontSize: 13,
-    fontWeight: 'bold',
-    color: colors.text,
+  headerBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    borderWidth: 1,
+    borderRadius: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
   },
+
+  // ── DISTANCE CARD ──
+  distanceCard: {
+    flexDirection: 'row',
+    backgroundColor: colors.cardBg,
+    borderRadius: 10,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  distanceAccent: {
+    width: 2.5,
+    backgroundColor: colors.accent,
+    alignSelf: 'stretch',
+  },
+  distanceCardInner: {
+    flex: 1,
+    padding: 10,
+    gap: 6,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  distanceIconWrap: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    borderWidth: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  distanceBadge: {
+    borderWidth: 1,
+    borderRadius: 5,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+  },
+  distanceBadgeText: {
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 1,
+  },
+  distanceCardLabel: {
+    color: 'rgba(103, 232, 249, 0.8)',
+    fontSize: 9,
+    fontWeight: '700',
+    letterSpacing: 2,
+    textTransform: 'uppercase',
+  },
+  distanceCardValue: {
+    color: '#ffffff',
+    fontSize: 13,
+    fontWeight: '700',
+  },
+
+  // ── COUNTERS ──
   counterRow: {
     flexDirection: 'row',
-    gap: 8,
+    gap: 12,
   },
   counter: {
     flex: 1,
+    flexDirection: 'row',
     borderRadius: 10,
-    paddingVertical: 10,
-    paddingHorizontal: 8,
-    alignItems: 'center',
+    overflow: 'hidden',
+    borderWidth: 1,
   },
   markedCounter: {
-    backgroundColor: 'rgba(192, 132, 252, 0.15)',
-    borderWidth: 1,
-    borderColor: 'rgba(192, 132, 252, 0.4)',
+    backgroundColor: 'rgba(192, 132, 252, 0.08)',
+    borderColor: 'rgba(192, 132, 252, 0.3)',
   },
   currentCounter: {
-    backgroundColor: 'rgba(103, 232, 249, 0.15)',
-    borderWidth: 1,
-    borderColor: 'rgba(103, 232, 249, 0.4)',
+    backgroundColor: 'rgba(103, 232, 249, 0.08)',
+    borderColor: 'rgba(103, 232, 249, 0.3)',
   },
   nextCounter: {
-    backgroundColor: 'rgba(110, 231, 183, 0.15)',
-    borderWidth: 1,
-    borderColor: 'rgba(110, 231, 183, 0.4)',
+    backgroundColor: 'rgba(110, 231, 183, 0.08)',
+    borderColor: 'rgba(110, 231, 183, 0.3)',
+  },
+  counterAccent: {
+    width: 3,
+    alignSelf: 'stretch',
+  },
+  counterInner: {
+    flex: 1,
+    paddingVertical: 6,
+    paddingHorizontal: 6,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 4,
   },
   counterLabel: {
-    fontSize: 11,
+    fontSize: 8,
+    fontWeight: '700',
+    letterSpacing: 1,
     color: colors.textSecondary,
-    marginBottom: 2,
+    marginBottom: 0.2,
   },
   counterValue: {
-    fontSize: 16,
-    fontWeight: 'bold',
+    fontSize: 15,
+    fontWeight: '800',
   },
   completedStatus: {
     flexDirection: 'row',

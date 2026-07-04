@@ -1,48 +1,14 @@
 import { PathPlanWaypoint } from '../types/pathplan';
 
 /**
- * Calculate distance between two waypoints using Haversine formula
+ * Calculate distance between two waypoints using Vincenty formula
+ * More accurate than Haversine (±0.5mm vs ±0.5%)
  */
 export const calculateDistance = (
     wp1: { lat: number; lon: number },
     wp2: { lat: number; lon: number }
 ): number => {
-    // Validate input coordinates
-    if (!wp1 || !wp2 ||
-        !Number.isFinite(wp1.lat) || !Number.isFinite(wp1.lon) ||
-        !Number.isFinite(wp2.lat) || !Number.isFinite(wp2.lon)) {
-        console.warn('[missionCalculator] Invalid coordinates:', { wp1, wp2 });
-        return 0;
-    }
-
-    // Validate latitude and longitude ranges
-    if (Math.abs(wp1.lat) > 90 || Math.abs(wp2.lat) > 90) {
-        console.warn('[missionCalculator] Invalid latitude (must be -90 to 90):', { wp1, wp2 });
-        return 0;
-    }
-    if (Math.abs(wp1.lon) > 180 || Math.abs(wp2.lon) > 180) {
-        console.warn('[missionCalculator] Invalid longitude (must be -180 to 180):', { wp1, wp2 });
-        return 0;
-    }
-
-    const R = 6371000; // Earth radius in meters
-    const lat1 = (wp1.lat * Math.PI) / 180;
-    const lat2 = (wp2.lat * Math.PI) / 180;
-    const deltaLat = ((wp2.lat - wp1.lat) * Math.PI) / 180;
-    const deltaLon = ((wp2.lon - wp1.lon) * Math.PI) / 180;
-
-    const a =
-        Math.sin(deltaLat / 2) * Math.sin(deltaLat / 2) +
-        Math.cos(lat1) *
-        Math.cos(lat2) *
-        Math.sin(deltaLon / 2) *
-        Math.sin(deltaLon / 2);
-
-    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-    const distance = R * c;
-
-    // Ensure result is valid
-    return Number.isFinite(distance) && distance >= 0 ? distance : 0;
+    return vincentyDistance(wp1, wp2);
 };
 
 /**
@@ -169,7 +135,46 @@ export const calculateMissionStatistics = (
     };
 };
 
-export const haversineDistance = calculateDistance;
+/**
+ * Haversine distance between two points on a sphere (IUGG mean Earth radius).
+ * ~5-10x faster than Vincenty. Error < 0.5% vs WGS84 ellipsoid
+ * (under 2.5m at 500m, well below RTK GPS noise floor).
+ * Use for preview/recalculation where sub-meter accuracy isn't critical.
+ */
+export const haversineDistance = (
+    wp1: { lat: number; lon: number },
+    wp2: { lat: number; lon: number }
+): number => {
+    const R = 6371008.8; // IUGG mean Earth radius in meters
+    const toRad = Math.PI / 180;
+
+    const dLat = (wp2.lat - wp1.lat) * toRad;
+    const dLon = (wp2.lon - wp1.lon) * toRad;
+    const sinDLat = Math.sin(dLat * 0.5);
+    const sinDLon = Math.sin(dLon * 0.5);
+    const c1 = Math.cos(wp1.lat * toRad);
+    const c2 = Math.cos(wp2.lat * toRad);
+    const h = sinDLat * sinDLat + c1 * c2 * sinDLon * sinDLon;
+    // atan2 form — numerically stable for all distances, no asin domain errors
+    return 2 * R * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
+};
+
+/**
+ * Fast equirectangular distance approximation for short-range waypoints.
+ * Error < 0.25m at 500m, < 0.05% under 50km at mid-latitudes.
+ * ~20-30x faster than Vincenty. Ideal for inline WebView calculations
+ * and bulk recalculation where sub-meter accuracy isn't required.
+ */
+export const fastDistance = (
+    a: { lat: number; lon: number },
+    b: { lat: number; lon: number }
+): number => {
+    const R = 6371008.8; // IUGG mean Earth radius (meters)
+    const toRad = Math.PI / 180;
+    const x = (b.lon - a.lon) * toRad * Math.cos((a.lat + b.lat) * 0.5 * toRad);
+    const y = (b.lat - a.lat) * toRad;
+    return R * Math.sqrt(x * x + y * y);
+};
 
 /**
  * Calculate distance between two points using Vincenty's inverse formula (Karney method).
@@ -270,18 +275,25 @@ export const vincentyDistance = (
 
     // Failed to converge (antipodal points) - fall back to Haversine
     console.warn('[missionCalculator] Vincenty failed to converge, using Haversine fallback');
-    return calculateDistance(wp1, wp2);
+    return haversineDistance(wp1, wp2);
 };
 
 /**
  * Recalculate distances for all waypoints after reordering.
- * First waypoint gets distance = 0, subsequent ones get distance from previous.
+ * When originPoint is provided, the first waypoint's distance is measured
+ * from that origin (e.g., rover position). Otherwise, first waypoint = 0.
  */
 export const recalculateWaypointDistances = (
-    waypoints: PathPlanWaypoint[]
+    waypoints: PathPlanWaypoint[],
+    originPoint?: { lat: number; lon: number }
 ): PathPlanWaypoint[] => {
     return waypoints.map((wp, idx) => {
-        if (idx === 0) return { ...wp, distance: 0 };
+        if (idx === 0) {
+            const dist = originPoint
+                ? calculateDistance(originPoint, { lat: wp.lat, lon: wp.lon })
+                : 0;
+            return { ...wp, distance: dist };
+        }
         const prev = waypoints[idx - 1];
         const dist = calculateDistance(
             { lat: prev.lat, lon: prev.lon },

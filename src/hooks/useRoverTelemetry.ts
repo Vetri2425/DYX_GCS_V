@@ -10,6 +10,7 @@ import io from 'socket.io-client';
 import type { Socket, ManagerOptions, SocketOptions } from 'socket.io-client';
 import {
   getBackendURL,
+  isOfflineMode,
   SOCKET_CONFIG,
   API_ENDPOINTS,
   SOCKET_EVENTS,
@@ -31,6 +32,30 @@ import {
 } from '../types/telemetry';
 import { LoraRTKStatus } from '../types/rtk';
 
+// ArduRover custom mode number → name translation.
+// MAVROS emits "CMODEn" when vehicle-type detection hasn't completed yet.
+const ARDUROVER_MODES: Record<number, string> = {
+  0: 'MANUAL', 1: 'ACRO', 3: 'STEERING', 4: 'HOLD',
+  5: 'LOITER', 6: 'FOLLOW', 7: 'SIMPLE', 8: 'DOCK',
+  9: 'CIRCLE', 10: 'AUTO', 11: 'RTL', 12: 'SMART_RTL',
+  15: 'GUIDED', 16: 'INITIALISING',
+};
+
+// Normalize mode names from MAVROS/bridge payloads.
+// Supports "CMODE9", "CMODE(9)", and plain names like "CIRCLE".
+const normalizeRoverMode = (mode: unknown): string => {
+  if (typeof mode !== 'string') return 'UNKNOWN';
+
+  const rawMode = mode.trim().toUpperCase();
+  const cModeMatch = rawMode.match(/^CMODE\s*\(?\s*(\d+)\s*\)?$/);
+  if (!cModeMatch) return rawMode;
+
+  const modeNumber = parseInt(cModeMatch[1], 10);
+  const resolved = ARDUROVER_MODES[modeNumber] ?? rawMode;
+  console.log(`[QT][Telemetry] CMODE translated: ${rawMode} → ${resolved}`);
+  return resolved;
+};
+
 // Default constants
 const THROTTLE_MS = 50; // ~20 Hz - Faster updates for better responsiveness
 const MAX_BACKOFF_MS = 8000;
@@ -39,11 +64,12 @@ const INITIAL_BACKOFF_MS = 1000;
 // Helper to get current backend URL (dynamic)
 const getHttpBase = () => getBackendURL().replace(/\/$/, '');
 
-// Toggle verbose telemetry logging (ENABLED for debugging)
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-const TELEMETRY_LOGS_ENABLED = true;
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-const telemLog = (...args: any[]) => console.log('[TELEMETRY]', ...args);
+// Verbose telemetry logging — disabled in production, enable locally for debugging.
+// These are intentionally kept (not removed) so they can be re-enabled quickly.
+const TELEMETRY_LOGS_ENABLED = false; // set true to enable
+const telemLog = TELEMETRY_LOGS_ENABLED
+  ? (...args: unknown[]) => console.log('[TELEMETRY]', ...args)
+  : (..._args: unknown[]) => { /* no-op */ };
 
 // Default values for telemetry
 const DEFAULT_STATE: TelemetryState = {
@@ -112,6 +138,7 @@ const createDefaultTelemetry = (): RoverTelemetry => ({
   xtrack_cm: undefined,
   wp_brg: undefined,
   position_error_cm: undefined, // Total position error = sqrt(wp_dist² + xtrack²)
+  distance_to_next_m: undefined, // Backend mission distance to next waypoint in meters
 });
 
 // Helper: Fetch JSON with proper error handling
@@ -132,7 +159,9 @@ async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
 
     return (await response.json()) as T;
   } catch (error) {
-    console.error('[fetchJson] Error:', error);
+    if (!isOfflineMode()) {
+      console.error('[fetchJson] Error:', error);
+    }
     throw error;
   }
 }
@@ -199,10 +228,12 @@ const toTelemetryEnvelopeFromRoverData = (data: any): TelemetryEnvelope | null =
   // State
   if (data.mode || data.status || data.last_heartbeat != null) {
     const status = typeof data.status === 'string' ? data.status : 'UNKNOWN';
+    // Translate MAVROS fallback "CMODEn" → named ArduRover mode string
     envelope.state = {
       armed: String(status).toLowerCase() === 'armed',
-      mode: typeof data.mode === 'string' ? data.mode : 'UNKNOWN',
-      system_status: status.toUpperCase(),
+      mode: normalizeRoverMode(data.mode),
+      // Don't set system_status from rover_data status field - it should come from pixhawk_state
+      // system_status represents MAVLink system status (STANDBY, ACTIVE, etc.), not armed state
       heartbeat_ts:
         typeof data.last_heartbeat === 'number'
           ? Math.floor(data.last_heartbeat * 1000)
@@ -236,15 +267,32 @@ const toTelemetryEnvelopeFromRoverData = (data: any): TelemetryEnvelope | null =
       else if (typeof data.num_satellites === 'number') satelliteCount = data.num_satellites;
       else if (typeof data.sats === 'number') satelliteCount = data.sats;
 
+      // Extract altitude from multiple possible field names
+      let altCandidate: number | undefined;
+      if (typeof data.position.alt === 'number') altCandidate = data.position.alt;
+      else if (typeof data.position.altitude === 'number') altCandidate = data.position.altitude;
+      else if (typeof data.position.alt_rel === 'number') altCandidate = data.position.alt_rel;
+      else if (typeof data.position.relative_alt === 'number') altCandidate = data.position.relative_alt;
+
       envelope.global = {
         lat: latNum,
         lon: lngNum,
-        alt_rel: 0,
+        alt_rel: typeof altCandidate === 'number' && isFinite(altCandidate) ? altCandidate : 0,
         vel: typeof velCandidate === 'number' && isFinite(velCandidate) ? velCandidate : 0,
         ...(satelliteCount !== undefined && { satellites_visible: satelliteCount }),
       };
       touched = true;
     }
+  }
+
+  // groundspeed as a top-level flat field (no position object) — backend CurrentState sends
+  // groundspeed directly. Update vel on existing envelope.global so Step3 canProceed gate works.
+  if (typeof data.groundspeed === 'number' && isFinite(data.groundspeed)) {
+    if (!envelope.global) {
+      envelope.global = { ...DEFAULT_GLOBAL };
+    }
+    envelope.global.vel = data.groundspeed;
+    touched = true;
   }
 
   // Battery
@@ -436,15 +484,15 @@ const toTelemetryEnvelopeFromBridge = (data: any): TelemetryEnvelope | null => {
   if (data.current_position || data.pixhawk_state) {
     // console.log('[BRIDGE_DATA] 🎯 Found mission_status with GPS data!');
 
-    // Position data
+    // Position data — do NOT include vel here; this source has no velocity info.
+    // Omitting vel lets applyEnvelope preserve the real velocity from rover_data.
     if (data.current_position && typeof data.current_position === 'object') {
       envelope.global = {
         lat: typeof data.current_position.lat === 'number' ? data.current_position.lat : 0,
         lon: typeof data.current_position.lng === 'number' ? data.current_position.lng : 0,
         alt_rel: typeof data.current_position.alt === 'number' ? data.current_position.alt : 0,
-        vel: 0,
         // ✅ FIX: Do NOT default satellites_visible to 0; omit it so applyEnvelope preserves the existing count
-      };
+      } as any;
       // console.log('[BRIDGE_DATA] ✅ Position parsed from mission_status:', envelope.global);
       touched = true;
     }
@@ -459,7 +507,7 @@ const toTelemetryEnvelopeFromBridge = (data: any): TelemetryEnvelope | null => {
     if (data.pixhawk_state && typeof data.pixhawk_state === 'object') {
       envelope.state = {
         armed: Boolean(data.pixhawk_state.armed),
-        mode: typeof data.pixhawk_state.mode === 'string' ? data.pixhawk_state.mode : 'UNKNOWN',
+        mode: normalizeRoverMode(data.pixhawk_state.mode),
         system_status: typeof data.pixhawk_state.system_status === 'string' ? data.pixhawk_state.system_status.toUpperCase() : 'UNKNOWN',
         heartbeat_ts: Date.now(),
       };
@@ -517,14 +565,15 @@ const toTelemetryEnvelopeFromBridge = (data: any): TelemetryEnvelope | null => {
     }
   }
 
+  // Bridge position data — do NOT include vel; this source has no velocity info.
+  // Omitting vel lets applyEnvelope preserve the real velocity from rover_data.
   if (data.position && typeof data.position === 'object') {
     envelope.global = {
       lat: typeof data.position.latitude === 'number' ? data.position.latitude : 0,
       lon: typeof data.position.longitude === 'number' ? data.position.longitude : 0,
       alt_rel: typeof data.position.altitude === 'number' ? data.position.altitude : 0,
-      vel: 0,
       // ✅ FIX: Do NOT default satellites_visible to 0; omit it so applyEnvelope preserves the existing count
-    };
+    } as any;
     touched = true;
   }
 
@@ -540,7 +589,7 @@ const toTelemetryEnvelopeFromBridge = (data: any): TelemetryEnvelope | null => {
       lon: typeof data.global.longitude === 'number' ? data.global.longitude : envelope.global?.lon ?? 0,
       alt_rel:
         typeof data.global.altitude === 'number' ? data.global.altitude : envelope.global?.alt_rel ?? 0,
-      vel: typeof data.global.vel === 'number' ? data.global.vel : 0,
+      vel: typeof data.global.vel === 'number' ? data.global.vel : envelope.global?.vel ?? 0,
       ...(satelliteCount !== undefined && { satellites_visible: satelliteCount }),
     };
     touched = true;
@@ -578,6 +627,10 @@ const toTelemetryEnvelopeFromBridge = (data: any): TelemetryEnvelope | null => {
   }
 
   // New fields from Pixhawk NTUN (CurrentState) - top level telemetry
+  // DEBUG: Log distance-to-next from telemetry
+  if (data.wp_dist_cm !== undefined || data.distance_to_next !== undefined || data.dist_to_wp !== undefined) {
+    console.log('[TELEMETRY] 📏 Distance to next WP raw:', { wp_dist_cm: data.wp_dist_cm, distance_to_next: data.distance_to_next, dist_to_wp: data.dist_to_wp });
+  }
   if (typeof data.wp_dist_cm === 'number') {
     envelope.wp_dist_cm = data.wp_dist_cm;
     touched = true;
@@ -650,6 +703,9 @@ const toTelemetryEnvelopeFromBridge = (data: any): TelemetryEnvelope | null => {
 interface MutableTelemetry {
   telemetry: RoverTelemetry;
   lastEnvelopeTs: number | null;
+  // Timestamp until which incoming armed=false from telemetry is ignored.
+  // Set after a successful ARM command to absorb the MAVROS race window.
+  armedLockUntil: number | null;
 }
 
 export interface RoverServices {
@@ -742,6 +798,14 @@ export interface RoverServices {
   // LED Controller
   setLEDController: (enabled: boolean) => Promise<ServiceResponse>;
   getLEDControllerStatus: () => Promise<ServiceResponse & { enabled?: boolean; state?: string; hardware_available?: boolean }>;
+
+  // MAVLink Param Control (Task 01)
+  getParams: (group?: string) => Promise<import('../types/params').ParamListResponse>;
+  getParam: (name: string) => Promise<import('../types/params').ParamGetResponse>;
+  setParam: (name: string, value: number) => Promise<import('../types/params').ParamSetResponse>;
+  getParamGroups: () => Promise<import('../types/params').ParamGroupsResponse>;
+  downloadParams: () => Promise<import('../types/params').ParamDownloadResponse>;
+  uploadParams: (content: string, dryRun: boolean) => Promise<import('../types/params').ParamUploadResponse>;
 }
 
 export interface UseRoverTelemetryResult {
@@ -778,6 +842,7 @@ export function useRoverTelemetry(): UseRoverTelemetryResult {
   const mutableRef = useRef<MutableTelemetry>({
     telemetry: createDefaultTelemetry(),
     lastEnvelopeTs: null,
+    armedLockUntil: null,
   });
   const lastDispatchRef = useRef<number>(0);
   const lastMissionStatusRef = useRef<string>('');
@@ -794,7 +859,9 @@ export function useRoverTelemetry(): UseRoverTelemetryResult {
     mutableRef.current.telemetry = defaultTelemetry;
     mutableRef.current.lastEnvelopeTs = null;
     setTelemetrySnapshot(defaultTelemetry);
-    console.log('[useRoverTelemetry] Telemetry reset to default');
+    if (!isOfflineMode()) {
+      console.log('[useRoverTelemetry] Telemetry reset to default');
+    }
   }, []);
 
   // Apply telemetry envelope
@@ -805,7 +872,28 @@ export function useRoverTelemetry(): UseRoverTelemetryResult {
     const next = { ...mutable.telemetry };
 
     if (envelope.state) {
-      next.state = { ...next.state, ...envelope.state };
+      const incomingState = envelope.state;
+      // Guard: if we're inside the ARM lock window, ignore armed=false from
+      // incoming telemetry. The backend confirmed MAVROS heartbeats can write
+      // status='disarmed' for up to 2s while the FC physically arms.
+      // We preserve the current armed=true in mutableRef so the pending
+      // dispatch timeout also reads the correct value.
+      const lock = mutableRef.current.armedLockUntil;
+      const isLocked = lock !== null && Date.now() < lock;
+      if (isLocked && incomingState.armed === false) {
+        // Merge everything except armed — keep the current armed value
+        next.state = {
+          ...next.state,
+          ...incomingState,
+          armed: mutableRef.current.telemetry.state.armed,
+        };
+      } else {
+        // Lock expired or not locked — clear it and apply normally
+        if (lock !== null && Date.now() >= lock) {
+          mutableRef.current.armedLockUntil = null;
+        }
+        next.state = { ...next.state, ...incomingState };
+      }
     }
     if (envelope.global) {
       // Only update satellites if data is present in this message
@@ -863,6 +951,9 @@ export function useRoverTelemetry(): UseRoverTelemetryResult {
     if (envelope.position_error_cm !== undefined) {
       next.position_error_cm = envelope.position_error_cm;
     }
+    if (envelope.distance_to_next_m !== undefined) {
+      next.distance_to_next_m = envelope.distance_to_next_m;
+    }
 
     next.lastMessageTs = envelope.timestamp ?? Date.now();
 
@@ -897,6 +988,7 @@ export function useRoverTelemetry(): UseRoverTelemetryResult {
     if (envelope.xtrack_cm !== undefined) changed = changed || prev.xtrack_cm !== next.xtrack_cm;
     if (envelope.wp_brg !== undefined) changed = changed || prev.wp_brg !== next.wp_brg;
     if (envelope.position_error_cm !== undefined) changed = changed || prev.position_error_cm !== next.position_error_cm;
+    if (envelope.distance_to_next_m !== undefined) changed = changed || prev.distance_to_next_m !== next.distance_to_next_m;
 
     if (!changed) {
       // No meaningful change; update timestamps but skip dispatch to prevent loops
@@ -926,25 +1018,21 @@ export function useRoverTelemetry(): UseRoverTelemetryResult {
       lastDispatchRef.current = now;
       // Only update if component is still mounted
       if (mountedRef.current) {
-        // Deep copy to ensure React sees a new reference at all levels
-        const snapshot = JSON.parse(JSON.stringify(next));
-        // telemLog('[TELEMETRY] UI updated immediately', snapshot);
-        setTelemetrySnapshot(snapshot);
+        // Use reference directly — applyEnvelope already creates new objects via spread,
+        // so React will see new references for changed fields. Deep clone was costing
+        // 1-5ms per tick × 20Hz = 20-100ms/sec of JS thread time.
+        setTelemetrySnapshot(next);
       }
     } else {
       // Schedule update only if not already scheduled (using a flag to prevent re-entry)
       const delay = THROTTLE_MS - elapsed;
-      // telemLog(`[TELEMETRY] UI update scheduled in ${delay}ms`);
       const timeoutId = setTimeout(() => {
         // Double-check the timeout hasn't been cleared
         if (pendingDispatchRef.current === timeoutId) {
           pendingDispatchRef.current = null; // Clear FIRST to prevent race conditions
           if (mountedRef.current) {
             lastDispatchRef.current = performance.now();
-            // Deep copy to ensure React sees a new reference at all levels
-            const snapshot = JSON.parse(JSON.stringify(mutableRef.current.telemetry));
-            // telemLog('[TELEMETRY] UI updated (scheduled)', snapshot);
-            setTelemetrySnapshot(snapshot);
+            setTelemetrySnapshot(mutableRef.current.telemetry);
           }
         }
       }, delay);
@@ -1173,25 +1261,27 @@ export function useRoverTelemetry(): UseRoverTelemetryResult {
         });
 
         socket.on('connect_error', (error: any) => {
-          const backendUrl = getHttpBase();
-          console.error('[SOCKET] Connection error:', error.message || error);
-          console.error('[SOCKET] Backend URL:', backendUrl);
-          console.error('[SOCKET] Error details:', {
-            code: error.code,
-            type: error.type,
-            data: error.data,
-            description: error.description,
-          });
+          if (!isOfflineMode()) {
+            const backendUrl = getHttpBase();
+            console.error('[SOCKET] Connection error:', error.message || error);
+            console.error('[SOCKET] Backend URL:', backendUrl);
+            console.error('[SOCKET] Error details:', {
+              code: error.code,
+              type: error.type,
+              data: error.data,
+              description: error.description,
+            });
 
-          // Provide user-friendly error messages
-          if (error.code === 'ECONNREFUSED') {
-            console.error('[SOCKET] ❌ Backend server is not running or not accessible');
-          } else if (error.code === 'ETIMEDOUT') {
-            console.error('[SOCKET] ❌ Connection timed out - backend may be overloaded or network issues');
-          } else if (error.code === 'ENOTFOUND') {
-            console.error('[SOCKET] ❌ DNS resolution failed - check IP address');
-          } else {
-            console.error('[SOCKET] ❌ Unknown connection error');
+            // Provide user-friendly error messages
+            if (error.code === 'ECONNREFUSED') {
+              console.error('[SOCKET] ❌ Backend server is not running or not accessible');
+            } else if (error.code === 'ETIMEDOUT') {
+              console.error('[SOCKET] ❌ Connection timed out - backend may be overloaded or network issues');
+            } else if (error.code === 'ENOTFOUND') {
+              console.error('[SOCKET] ❌ DNS resolution failed - check IP address');
+            } else {
+              console.error('[SOCKET] ❌ Unknown connection error');
+            }
           }
 
           resetTelemetry();
@@ -1200,7 +1290,9 @@ export function useRoverTelemetry(): UseRoverTelemetryResult {
         });
 
         socket.on('disconnect', (reason: any) => {
-          console.warn('[SOCKET] Disconnected:', reason);
+          if (!isOfflineMode()) {
+            console.warn('[SOCKET] Disconnected:', reason);
+          }
           if (manualDisconnectRef.current) {
             manualDisconnectRef.current = false;
             return;
@@ -1215,7 +1307,7 @@ export function useRoverTelemetry(): UseRoverTelemetryResult {
         });
 
         socket.on('error', (error: any) => {
-          console.error('[SOCKET] Error:', error);
+          if (!isOfflineMode()) { console.error('[SOCKET] Error:', error); }
           setConnectionState('error');
         });
 
@@ -1227,17 +1319,19 @@ export function useRoverTelemetry(): UseRoverTelemetryResult {
         });
 
         socket.io.on('reconnect_attempt', () => {
-          console.log('[SOCKET] Reconnecting...');
+          if (!isOfflineMode()) {
+            console.log('[SOCKET] Reconnecting...');
+          }
           setConnectionState('connecting');
         });
 
         socket.io.on('reconnect_error', (error: any) => {
-          console.error('[SOCKET] Reconnect error:', error);
+          if (!isOfflineMode()) { console.error('[SOCKET] Reconnect error:', error); }
           setConnectionState('error');
         });
 
         socket.io.on('reconnect_failed', () => {
-          console.error('[SOCKET] Reconnect failed');
+          if (!isOfflineMode()) { console.error('[SOCKET] Reconnect failed'); }
           clearReconnectTimer();
           setConnectionState('error');
         });
@@ -1329,6 +1423,10 @@ export function useRoverTelemetry(): UseRoverTelemetryResult {
             // console.log('[MISSION_STATUS] 🎯 Parsing GPS data from mission_status event!');
             const envelope = toTelemetryEnvelopeFromBridge(data);
             if (envelope) {
+              // Extract distance_to_next_m from mission_status (sent at 20Hz by backend)
+              if (typeof data.distance_to_next_m === 'number') {
+                envelope.distance_to_next_m = data.distance_to_next_m;
+              }
               // console.log('[MISSION_STATUS] ✅ GPS telemetry parsed, applying to UI');
               applyEnvelopeRef.current(envelope);
             }
@@ -1522,7 +1620,7 @@ export function useRoverTelemetry(): UseRoverTelemetryResult {
 
         pingIntervalRef.current = pingInterval;
       } catch (error) {
-        console.error('[SOCKET] Initialization failed:', error);
+        if (!isOfflineMode()) { console.error('[SOCKET] Initialization failed:', error); }
         setConnectionState('error');
         scheduleReconnect();
       }
@@ -1603,6 +1701,15 @@ export function useRoverTelemetry(): UseRoverTelemetryResult {
       armVehicle: async () => {
         const response = await postService(API_ENDPOINTS.ARM, { value: true });
         if (response.success) {
+          // Set the lock BEFORE pushStatePatch so applyEnvelope already
+          // respects it if a stale rover_data event fires concurrently.
+          mutableRef.current.armedLockUntil = Date.now() + 3000;
+          // Force armed=true directly into mutableRef so pushStatePatch
+          // reads the correct base state even if a stale event just wrote false.
+          mutableRef.current.telemetry = {
+            ...mutableRef.current.telemetry,
+            state: { ...mutableRef.current.telemetry.state, armed: true, system_status: 'ARMED' },
+          };
           pushStatePatch({ armed: true, system_status: 'ARMED' });
         }
         return response;
@@ -1610,6 +1717,8 @@ export function useRoverTelemetry(): UseRoverTelemetryResult {
       disarmVehicle: async () => {
         const response = await postService(API_ENDPOINTS.ARM, { value: false });
         if (response.success) {
+          // Clear any arm lock immediately on explicit disarm.
+          mutableRef.current.armedLockUntil = null;
           pushStatePatch({ armed: false, system_status: 'DISARMED' });
         }
         return response;
@@ -1969,6 +2078,31 @@ export function useRoverTelemetry(): UseRoverTelemetryResult {
 
       // LED Controller Status (via HTTP GET)
       getLEDControllerStatus: () => getService(API_ENDPOINTS.LED_STATUS),
+
+      // MAVLink Param Control (Task 01)
+      getParams: async (group?: string) => {
+        const url = group
+          ? `${API_ENDPOINTS.PARAMS_LIST}?group=${encodeURIComponent(group)}`
+          : API_ENDPOINTS.PARAMS_LIST;
+        return getService<import('../types/params').ParamListResponse>(url);
+      },
+      getParam: async (name: string) => {
+        const url = `/api/params/${encodeURIComponent(name)}`;
+        return getService<import('../types/params').ParamGetResponse>(url);
+      },
+      setParam: async (name: string, value: number) => {
+        const url = `/api/params/${encodeURIComponent(name)}`;
+        return postService(url, { value }) as Promise<import('../types/params').ParamSetResponse>;
+      },
+      getParamGroups: async () => {
+        return getService<import('../types/params').ParamGroupsResponse>(API_ENDPOINTS.PARAMS_GROUPS);
+      },
+      downloadParams: async () => {
+        return getService<import('../types/params').ParamDownloadResponse>(API_ENDPOINTS.PARAMS_DOWNLOAD);
+      },
+      uploadParams: async (content: string, dryRun: boolean) => {
+        return postService(API_ENDPOINTS.PARAMS_UPLOAD, { content, dry_run: dryRun }) as Promise<import('../types/params').ParamUploadResponse>;
+      },
 
       // Emergency Stop
       emergencyStop: async () => {

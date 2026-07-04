@@ -1,4 +1,4 @@
-export type Mode = 'AUTO' | 'MANUAL';
+export type Mode = 'AUTO' | 'MANUAL' | 'CONTINUOUS' | 'DASH';
 
 export interface Waypoint {
   sn: number;
@@ -20,7 +20,6 @@ export interface VehicleStatus {
   battery: string;
   gps: string;
   satellites: number;
-  satelliteSignal?: string;
   hrms: string;
   vrms: string;
   imu: string;  mode?: string;}

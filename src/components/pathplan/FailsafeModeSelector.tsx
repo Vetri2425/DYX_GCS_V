@@ -72,7 +72,7 @@ export const FailsafeModeSelector: React.FC<FailsafeModeSelectorProps> = ({
             ))}
           </View>
           {disabled && (
-            <Text style={styles.disabledNote}>Cannot change mode during active mission</Text>
+            <Text style={styles.disabledNote}>Cannot change mode while mission is running</Text>
           )}
         </View>
       </TouchableOpacity>
