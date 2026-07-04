@@ -18,17 +18,23 @@ import { MaterialCommunityIcons, Fontisto } from '@expo/vector-icons';
 import { colors } from '../../theme/colors';
 import { parseDXF } from '../../core/parser/dxfParser';
 import {
-  canvasToGPS,
   computeBoundingBox,
   scaleToViewport,
   estimateMetersPerPixel,
 } from '../../core/transform';
 
+/** A 2D point in the local DESIGN frame, units in metres. */
+export interface DesignPoint {
+  /** Right from canvas center, in metres */
+  x: number;
+  /** Up from canvas center, in metres */
+  y: number;
+}
+
 interface CADDrawingCanvasProps {
   visible: boolean;
   onClose: () => void;
-  onSaveWaypoints: (waypoints: Array<{ lat: number; lng: number }>) => void;
-  currentPosition: { lat: number; lng: number };
+  onSaveDesignPoints: (points: DesignPoint[]) => void;
   onImportDXF?: (entities: CADEntity[]) => void;
   onShowSurveyGrid?: () => void;
 }
@@ -127,8 +133,7 @@ const MemoizedGrid = React.memo(() => (
 export const CADDrawingCanvas: React.FC<CADDrawingCanvasProps> = ({
   visible,
   onClose,
-  onSaveWaypoints,
-  currentPosition,
+  onSaveDesignPoints,
   onImportDXF,
   onShowSurveyGrid,
 }) => {
@@ -163,7 +168,6 @@ export const CADDrawingCanvas: React.FC<CADDrawingCanvasProps> = ({
   const activeToolRef = useRef(activeTool);
   const isDrawingRef = useRef(isDrawing);
   const currentPathRef = useRef(currentPath);
-  const currentPositionRef = useRef(currentPosition);
   const entitiesRef = useRef(entities);
   const zoomRef = useRef(zoom);
   const panOffsetRef = useRef(panOffset);
@@ -181,7 +185,6 @@ export const CADDrawingCanvas: React.FC<CADDrawingCanvasProps> = ({
   useEffect(() => { activeToolRef.current = activeTool; }, [activeTool]);
   useEffect(() => { isDrawingRef.current = isDrawing; }, [isDrawing]);
   useEffect(() => { currentPathRef.current = currentPath; }, [currentPath]);
-  useEffect(() => { currentPositionRef.current = currentPosition; }, [currentPosition]);
   useEffect(() => { entitiesRef.current = entities; }, [entities]);
   useEffect(() => { zoomRef.current = zoom; }, [zoom]);
   useEffect(() => { panOffsetRef.current = panOffset; }, [panOffset]);
@@ -819,8 +822,8 @@ export const CADDrawingCanvas: React.FC<CADDrawingCanvasProps> = ({
       setEntities(prev => [...prev, ...scaledEntities]);
       if (onImportDXF) onImportDXF(scaledEntities);
       Alert.alert(
-        'DXF Imported (Approximate GPS)',
-        'GPS placement is approximate based on rover position. For survey-grade accuracy, use the Direct Upload button on the main screen to georeference with known GPS points.',
+        'DXF Imported',
+        `${importedEntities.length} entities imported in local design coordinates.`,
         [{ text: 'Got it' }]
       );
     } catch (err: any) {
@@ -830,20 +833,21 @@ export const CADDrawingCanvas: React.FC<CADDrawingCanvasProps> = ({
     }
   }, [onImportDXF]);
 
-  // N5: Helper to convert canvas points to GPS waypoints
-  const pointsToWaypoints = useCallback((points: Array<{ x: number; y: number }>) => {
-    const pos = currentPositionRef.current;
+  // Convert canvas pixel points to local design-frame metres.
+  // Canvas center = (0,0), right = +x, up = +y (canvas Y is flipped).
+  const pointsToDesignPoints = useCallback((points: Array<{ x: number; y: number }>): DesignPoint[] => {
     const mpp = metersPerPixelRef.current;
-    return points.map(p => {
-      const gps = canvasToGPS(p.x, p.y, pos.lat, pos.lng, mpp, screenWidth, screenHeight);
-      return { lat: gps.lat, lng: gps.lng };
-    });
+    const cx = screenWidth / 2;
+    const cy = screenHeight / 2;
+    return points.map(p => ({
+      x: (p.x - cx) * mpp,
+      y: (cy - p.y) * mpp,
+    }));
   }, []);
 
   // ── Export current drawing (m4: real file export, N9: use refs for stable callback) ──
   const handleExport = useCallback(async () => {
     const ents = entitiesRef.current;
-    const pos = currentPositionRef.current;
     if (ents.length === 0) {
       Alert.alert('Nothing to Export', 'Draw something first before exporting.');
       return;
@@ -853,7 +857,7 @@ export const CADDrawingCanvas: React.FC<CADDrawingCanvasProps> = ({
         const pts = e.points.map(p => `${p.x.toFixed(4)},${p.y.toFixed(4)}`).join(' ');
         return `ENTITY ${i + 1} TYPE=${e.type} POINTS=[${pts}]`;
       });
-      const content = `# CAD Drawing Export\n# Entities: ${ents.length}\n# Position: ${pos.lat}, ${pos.lng}\n\n${lines.join('\n')}\n`;
+      const content = `# CAD Drawing Export\n# Entities: ${ents.length}\n# Frame: local design (metres)\n\n${lines.join('\n')}\n`;
 
       const fileUri = `${FileSystem.documentDirectory}cad-export-${Date.now()}.txt`;
       await FileSystem.writeAsStringAsync(fileUri, content);
@@ -869,7 +873,7 @@ export const CADDrawingCanvas: React.FC<CADDrawingCanvasProps> = ({
       return;
     }
 
-    const waypoints: Array<{ lat: number; lng: number }> = [];
+    const designPoints: DesignPoint[] = [];
 
     for (const entity of entities) {
       if (entity.type === 'circle' && entity.points.length >= 2) {
@@ -885,7 +889,7 @@ export const CADDrawingCanvas: React.FC<CADDrawingCanvasProps> = ({
           });
         }
         circlePoints.push(circlePoints[0]); // close the circle
-        waypoints.push(...pointsToWaypoints(circlePoints));
+        designPoints.push(...pointsToDesignPoints(circlePoints));
       } else if (entity.type === 'ellipse' && entity.points.length >= 2) {
         const center = entity.points[0];
         const edge = entity.points[1];
@@ -899,20 +903,20 @@ export const CADDrawingCanvas: React.FC<CADDrawingCanvasProps> = ({
             y: center.y + ry * Math.sin(angle),
           });
         }
-        waypoints.push(...pointsToWaypoints(ellipsePoints));
+        designPoints.push(...pointsToDesignPoints(ellipsePoints));
       } else {
-        waypoints.push(...pointsToWaypoints(entity.points));
+        designPoints.push(...pointsToDesignPoints(entity.points));
       }
     }
 
-    if (waypoints.length === 0) {
+    if (designPoints.length === 0) {
       Alert.alert('No Drawing', 'Please draw something before saving.');
       return;
     }
 
-    onSaveWaypoints(waypoints);
+    onSaveDesignPoints(designPoints);
     onClose();
-  }, [onSaveWaypoints, onClose]);
+  }, [onSaveDesignPoints, onClose, entities, pointsToDesignPoints]);
 
   // ── Render entities ──
   // N3: Selection highlight wraps selected entity
@@ -1751,11 +1755,6 @@ export const CADDrawingCanvas: React.FC<CADDrawingCanvasProps> = ({
 
           {/* m11: Removed text/dimension tool press handlers that referenced onShowTextTool */}
 
-          {/* Center reference point */}
-          <View style={styles.centerPoint}>
-            <MaterialCommunityIcons name="crosshairs-gps" size={24} color={colors.accent} />
-            <Text style={styles.centerText}>Rover Position</Text>
-          </View>
           </View>{/* End canvasContent */}
 
           {/* N10: Zoom Controls */}
@@ -1814,7 +1813,7 @@ export const CADDrawingCanvas: React.FC<CADDrawingCanvasProps> = ({
         {/* Status Bar */}
         <View style={styles.statusBar}>
           <Text style={styles.statusText}>
-            Tool: {activeTool} | Zoom: {Math.round(zoom * 100)}% | Entities: {entities.length} | Scale: {metersPerPixel.toFixed(2)}m/px | GPS: {currentPosition.lat.toFixed(6)}, {currentPosition.lng.toFixed(6)}
+            Tool: {activeTool} | Zoom: {Math.round(zoom * 100)}% | Entities: {entities.length} | Scale: {metersPerPixel.toFixed(2)}m/px
           </Text>
         </View>
       </View>
@@ -2144,30 +2143,6 @@ const styles = StyleSheet.create({
     fontSize: 9,
     color: '#ffffff',
     fontWeight: '700',
-  },
-  centerPoint: {
-    position: 'absolute',
-    top: '50%',
-    left: '50%',
-    transform: [{ translateX: -50 }, { translateY: -50 }],
-    alignItems: 'center',
-    backgroundColor: 'rgba(59, 130, 246, 0.1)',
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    borderRadius: 8,
-    borderWidth: 2,
-    borderColor: colors.accent,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
-  },
-  centerText: {
-    fontSize: 10,
-    color: colors.accent,
-    marginTop: 2,
-    fontWeight: '600',
   },
   statusBar: {
     backgroundColor: colors.panelBg,

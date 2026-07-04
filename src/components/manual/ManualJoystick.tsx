@@ -64,6 +64,7 @@ export function ManualJoystick({
       Gesture.Pan()
         .enabled(!disabled)
         .minDistance(0)
+        .shouldCancelWhenOutside(false)
         .onUpdate((event) => {
           const magnitude = Math.hypot(event.translationX, event.translationY);
           const scale = magnitude > radius && magnitude > 0 ? radius / magnitude : 1;

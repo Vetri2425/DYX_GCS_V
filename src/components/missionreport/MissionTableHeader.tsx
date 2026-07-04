@@ -5,7 +5,8 @@ import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { PATH_PLAN_GLASS, PATH_PLAN_HEADER } from '../../constants/pathPlanGlass';
 
 interface Props {
-  waypointCount: number;
+  progressCurrent: number;
+  progressTotal: number;
   isExpanded: boolean;
   onToggleExpand: () => void;
   onClose?: () => void;
@@ -15,7 +16,8 @@ interface Props {
 }
 
 export const MissionTableHeader: React.FC<Props> = ({
-  waypointCount,
+  progressCurrent,
+  progressTotal,
   isExpanded,
   onToggleExpand,
   onClose,
@@ -28,10 +30,9 @@ export const MissionTableHeader: React.FC<Props> = ({
       <TouchableOpacity style={styles.header} activeOpacity={0.8} onPress={onToggleExpand}>
         <View style={styles.left}>
           <MaterialCommunityIcons name="vector-polyline" size={16} color={PATH_PLAN_GLASS.cyan} />
-          <Text style={styles.title}>MISSION MARKING POINTS ({waypointCount})</Text>
-          <View style={styles.badge}>
-            <Text style={styles.badgeText}>{waypointCount} PTS</Text>
-          </View>
+          <Text style={styles.title}>
+            MISSION MARKING POINTS ({progressCurrent}/{progressTotal})
+          </Text>
         </View>
         <View style={styles.right}>
           {toolbarActions}
@@ -81,17 +82,6 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '700',
     letterSpacing: 0.5,
-  },
-  badge: {
-    backgroundColor: PATH_PLAN_GLASS.badgeBg,
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-    borderRadius: 10,
-  },
-  badgeText: {
-    color: PATH_PLAN_GLASS.cyan,
-    fontSize: 9,
-    fontWeight: '700',
   },
   right: {
     flexDirection: 'row',

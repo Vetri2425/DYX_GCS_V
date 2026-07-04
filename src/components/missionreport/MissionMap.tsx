@@ -368,7 +368,7 @@ const MissionMapBase: React.FC<Props> = ({
 
     function centerOnRover() {
       if (liveRoverPos) {
-        map.flyTo({ center: [liveRoverPos.lon, liveRoverPos.lat], zoom: 17 });
+        map.flyTo({ center: [liveRoverPos.lon, liveRoverPos.lat], zoom: 22 });
       }
     }
 

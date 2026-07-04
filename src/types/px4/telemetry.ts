@@ -16,6 +16,10 @@ export interface Px4TelemetryData {
   heading_ned_deg: number;
   // Velocity
   speed_m_s: number;
+  /** Horizontal speed from MAVROS velocity_local (preferred over speed_m_s when present). */
+  measured_speed_m_s?: number | null;
+  along_track_speed_mps?: number | null;
+  cross_track_speed_mps?: number | null;
   // Path tracking
   xtrack_m: number;
   dist_to_goal_m: number;
@@ -49,6 +53,14 @@ export interface Px4TelemetryData {
   pose_age_ms?: number;
   rpp_debug_fresh?: boolean;
   timestamp?: number;
+  // ── Joystick V2 fields (optional, present when joystick controller is active) ──
+  joystick_state?: string | null;
+  joystick_active?: boolean | null;
+  joystick_has_lease?: boolean | null;
+  joystick_last_valid_cmd_age_ms?: number | null;
+  joystick_deadman?: boolean | null;
+  joystick_stop_reason?: string | null;
+  control_owner?: string | null;
 }
 
 // ── Mission status (socket `mission_status` event) ───────────────────────────

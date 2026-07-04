@@ -64,3 +64,20 @@ export function getStatusPresentation(
   }
   return PENDING_PRESENTATION;
 }
+
+/** Current waypoint S/N and total count for progress labels, e.g. (3/25) or (0/0). */
+export function getMissionProgressRef(
+  waypoints: { sn: number }[],
+  currentIndex: number | null | undefined,
+  isMissionActive: boolean,
+): { current: number; total: number } {
+  const total = waypoints.length;
+  const currentWp =
+    isMissionActive && currentIndex != null && currentIndex >= 0
+      ? waypoints[currentIndex]
+      : null;
+  return {
+    current: currentWp?.sn ?? 0,
+    total,
+  };
+}

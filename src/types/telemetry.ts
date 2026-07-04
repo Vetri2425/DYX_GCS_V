@@ -3,6 +3,8 @@
  * Matches the backend telemetry structure
  */
 
+import type { RtkUiState } from '../adapters/px4RtkUiStateAdapter';
+
 // State
 export interface TelemetryState {
   armed: boolean;
@@ -88,6 +90,29 @@ export interface RoverTelemetry {
   mission_state?: string;
   rpp_state_name?: string;
   rtk_stream_active?: boolean;
+  /** Discrete RTK UI state derived from GET /api/rtk/status. */
+  rtk_ui_state?: RtkUiState;
+  /** MAVROS horizontal speed when backend provides it; otherwise use global.vel. */
+  measured_speed_m_s?: number | null;
+  along_track_speed_mps?: number | null;
+  cross_track_speed_mps?: number | null;
+  // ── Joystick V2 telemetry fields ──────────────────────────────────────────
+  joystick_state?: string | null;
+  joystick_active?: boolean | null;
+  joystick_owner_present?: boolean | null;
+  joystick_has_lease?: boolean | null;
+  joystick_last_valid_cmd_age_ms?: number | null;
+  joystick_deadman?: boolean | null;
+  joystick_commanded_throttle?: number | null;
+  joystick_commanded_steering?: number | null;
+  joystick_stop_reason?: string | null;
+  control_owner?: string | null;
+  joystick_owned?: boolean | null;
+  gateway_active?: boolean | null;
+  gateway_command_age_ms?: number | null;
+  gateway_last_send_age_ms?: number | null;
+  transport_healthy?: boolean | null;
+  transport_error?: string | null;
 }
 
 // Telemetry envelope from backend
@@ -117,6 +142,17 @@ export interface TelemetryEnvelope {
   mission_state?: string;
   rpp_state_name?: string;
   rtk_stream_active?: boolean;
+  /** Discrete RTK UI state derived from GET /api/rtk/status. */
+  rtk_ui_state?: RtkUiState;
+  measured_speed_m_s?: number | null;
+  along_track_speed_mps?: number | null;
+  cross_track_speed_mps?: number | null;
+  // ── Joystick V2 telemetry fields ──────────────────────────────────────────
+  joystick_state?: string | null;
+  joystick_active?: boolean | null;
+  joystick_last_valid_cmd_age_ms?: number | null;
+  joystick_stop_reason?: string | null;
+  control_owner?: string | null;
 }
 
 // Service response

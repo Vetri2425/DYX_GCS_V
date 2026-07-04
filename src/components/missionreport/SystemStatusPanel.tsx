@@ -2,7 +2,9 @@ import React, { useMemo } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import { GestureDetector } from 'react-native-gesture-handler';
 import { PATH_PLAN_GLASS, PATH_PLAN_HEADER } from '../../constants/pathPlanGlass';
-import { useRover } from '../../context/RoverContext';
+import { useRoverStatusIndicators } from '../../hooks/useRoverStatusIndicators';
+import type { RoverStatusIndicators } from '../../hooks/useRoverStatusIndicators';
+import type { RtkUiState } from '../../adapters/px4RtkUiStateAdapter';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 
 interface Props {
@@ -11,52 +13,84 @@ interface Props {
   onClose?: () => void;
 }
 
+// ── Colors ────────────────────────────────────────────────────────────────────
+const GREEN = '#00FF00';
+const AMBER = '#FFAA00';
+const RED = '#FF0000';
+const GREY = '#666666';
+const CYAN = '#22D3EE';
+
+interface IconVisual {
+  icon: string;
+  color: string;
+  opacity: number;
+}
+
+/**
+ * Map the normalized rover status indicators to the five status icons
+ * (network · RTK · GCS-link · FCU-link · battery). Pure presentation only —
+ * no API calls, no raw backend object inspection.
+ */
+function deriveVisuals(ind: RoverStatusIndicators): IconVisual[] {
+  // 1) Network — Wi-Fi bars, ethernet, or offline.
+  let network: IconVisual;
+  if (ind.networkType === 'ethernet') {
+    network = { icon: 'hardware-chip', color: GREEN, opacity: 1 };
+  } else if (ind.networkType === 'wifi' && ind.wifiConnected) {
+    const bars = ind.wifiSignalBars;
+    network = {
+      icon: 'wifi',
+      color: GREEN,
+      opacity: bars >= 4 ? 1 : bars >= 3 ? 0.8 : bars >= 2 ? 0.6 : 0.4,
+    };
+  } else {
+    network = { icon: 'wifi-outline', color: RED, opacity: 0.7 };
+  }
+
+  // 2) RTK — discrete UI state.
+  const rtkVisuals: Record<RtkUiState, IconVisual> = {
+    off: { icon: 'radio-outline', color: GREY, opacity: 0.7 },
+    starting: { icon: 'radio-outline', color: AMBER, opacity: 0.9 },
+    streaming: { icon: 'radio-outline', color: CYAN, opacity: 1 },
+    rtk_float: { icon: 'radio-outline', color: AMBER, opacity: 1 },
+    rtk_fixed: { icon: 'radio-outline', color: GREEN, opacity: 1 },
+    error: { icon: 'alert-circle-outline', color: RED, opacity: 1 },
+  };
+  const rtk = rtkVisuals[ind.rtkState];
+
+  // 3) GCS-link = frontend ↔ backend (Socket.IO lifecycle).
+  const gcs: IconVisual = ind.gcsConnected
+    ? { icon: 'cloud', color: GREEN, opacity: 1 }
+    : { icon: 'cloud-offline-outline', color: RED, opacity: 0.7 };
+
+  // 4) FCU-link = backend ↔ PX4/MAVROS (telemetry.connected).
+  const fcu: IconVisual = ind.fcuConnected
+    ? { icon: 'airplane', color: GREEN, opacity: 1 }
+    : { icon: 'airplane', color: RED, opacity: 0.7 };
+
+  // 5) Battery — null-safe (missing telemetry shows neutral, never a false 0%).
+  let battery: IconVisual;
+  if (ind.batteryPct === null) {
+    battery = { icon: 'battery-dead', color: GREY, opacity: 0.7 };
+  } else if (ind.batteryPct > 50) {
+    battery = { icon: 'battery-charging', color: GREEN, opacity: 1 };
+  } else if (ind.batteryPct > 20) {
+    battery = { icon: 'battery-half', color: AMBER, opacity: 1 };
+  } else {
+    battery = { icon: 'battery-dead', color: RED, opacity: 1 };
+  }
+
+  return [network, rtk, gcs, fcu, battery];
+}
+
 export const SystemStatusPanel: React.FC<Props> = ({
   dragGesture,
   isDraggingActive,
   onClose,
 }) => {
-  const { telemetry, connectionState } = useRover();
+  const indicators = useRoverStatusIndicators();
 
-  const getWiFiSignalBars = (signal: number, connected: boolean): string => {
-    if (!connected) return 'wifi-outline';
-    return 'wifi';
-  };
-
-  const systemStatus = useMemo(() => {
-    const connectionType = telemetry.network.connection_type || 'none';
-    const wifiConnected = telemetry.network.wifi_connected || false;
-    const wifiSignal = telemetry.network.wifi_signal_strength || 0;
-    const rtkStreamActive =
-      telemetry.rtk_stream_active ?? telemetry.network.lora_connected ?? false;
-    const fcuConnected = telemetry.fcu_connected ?? false;
-    const batteryPct = telemetry.battery.percentage;
-    const backendConnected = connectionState === 'connected';
-
-    return {
-      networkIcon: connectionType === 'ethernet' ? 'hardware-chip' : getWiFiSignalBars(wifiSignal, wifiConnected),
-      networkColor: connectionType === 'ethernet'
-        ? (wifiConnected || connectionType === 'ethernet' ? '#00FF00' : '#FF0000')
-        : (wifiConnected ? '#00FF00' : '#FF0000'),
-      networkOpacity: connectionType === 'ethernet'
-        ? 1
-        : wifiConnected
-          ? (wifiSignal >= 4 ? 1 : wifiSignal >= 3 ? 0.8 : wifiSignal >= 2 ? 0.6 : 0.4)
-          : 0.7,
-      loraIcon: 'radio-outline',
-      loraColor: rtkStreamActive ? '#00FF00' : '#666666',
-      loraOpacity: rtkStreamActive ? 1 : 0.7,
-      rcIcon: 'bluetooth',
-      rcColor: backendConnected ? '#00FF00' : '#FF0000',
-      rcOpacity: backendConnected ? 1 : 0.7,
-      fcuIcon: 'airplane',
-      fcuColor: fcuConnected ? '#00FF00' : '#FF0000',
-      fcuOpacity: fcuConnected ? 1 : 0.7,
-      batteryIcon: batteryPct > 50 ? 'battery-charging' : batteryPct > 20 ? 'battery-half' : 'battery-dead',
-      batteryColor: batteryPct > 50 ? '#00FF00' : batteryPct > 20 ? '#FFAA00' : '#FF0000',
-      batteryPct: batteryPct.toFixed(0),
-    };
-  }, [telemetry, connectionState, telemetry.fcu_connected, telemetry.rtk_stream_active]);
+  const icons = useMemo(() => deriveVisuals(indicators), [indicators]);
 
   return (
     <View style={styles.container}>
@@ -80,21 +114,14 @@ export const SystemStatusPanel: React.FC<Props> = ({
 
       <View style={styles.statusPad}>
         <View style={styles.iconRow}>
-          <View style={[styles.iconWrapper, { opacity: systemStatus.networkOpacity, borderColor: `${systemStatus.networkColor}40` }]}>
-            <Ionicons name={systemStatus.networkIcon as any} size={18} color={systemStatus.networkColor} />
-          </View>
-          <View style={[styles.iconWrapper, { opacity: systemStatus.loraOpacity, borderColor: `${systemStatus.loraColor}40` }]}>
-            <Ionicons name={systemStatus.loraIcon as any} size={18} color={systemStatus.loraColor} />
-          </View>
-          <View style={[styles.iconWrapper, { opacity: systemStatus.rcOpacity, borderColor: `${systemStatus.rcColor}40` }]}>
-            <Ionicons name={systemStatus.rcIcon as any} size={18} color={systemStatus.rcColor} />
-          </View>
-          <View style={[styles.iconWrapper, { opacity: systemStatus.fcuOpacity, borderColor: `${systemStatus.fcuColor}40` }]}>
-            <Ionicons name={systemStatus.fcuIcon as any} size={18} color={systemStatus.fcuColor} />
-          </View>
-          <View style={[styles.iconWrapper, { borderColor: `${systemStatus.batteryColor}40` }]}>
-            <Ionicons name={systemStatus.batteryIcon as any} size={18} color={systemStatus.batteryColor} />
-          </View>
+          {icons.map((v, idx) => (
+            <View
+              key={idx}
+              style={[styles.iconWrapper, { opacity: v.opacity, borderColor: `${v.color}40` }]}
+            >
+              <Ionicons name={v.icon as any} size={18} color={v.color} />
+            </View>
+          ))}
         </View>
       </View>
     </View>

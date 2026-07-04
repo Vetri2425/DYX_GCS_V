@@ -12,6 +12,16 @@ export interface PathPlanWaypoint {
     mark?: boolean; // Per-waypoint marking. undefined = use global servo_enabled
 }
 
+export interface DxfMapEntity {
+    id: string;
+    kind: 'line' | 'point' | 'text';
+    coordinates: Array<{ lat: number; lon: number }>;
+    layer?: string;
+    label?: string;
+    dashed?: boolean;
+    closedRing?: boolean;
+}
+
 export interface MissionData {
     id: string;
     name: string;

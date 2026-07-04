@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { TouchableOpacity, View, StyleSheet, StatusBar, Text, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { colors } from '../theme/colors';
@@ -44,7 +44,8 @@ import type { NTRIPProfile } from '../types/ntrip';
 import { getAccuracyLevel } from '../utils/accuracyCalculation';
 import { isRobotStatusDebugEnabled, patchRobotStatusDebug } from '../utils/robotStatusDebug';
 import usePointMissionEvents from '../hooks/usePointMissionEvents';
-import { POINT_MISSION_ENABLED } from '../config/featureFlags';
+import { POINT_MISSION_ENABLED, JOYSTICK_OFFLINE_UI_PREVIEW_BYPASS } from '../config/featureFlags';
+import { isOfflineMode } from '../config';
 import { continuePoint, skipPoint, getPointStatus } from '../services/missionLifecycleService';
 import {
   buildLegacyStatusMapFromPointMap,
@@ -55,6 +56,7 @@ import { useVerifiedMissionContext } from '../context/VerifiedMissionContext';
 import { useVerifiedMissionProgress } from '../hooks/useVerifiedMissionProgress';
 import { verifiedProgressToLegacy } from '../adapters/verifiedTargetBridge';
 import { startVerifiedMission, clearVerifiedMission } from '../services/verifiedMissionService';
+import { getMissionProgressRef } from '../utils/missionStatusPresentation';
 
 // Status map type matching web application
 type WpStatus = {
@@ -241,6 +243,39 @@ export default function MissionReportScreen({ isVisible = true }: MissionReportS
   const [isQuickNtripConnected, setIsQuickNtripConnected] = useState(false);
   const [isManualPreparing, setIsManualPreparing] = useState(false);
   const [isManualDriveVisible, setIsManualDriveVisible] = useState(false);
+  const missionControlsRestoreRef = useRef(false);
+  const joystickSwapActiveRef = useRef(false);
+
+  const openManualDrivePanel = useCallback(() => {
+    setPanelVisibility((prev) => {
+      missionControlsRestoreRef.current = prev.missionControls;
+      joystickSwapActiveRef.current = true;
+      return prev.missionControls
+        ? { ...prev, missionControls: false }
+        : prev;
+    });
+    setIsManualDriveVisible(true);
+  }, [setPanelVisibility]);
+
+  const closeManualDrivePanel = useCallback(() => {
+    setIsManualDriveVisible(false);
+  }, []);
+
+  useEffect(() => {
+    if (isManualDriveVisible) return;
+    if (!joystickSwapActiveRef.current) return;
+    joystickSwapActiveRef.current = false;
+    if (missionControlsRestoreRef.current) {
+      setPanelVisible('missionControls', true);
+    }
+    missionControlsRestoreRef.current = false;
+  }, [isManualDriveVisible, setPanelVisible]);
+
+  useEffect(() => {
+    if (isManualDriveVisible && isMissionControlsVisible) {
+      setPanelVisible('missionControls', false);
+    }
+  }, [isManualDriveVisible, isMissionControlsVisible, setPanelVisible]);
 
   const openRTKInjection = () => setShowRTKInjection(true);
   const closeRTKInjection = () => setShowRTKInjection(false);
@@ -383,7 +418,7 @@ export default function MissionReportScreen({ isVisible = true }: MissionReportS
   };
 
   useEffect(() => {
-    if (!isVisible) return;
+    if (!isVisible || isOfflineMode()) return;
     refreshQuickNtripStatus();
     const timer = setInterval(refreshQuickNtripStatus, 3000);
     return () => clearInterval(timer);
@@ -472,6 +507,11 @@ export default function MissionReportScreen({ isVisible = true }: MissionReportS
   const handleOpenManualDrive = async () => {
     if (isManualPreparing) return;
 
+    if (JOYSTICK_OFFLINE_UI_PREVIEW_BYPASS && isOfflineMode()) {
+      openManualDrivePanel();
+      return;
+    }
+
     setIsManualPreparing(true);
     try {
       const currentMode = String(telemetry.state?.mode || '').toUpperCase();
@@ -497,7 +537,7 @@ export default function MissionReportScreen({ isVisible = true }: MissionReportS
         }
       }
 
-      setIsManualDriveVisible(true);
+      openManualDrivePanel();
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Unable to prepare manual control.';
       console.error('[ManualDrive] Prepare failed', err);
@@ -1101,6 +1141,16 @@ export default function MissionReportScreen({ isVisible = true }: MissionReportS
     };
   }, [previousMissionData, isMissionActive, effectiveStatusMap, waypoints, missionMode, missionStartTime, missionEndTime]);
 
+  const missionProgressRef = useMemo(
+    () =>
+      getMissionProgressRef(
+        displayData.waypoints,
+        effectiveCurrentIndex,
+        effectiveMissionActive,
+      ),
+    [displayData.waypoints, effectiveCurrentIndex, effectiveMissionActive],
+  );
+
   // Calculate mission statistics for completion dialog
   const getMissionStats = () => {
     const totalWaypoints = displayData.waypoints.length;
@@ -1208,6 +1258,14 @@ export default function MissionReportScreen({ isVisible = true }: MissionReportS
         const msg = 'No waypoints available. Upload or add waypoints before starting.';
         console.warn('[MissionReportScreen] Start blocked -', msg);
         showNotification('error', 'No Marking Points', msg);
+        return { success: false, message: msg };
+      }
+
+      // Block mission start if joystick is active
+      if (telemetry.joystick_active || telemetry.control_owner === 'joystick') {
+        const msg = 'Release manual drive before starting a mission.';
+        console.warn('[MissionReportScreen] Start blocked - joystick active');
+        showNotification('error', 'Joystick Active', msg, 4000);
         return { success: false, message: msg };
       }
 
@@ -2603,7 +2661,6 @@ export default function MissionReportScreen({ isVisible = true }: MissionReportS
             waypoints={displayData.waypoints}
             currentIndex={effectiveCurrentIndex}
             markedCount={markedCount}
-            statusMap={displayData.statusMap}
             isMissionActive={effectiveMissionActive}
             onClose={() => setPanelVisible('missionProgress', false)}
           />
@@ -2636,10 +2693,9 @@ export default function MissionReportScreen({ isVisible = true }: MissionReportS
         </View>
       )}
 
-      <ManualDrivePanel
-        visible={isManualDriveVisible}
-        onClose={() => setIsManualDriveVisible(false)}
-      />
+      {isManualDriveVisible ? (
+        <ManualDrivePanel onClose={closeManualDrivePanel} />
+      ) : null}
 
       {isDistanceToTargetVisible && (
         <DraggableCard
@@ -2663,7 +2719,7 @@ export default function MissionReportScreen({ isVisible = true }: MissionReportS
         </DraggableCard>
       )}
 
-      {isMissionControlsVisible && (
+      {isMissionControlsVisible && !isManualDriveVisible && (
         <DraggableCard
           style={[
             styles.floatingMissionControlsPanel,
@@ -2700,7 +2756,8 @@ export default function MissionReportScreen({ isVisible = true }: MissionReportS
       {isBottomTableVisible && (
         <DraggableCard style={styles.floatingBottomTable} handleType="custom">
           <MissionTableHeader
-            waypointCount={displayData.waypoints.length}
+            progressCurrent={missionProgressRef.current}
+            progressTotal={missionProgressRef.total}
             isExpanded={isBottomTableExpanded}
             onToggleExpand={() => setIsBottomTableExpanded(prev => !prev)}
             onClose={() => setPanelVisible('bottom', false)}

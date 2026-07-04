@@ -52,6 +52,13 @@ export const POINT_MISSION_ENABLED: boolean =
 export const JOYSTICK_V2_ENABLED: boolean =
   ROVER_ENABLED || boolEnv('EXPO_PUBLIC_JOYSTICK_V2_ENABLED');
 
+/**
+ * TEMP — offline joystick UI preview bypass.
+ * When true + isOfflineMode(), manual drive opens without backend arm/lease.
+ * Remove or set false after UI verification.
+ */
+export const JOYSTICK_OFFLINE_UI_PREVIEW_BYPASS = true;
+
 /** Hard mission abort endpoint. */
 export const MISSION_ABORT_ENABLED: boolean =
   ROVER_ENABLED || boolEnv('EXPO_PUBLIC_MISSION_ABORT_ENABLED');

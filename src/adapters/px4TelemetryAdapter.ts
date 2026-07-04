@@ -58,6 +58,11 @@ const safeBool = (v: unknown, fallback = false): boolean => {
   return fallback;
 };
 
+const optionalNum = (v: unknown): number | null => {
+  const n = typeof v === 'number' ? v : parseFloat(v as string);
+  return isFinite(n) ? n : null;
+};
+
 // ── GPS fix mapping ───────────────────────────────────────────────────────────
 // PX4 backend sends gps_fix as integer (0–6 scale compatible with MAVLink GPS_FIX_TYPE)
 
@@ -171,6 +176,15 @@ export function toRoverTelemetry(
     xtrack_cm: safeNum(flat.xtrack_m) * 100,
     distance_to_next_m: safeNum(flat.dist_to_goal_m),
     attitude: { yaw_deg: safeNum(flat.heading_ned_deg) },
+    measured_speed_m_s: optionalNum(flat.measured_speed_m_s),
+    along_track_speed_mps: optionalNum(flat.along_track_speed_mps),
+    cross_track_speed_mps: optionalNum(flat.cross_track_speed_mps),
+    // Joystick V2 telemetry fields
+    joystick_state: flat.joystick_state ?? null,
+    joystick_active: flat.joystick_active ?? null,
+    joystick_last_valid_cmd_age_ms: flat.joystick_last_valid_cmd_age_ms ?? null,
+    joystick_stop_reason: flat.joystick_stop_reason ?? null,
+    control_owner: flat.control_owner ?? null,
   };
 }
 

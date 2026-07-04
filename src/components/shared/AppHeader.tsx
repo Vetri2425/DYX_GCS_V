@@ -8,12 +8,35 @@ import { ModeSelectionDialog } from '../pathplan/ModeSelectionDialog';
 import { DashConfigDialog } from '../pathplan/DashConfigDialog';
 import { setMissionMode as setBackendMissionMode } from '../../services/missionModeService';
 import { LayerControlsPanel } from '../pathplan/LayerControlsPanel';
-import { useMissionProgressOverlayOptional } from '../../context/MissionProgressOverlayContext';
+import {
+  MissionProgressPanelKey,
+  useMissionProgressOverlayOptional,
+} from '../../context/MissionProgressOverlayContext';
+import { MISSION_PROGRESS_LAYOUT } from '../../constants/missionProgressLayout';
 
 interface Props {
   activeTab: 'Dashboard' | 'Marking Plan' | 'Mission Progress';
   onTabChange: (tab: 'Dashboard' | 'Marking Plan' | 'Mission Progress') => void;
 }
+
+type WidgetMenuItem = {
+  key: MissionProgressPanelKey;
+  label: string;
+  icon: keyof typeof MaterialCommunityIcons.glyphMap;
+};
+
+const WIDGET_MENU_ITEMS: WidgetMenuItem[] = [
+  { key: 'robotStatus', label: 'Robot Status', icon: 'robot' },
+  { key: 'missionProgress', label: 'Mission Progress', icon: 'chart-donut' },
+  { key: 'distanceToTarget', label: 'Distance to Target', icon: 'crosshairs-gps' },
+  { key: 'systemStatus', label: 'System Status', icon: 'pulse' },
+  { key: 'missionControls', label: 'Mission Controls', icon: 'rocket-launch' },
+  { key: 'bottom', label: 'Mission Points Table', icon: 'table-large' },
+];
+
+const VEHICLE_STATUS_CARD_HEIGHT = 345;
+const WIDGET_DROPDOWN_TOP = MISSION_PROGRESS_LAYOUT.HEADER_CLEARANCE;
+const WIDGET_DROPDOWN_LEFT = MISSION_PROGRESS_LAYOUT.EDGE;
 
 const AppHeaderInner: React.FC<Props> = ({
   activeTab,
@@ -136,110 +159,61 @@ const AppHeaderInner: React.FC<Props> = ({
               onToggleWidget={mpOverlay.toggleWidgetMenu}
               isWidgetOpen={mpOverlay.isWidgetMenuOpen}
             />
-            {mpOverlay.isWidgetMenuOpen && (
-              <View style={styles.widgetDropdownMenu}>
-                <Text style={styles.widgetDropdownTitle}>WIDGET LAYERS</Text>
-
-                <TouchableOpacity
-                  style={styles.widgetMenuItem}
-                  onPress={() => mpOverlay.togglePanel('robotStatus')}
-                  activeOpacity={0.7}
-                >
-                  <View style={styles.widgetMenuItemContent}>
-                    <MaterialCommunityIcons name="robot" size={13} color="#67E8F9" style={{ marginRight: 8 }} />
-                    <Text style={styles.widgetMenuItemLabel}>Robot Status</Text>
-                  </View>
-                  <MaterialCommunityIcons
-                    name={mpOverlay.panelVisibility.robotStatus ? 'checkbox-marked' : 'checkbox-blank-outline'}
-                    size={14}
-                    color={mpOverlay.panelVisibility.robotStatus ? '#67E8F9' : '#94A3B8'}
-                  />
-                </TouchableOpacity>
-
-                <TouchableOpacity
-                  style={styles.widgetMenuItem}
-                  onPress={() => mpOverlay.togglePanel('missionProgress')}
-                  activeOpacity={0.7}
-                >
-                  <View style={styles.widgetMenuItemContent}>
-                    <MaterialCommunityIcons name="chart-donut" size={13} color="#67E8F9" style={{ marginRight: 8 }} />
-                    <Text style={styles.widgetMenuItemLabel}>Mission Progress</Text>
-                  </View>
-                  <MaterialCommunityIcons
-                    name={mpOverlay.panelVisibility.missionProgress ? 'checkbox-marked' : 'checkbox-blank-outline'}
-                    size={14}
-                    color={mpOverlay.panelVisibility.missionProgress ? '#67E8F9' : '#94A3B8'}
-                  />
-                </TouchableOpacity>
-
-                <TouchableOpacity
-                  style={styles.widgetMenuItem}
-                  onPress={() => mpOverlay.togglePanel('distanceToTarget')}
-                  activeOpacity={0.7}
-                >
-                  <View style={styles.widgetMenuItemContent}>
-                    <MaterialCommunityIcons name="crosshairs-gps" size={13} color="#67E8F9" style={{ marginRight: 8 }} />
-                    <Text style={styles.widgetMenuItemLabel}>Distance to Target</Text>
-                  </View>
-                  <MaterialCommunityIcons
-                    name={mpOverlay.panelVisibility.distanceToTarget ? 'checkbox-marked' : 'checkbox-blank-outline'}
-                    size={14}
-                    color={mpOverlay.panelVisibility.distanceToTarget ? '#67E8F9' : '#94A3B8'}
-                  />
-                </TouchableOpacity>
-
-                <TouchableOpacity
-                  style={styles.widgetMenuItem}
-                  onPress={() => mpOverlay.togglePanel('systemStatus')}
-                  activeOpacity={0.7}
-                >
-                  <View style={styles.widgetMenuItemContent}>
-                    <MaterialCommunityIcons name="pulse" size={13} color="#67E8F9" style={{ marginRight: 8 }} />
-                    <Text style={styles.widgetMenuItemLabel}>System Status</Text>
-                  </View>
-                  <MaterialCommunityIcons
-                    name={mpOverlay.panelVisibility.systemStatus ? 'checkbox-marked' : 'checkbox-blank-outline'}
-                    size={14}
-                    color={mpOverlay.panelVisibility.systemStatus ? '#67E8F9' : '#94A3B8'}
-                  />
-                </TouchableOpacity>
-
-                <TouchableOpacity
-                  style={styles.widgetMenuItem}
-                  onPress={() => mpOverlay.togglePanel('missionControls')}
-                  activeOpacity={0.7}
-                >
-                  <View style={styles.widgetMenuItemContent}>
-                    <MaterialCommunityIcons name="rocket-launch" size={13} color="#67E8F9" style={{ marginRight: 8 }} />
-                    <Text style={styles.widgetMenuItemLabel}>Mission Controls</Text>
-                  </View>
-                  <MaterialCommunityIcons
-                    name={mpOverlay.panelVisibility.missionControls ? 'checkbox-marked' : 'checkbox-blank-outline'}
-                    size={14}
-                    color={mpOverlay.panelVisibility.missionControls ? '#67E8F9' : '#94A3B8'}
-                  />
-                </TouchableOpacity>
-
-                <TouchableOpacity
-                  style={styles.widgetMenuItem}
-                  onPress={() => mpOverlay.togglePanel('bottom')}
-                  activeOpacity={0.7}
-                >
-                  <View style={styles.widgetMenuItemContent}>
-                    <MaterialCommunityIcons name="table-large" size={13} color="#67E8F9" style={{ marginRight: 8 }} />
-                    <Text style={styles.widgetMenuItemLabel}>Mission Points Table</Text>
-                  </View>
-                  <MaterialCommunityIcons
-                    name={mpOverlay.panelVisibility.bottom ? 'checkbox-marked' : 'checkbox-blank-outline'}
-                    size={14}
-                    color={mpOverlay.panelVisibility.bottom ? '#67E8F9' : '#94A3B8'}
-                  />
-                </TouchableOpacity>
-              </View>
-            )}
           </>
         )}
       </View>
+
+      {showMissionProgressWidget && (
+        <Modal
+          visible={mpOverlay.isWidgetMenuOpen}
+          transparent
+          animationType="none"
+          statusBarTranslucent
+          onRequestClose={() => mpOverlay.setIsWidgetMenuOpen(false)}
+        >
+          <TouchableWithoutFeedback onPress={() => mpOverlay.setIsWidgetMenuOpen(false)}>
+            <View style={styles.widgetModalBackdrop}>
+              <TouchableWithoutFeedback onPress={() => undefined}>
+                <View style={styles.widgetDropdownMenu}>
+                  <Text style={styles.widgetDropdownTitle}>WIDGET LAYERS</Text>
+                  <View style={styles.widgetMenuList}>
+                    {WIDGET_MENU_ITEMS.map((item) => {
+                      const isSelected = mpOverlay.panelVisibility[item.key];
+                      return (
+                        <TouchableOpacity
+                          key={item.key}
+                          style={[
+                            styles.widgetMenuItem,
+                            isSelected && styles.widgetMenuItemSelected,
+                          ]}
+                          onPress={() => mpOverlay.togglePanel(item.key)}
+                          activeOpacity={0.7}
+                        >
+                          <MaterialCommunityIcons
+                            name={item.icon}
+                            size={18}
+                            color={isSelected ? '#67E8F9' : '#94A3B8'}
+                            style={styles.widgetMenuItemIcon}
+                          />
+                          <Text
+                            style={[
+                              styles.widgetMenuItemLabel,
+                              isSelected && styles.widgetMenuItemLabelSelected,
+                            ]}
+                            numberOfLines={1}
+                          >
+                            {item.label}
+                          </Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+                </View>
+              </TouchableWithoutFeedback>
+            </View>
+          </TouchableWithoutFeedback>
+        </Modal>
+      )}
 
       {/* Center: Tab Navigation Capsule */}
       <View style={styles.centerSection} pointerEvents="box-none">
@@ -462,17 +436,22 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     backgroundColor: 'rgba(255, 255, 255, 0.04)',
   },
+  widgetModalBackdrop: {
+    flex: 1,
+    backgroundColor: 'transparent',
+  },
   widgetDropdownMenu: {
     position: 'absolute',
-    top: 56,
-    right: 0,
-    width: 220,
+    top: WIDGET_DROPDOWN_TOP,
+    left: WIDGET_DROPDOWN_LEFT,
+    width: MISSION_PROGRESS_LAYOUT.LEFT_PANEL_WIDTH,
+    height: VEHICLE_STATUS_CARD_HEIGHT,
     zIndex: 1002,
     backgroundColor: '#07111be6',
     borderRadius: 12,
     borderWidth: 1,
     borderColor: 'rgba(103,232,249,0.15)',
-    paddingVertical: 8,
+    padding: 16,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.35,
@@ -484,23 +463,37 @@ const styles = StyleSheet.create({
     fontSize: 9,
     fontWeight: '700',
     letterSpacing: 0.5,
-    paddingHorizontal: 12,
-    paddingBottom: 6,
+    paddingBottom: 10,
+  },
+  widgetMenuList: {
+    flex: 1,
+    gap: 8,
   },
   widgetMenuItem: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
+    minHeight: 42,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(103, 232, 249, 0.1)',
+    backgroundColor: 'rgba(8, 16, 26, 0.9)',
     paddingHorizontal: 12,
-    paddingVertical: 8,
   },
-  widgetMenuItemContent: {
-    flexDirection: 'row',
-    alignItems: 'center',
+  widgetMenuItemSelected: {
+    borderColor: 'rgba(103, 232, 249, 0.55)',
+    backgroundColor: 'rgba(103, 232, 249, 0.14)',
+  },
+  widgetMenuItemIcon: {
+    marginRight: 10,
   },
   widgetMenuItemLabel: {
-    color: '#E5F1FF',
-    fontSize: 11,
+    flex: 1,
+    color: '#94A3B8',
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  widgetMenuItemLabelSelected: {
+    color: '#67E8F9',
   },
 });
 

@@ -22,6 +22,11 @@ const DIRECTION_OPTIONS: { value: PathDirection; label: string }[] = [
   { value: 'RIGHT_LEFT', label: 'Right \u2192 Left' },
 ];
 
+const DRAWING_TOOLS_MENU_LEFT = 68;
+const DRAWING_TOOLS_MENU_TOP = 0;
+const DRAWING_TOOLS_MENU_WIDTH = 280;
+const DRAWING_TOOLS_MENU_HEIGHT = 345;
+
 // ─── Props ───────────────────────────────────────────────────
 
 interface DrawingToolsPanelProps {
@@ -148,6 +153,52 @@ export const DrawingToolsPanel: React.FC<DrawingToolsPanelProps> = ({
   const handlePreciseClose = useCallback(() => {
     onPrecisePathClose?.();
   }, [onPrecisePathClose]);
+
+  const drawingToolMenuItems = [
+    {
+      key: 'cad-draw',
+      label: 'CAD Draw',
+      icon: 'draw' as MaterialIconName,
+      onPress: onShowCADDrawing,
+    },
+    {
+      key: 'auto-circle',
+      label: 'Auto Circle',
+      icon: 'circle-outline' as MaterialIconName,
+      onPress: onShowCircleTool,
+    },
+    ...(onShowSurveyGrid
+      ? [{
+          key: 'survey-grid',
+          label: 'Survey Grid',
+          icon: 'grid' as MaterialIconName,
+          onPress: onShowSurveyGrid,
+        }]
+      : []),
+    {
+      key: 'solar-table',
+      label: 'Solar Table',
+      icon: 'solar-panel' as MaterialIconName,
+      onPress: onShowSolarTableTool,
+    },
+    {
+      key: 'templates',
+      label: 'Templates',
+      icon: 'file-document-outline' as MaterialIconName,
+      onPress: onShowTemplateManager,
+    },
+    {
+      key: 'manual-connect',
+      label: 'Manual Connect',
+      icon: 'vector-line' as MaterialIconName,
+      onPress: onShowManualConnection,
+    },
+  ];
+
+  const handleDrawingToolMenuPress = useCallback((onPress: () => void) => {
+    setShowLinesMenu(false);
+    onPress();
+  }, []);
 
   const capsule = (
     <View style={[styles.capsule, isDraggingActive && styles.capsuleDragging]}>
@@ -414,70 +465,28 @@ export const DrawingToolsPanel: React.FC<DrawingToolsPanelProps> = ({
 
       {/* CAD Tools Dropdown Sub-menu */}
       {showLinesMenu && (
-        <View style={[styles.dropdownMenu, { top: 96 }]}>
-          <TouchableOpacity
-            style={styles.dropdownItem}
-            onPress={() => {
-              setShowLinesMenu(false);
-              onShowCADDrawing();
-            }}
-          >
-            <MaterialCommunityIcons name="draw" size={16} color="#E5F1FF" />
-            <Text style={styles.dropdownItemText}>CAD Draw</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={styles.dropdownItem}
-            onPress={() => {
-              setShowLinesMenu(false);
-              onShowCircleTool();
-            }}
-          >
-            <MaterialCommunityIcons name="circle-outline" size={16} color="#E5F1FF" />
-            <Text style={styles.dropdownItemText}>Auto Circle</Text>
-          </TouchableOpacity>
-          {onShowSurveyGrid && (
-            <TouchableOpacity
-              style={styles.dropdownItem}
-              onPress={() => {
-                setShowLinesMenu(false);
-                onShowSurveyGrid();
-              }}
-            >
-              <MaterialCommunityIcons name="grid" size={16} color="#E5F1FF" />
-              <Text style={styles.dropdownItemText}>Survey Grid</Text>
-            </TouchableOpacity>
-          )}
-          <TouchableOpacity
-            style={styles.dropdownItem}
-            onPress={() => {
-              setShowLinesMenu(false);
-              onShowSolarTableTool();
-            }}
-          >
-            <MaterialCommunityIcons name="solar-panel" size={16} color="#E5F1FF" />
-            <Text style={styles.dropdownItemText}>Solar Table</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={styles.dropdownItem}
-            onPress={() => {
-              setShowLinesMenu(false);
-              onShowTemplateManager();
-            }}
-          >
-            <MaterialCommunityIcons name="file-document-outline" size={16} color="#E5F1FF" />
-            <Text style={styles.dropdownItemText}>Templates</Text>
-          </TouchableOpacity>
-          <View style={styles.dropdownDivider} />
-          <TouchableOpacity
-            style={styles.dropdownItem}
-            onPress={() => {
-              setShowLinesMenu(false);
-              onShowManualConnection();
-            }}
-          >
-            <MaterialCommunityIcons name="vector-line" size={16} color="#E5F1FF" />
-            <Text style={styles.dropdownItemText}>Manual Connect</Text>
-          </TouchableOpacity>
+        <View style={styles.dropdownMenu}>
+          <Text style={styles.dropdownTitle}>DRAWING TOOLS</Text>
+          <View style={styles.dropdownList}>
+            {drawingToolMenuItems.map((item) => (
+              <TouchableOpacity
+                key={item.key}
+                style={styles.dropdownItem}
+                onPress={() => handleDrawingToolMenuPress(item.onPress)}
+                activeOpacity={0.7}
+              >
+                <MaterialCommunityIcons
+                  name={item.icon}
+                  size={18}
+                  color="#94A3B8"
+                  style={styles.dropdownItemIcon}
+                />
+                <Text style={styles.dropdownItemText} numberOfLines={1}>
+                  {item.label}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </View>
         </View>
       )}
 
@@ -722,35 +731,50 @@ const styles = StyleSheet.create({
   },
   dropdownMenu: {
     position: 'absolute',
-    left: 68,
-    backgroundColor: '#08101a',
-    borderRadius: 8,
+    left: DRAWING_TOOLS_MENU_LEFT,
+    top: DRAWING_TOOLS_MENU_TOP,
+    width: DRAWING_TOOLS_MENU_WIDTH,
+    height: DRAWING_TOOLS_MENU_HEIGHT,
+    backgroundColor: '#07111be6',
+    borderRadius: 12,
     borderWidth: 1,
-    borderColor: 'rgba(103, 232, 249, 0.2)',
-    padding: 4,
-    minWidth: 140,
+    borderColor: 'rgba(103, 232, 249, 0.15)',
+    padding: 16,
     shadowColor: '#000',
-    shadowOffset: { width: 4, height: 4 },
-    shadowOpacity: 0.4,
-    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.35,
+    shadowRadius: 8,
+    elevation: 8,
     zIndex: 2000,
+  },
+  dropdownTitle: {
+    color: '#67E8F9',
+    fontSize: 9,
+    fontWeight: '700',
+    letterSpacing: 0.5,
+    paddingBottom: 10,
+  },
+  dropdownList: {
+    flex: 1,
+    gap: 8,
   },
   dropdownItem: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
-    paddingVertical: 10,
+    minHeight: 42,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(103, 232, 249, 0.1)',
+    backgroundColor: 'rgba(8, 16, 26, 0.9)',
     paddingHorizontal: 12,
-    borderRadius: 6,
   },
-  dropdownDivider: {
-    height: 1,
-    backgroundColor: 'rgba(103, 232, 249, 0.12)',
-    marginVertical: 4,
+  dropdownItemIcon: {
+    marginRight: 10,
   },
   dropdownItemText: {
-    color: '#E5F1FF',
-    fontSize: 11,
-    fontWeight: '600',
+    flex: 1,
+    color: '#94A3B8',
+    fontSize: 13,
+    fontWeight: '700',
   },
 });

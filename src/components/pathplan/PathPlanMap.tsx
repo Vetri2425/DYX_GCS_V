@@ -4,11 +4,40 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { WebView } from 'react-native-webview';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { colors } from '../../theme/colors';
-import { PathPlanWaypoint, DrawingMode } from '../../types/pathplan';
+import { DxfMapEntity, PathPlanWaypoint, DrawingMode } from '../../types/pathplan';
 import { MAPBOX_JS_URL, MAPBOX_CSS_URL, MAPBOX_ACCESS_TOKEN, MAPBOX_STYLE_SATELLITE, MAPBOX_STYLE_STREETS, MAPBOX_STYLE_DARK } from '../../config/mapboxConfig';
+
+type VisualizationKey =
+  | 'distanceLabel'
+  | 'angleLabel'
+  | 'snapFeature'
+  | 'roverIcon'
+  | 'waypointPreview';
+
+type VisualizationState = Record<VisualizationKey, boolean>;
+
+type ToggleMenuItem<Key extends string> = {
+  key: Key;
+  label: string;
+  icon: keyof typeof MaterialCommunityIcons.glyphMap;
+};
+
+const MAP_SETTINGS_ITEMS: ToggleMenuItem<VisualizationKey>[] = [
+  { key: 'distanceLabel', label: 'Distance Label', icon: 'ruler' },
+  { key: 'angleLabel', label: 'Angle Label', icon: 'angle-acute' },
+  { key: 'snapFeature', label: 'Snap Feature', icon: 'magnet' },
+  { key: 'roverIcon', label: 'Rover Icon', icon: 'robot' },
+  { key: 'waypointPreview', label: 'Waypoint Preview', icon: 'map-marker' },
+];
+
+const PATH_PLAN_WIDGET_MENU_LEFT = 80;
+const PATH_PLAN_WIDGET_MENU_TOP = 76;
+const PATH_PLAN_WIDGET_MENU_WIDTH = 280;
+const PATH_PLAN_WIDGET_MENU_HEIGHT = 345;
 
 interface Props {
   waypoints: PathPlanWaypoint[];
+  dxfEntities?: DxfMapEntity[];
   onMapPress?: (coordinate: { latitude: number; longitude: number }) => void;
   onWaypointDrag?: (id: number, coordinate: { latitude: number; longitude: number }) => void;
   onWaypointClick?: (id: number) => void;
@@ -41,20 +70,8 @@ interface Props {
   isManualConnectionMode?: boolean;
   manualConnections?: number[];
   manualConnectionMode?: 'tap' | 'drag' | 'pan';
-  visualization?: {
-    distanceLabel: boolean;
-    angleLabel: boolean;
-    snapFeature: boolean;
-    roverIcon: boolean;
-    waypointPreview: boolean;
-  };
-  onVisualizationToggle?: (key: keyof {
-    distanceLabel: boolean;
-    angleLabel: boolean;
-    snapFeature: boolean;
-    roverIcon: boolean;
-    waypointPreview: boolean;
-  }) => void;
+  visualization?: VisualizationState;
+  onVisualizationToggle?: (key: VisualizationKey) => void;
   measurePoints?: { lat: number; lon: number; seq: number; waypointId?: number }[];
   measureResult?: { distance: number; heading: number } | null;
   onMeasureClear?: () => void;
@@ -70,6 +87,7 @@ interface Props {
 
 export const PathPlanMap: React.FC<Props> = ({
   waypoints,
+  dxfEntities = [],
   onMapPress,
   onWaypointDrag,
   onAddWaypoints,
@@ -77,7 +95,7 @@ export const PathPlanMap: React.FC<Props> = ({
   onInsertWaypoint,
   onWaypointClick,
   onWaypointConnect,
-  roverPosition = { lat: 13.0827, lon: 80.2707 },
+  roverPosition = null,
   selectedWaypoint = null,
   heading = null,
   activeDrawingTool = null,
@@ -133,6 +151,7 @@ export const PathPlanMap: React.FC<Props> = ({
   const drawingPointsRef = useRef<{ lat: number; lng: number }[]>([]);
   const mapInitializedRef = useRef(false);
   const lastWaypointsRef = useRef<string>('');
+  const lastDxfEntitiesRef = useRef<string>('');
   const lastSelectedRef = useRef<number | null>(null);
 
   const measureOverlayPosRef = useRef(measureOverlayPos);
@@ -167,11 +186,13 @@ export const PathPlanMap: React.FC<Props> = ({
 
   const mapHTML = useMemo(() => {
     const waypointsJSON = JSON.stringify([]);
+    const hasRover = roverPosition != null &&
+      Number.isFinite(roverPosition.lat) && Number.isFinite(roverPosition.lon);
     const roverData = JSON.stringify({
-      lat: roverPosition.lat || 13.0827,
-      lon: roverPosition.lon || 80.2707,
+      lat: hasRover ? roverPosition.lat : 0,
+      lon: hasRover ? roverPosition.lon : 0,
       heading: heading || 0,
-      hasPosition: Number.isFinite(roverPosition.lat) && Number.isFinite(roverPosition.lon),
+      hasPosition: hasRover ? 1 : 0,
     });
 
     return `
@@ -222,8 +243,9 @@ export const PathPlanMap: React.FC<Props> = ({
     const waypoints = ${waypointsJSON};
     const roverData = ${roverData};
 
-    const centerLon = waypoints.length > 0 ? waypoints[0].lon : (roverData.hasPosition ? roverData.lon : 80.2707);
-    const centerLat = waypoints.length > 0 ? waypoints[0].lat : (roverData.hasPosition ? roverData.lat : 13.0827);
+    const hasWaypoints = waypoints.length > 0;
+    const centerLon = hasWaypoints ? waypoints[0].lon : (roverData.hasPosition ? roverData.lon : 0);
+    const centerLat = hasWaypoints ? waypoints[0].lat : (roverData.hasPosition ? roverData.lat : 0);
 
     const map = new mapboxgl.Map({
       container: 'map',
@@ -244,6 +266,44 @@ export const PathPlanMap: React.FC<Props> = ({
 
     function emptyLine() {
       return { type:'Feature', geometry:{ type:'LineString', coordinates:[] } };
+    }
+
+    function emptyCollection() {
+      return { type:'FeatureCollection', features:[] };
+    }
+
+    function ensureDxfEntityLayers() {
+      if (map.getSource('dxf-entities')) return;
+      map.addSource('dxf-entities', { type:'geojson', data:emptyCollection(), maxzoom:22, tolerance:0 });
+      map.addLayer({ id:'dxf-entity-open-lines', type:'line', source:'dxf-entities',
+        filter:['all',['==',['geometry-type'],'LineString'],['!=',['get','closedRing'],true]],
+        paint:{'line-color':'#67E8F9','line-width':2.5,'line-opacity':0.92},
+        layout:{'line-cap':'round','line-join':'round'} });
+      map.addLayer({ id:'dxf-entity-closed-lines', type:'line', source:'dxf-entities',
+        filter:['all',['==',['geometry-type'],'LineString'],['==',['get','closedRing'],true]],
+        paint:{'line-color':'#67E8F9','line-width':2.5,'line-opacity':0.92},
+        layout:{'line-cap':'butt','line-join':'round'} });
+      map.addLayer({ id:'dxf-entity-points', type:'circle', source:'dxf-entities',
+        filter:['==',['geometry-type'],'Point'],
+        paint:{
+          'circle-radius':['interpolate',['linear'],['zoom'],12,4,18,7],
+          'circle-color':'#67E8F9',
+          'circle-stroke-color':'#07111B',
+          'circle-stroke-width':1.5,
+          'circle-opacity':0.95
+        } });
+      map.addLayer({ id:'dxf-entity-labels', type:'symbol', source:'dxf-entities',
+        filter:['has','label'],
+        layout:{
+          'text-field':['get','label'],
+          'text-size':12,
+          'text-offset':[0,1.2],
+          'text-anchor':'top'
+        },
+        paint:{'text-color':'#E5F1FF','text-halo-color':'#07111B','text-halo-width':1.5} });
+      if (window.currentDxfEntitiesGeoJson) {
+        map.getSource('dxf-entities')?.setData(window.currentDxfEntitiesGeoJson);
+      }
     }
 
     function getWaypointElement(wp, index) {
@@ -553,9 +613,9 @@ export const PathPlanMap: React.FC<Props> = ({
     function centerOnRover() {
       if (roverMarker) {
         const ll = roverMarker.getLngLat();
-        map.flyTo({ center: [ll.lng, ll.lat], zoom: 18 });
+        map.flyTo({ center: [ll.lng, ll.lat], zoom: 22 });
       } else if (roverData.hasPosition) {
-        map.flyTo({ center: [roverData.lon, roverData.lat], zoom: 18 });
+        map.flyTo({ center: [roverData.lon, roverData.lat], zoom: 22 });
       }
     }
     window.centerOnRover = centerOnRover;
@@ -806,6 +866,7 @@ export const PathPlanMap: React.FC<Props> = ({
           'circle-stroke-width':1.5,
           'circle-stroke-color':'#ffffff'
         } });
+      ensureDxfEntityLayers();
 
       map.addSource('ortho-guide', { type:'geojson', data:emptyLine() });
       map.addLayer({ id:'ortho-guide-line', type:'line', source:'ortho-guide',
@@ -853,6 +914,8 @@ export const PathPlanMap: React.FC<Props> = ({
             'circle-stroke-color':'#ffffff'
           } });
 
+        ensureDxfEntityLayers();
+
         map.addSource('ortho-guide', { type:'geojson', data:emptyLine() });
         map.addLayer({ id:'ortho-guide-line', type:'line', source:'ortho-guide',
           paint:{'line-color':'#10b981','line-width':3,'line-opacity':0.9,'line-dasharray':[8,4]} });
@@ -887,8 +950,11 @@ export const PathPlanMap: React.FC<Props> = ({
 
   useEffect(() => {
     if (!mapReady || !webViewRef.current || mapInitializedRef.current) return;
-    const hasRover = Number.isFinite(roverPosition.lat) && Number.isFinite(roverPosition.lon);
+    const hasRover = roverPosition != null &&
+      Number.isFinite(roverPosition.lat) && Number.isFinite(roverPosition.lon);
     if (hasRover) {
+      const roverLat = roverPosition.lat;
+      const roverLon = roverPosition.lon;
       const initRoverScript = `
         (function() {
           if (!roverMarker && roverData.hasPosition) {
@@ -907,11 +973,11 @@ export const PathPlanMap: React.FC<Props> = ({
             roverEl.style.cssText = \`width:\${size}px;height:\${size}px;\`;
             roverEl.innerHTML = roverIconSVG;
             roverMarker = new mapboxgl.Marker({ element: roverEl, anchor: 'center' })
-              .setLngLat([${roverPosition.lon}, ${roverPosition.lat}])
+              .setLngLat([${roverLon}, ${roverLat}])
               .addTo(map);
             roverData.hasPosition = true;
-            roverData.lat = ${roverPosition.lat};
-            roverData.lon = ${roverPosition.lon};
+            roverData.lat = ${roverLat};
+            roverData.lon = ${roverLon};
           }
         })();
         true;
@@ -1212,6 +1278,57 @@ export const PathPlanMap: React.FC<Props> = ({
 
   useEffect(() => {
     if (!mapReady || !webViewRef.current) return;
+
+    const featureCollection = {
+      type: 'FeatureCollection',
+      features: dxfEntities
+        .filter(entity => entity.coordinates.length > 0)
+        .map(entity => {
+          const first = entity.coordinates[0];
+          const isLine = entity.kind === 'line' && entity.coordinates.length > 1;
+
+          return {
+            type: 'Feature',
+            properties: {
+              id: entity.id,
+              kind: entity.kind,
+              layer: entity.layer ?? '',
+              label: entity.label,
+              dashed: !!entity.dashed,
+              closedRing: !!entity.closedRing,
+            },
+            geometry: isLine
+              ? {
+                  type: 'LineString',
+                  coordinates: entity.coordinates.map(coord => [coord.lon, coord.lat]),
+                }
+              : {
+                  type: 'Point',
+                  coordinates: [first.lon, first.lat],
+                },
+          };
+        }),
+    };
+
+    const dxfEntitiesKey = JSON.stringify(featureCollection);
+    if (dxfEntitiesKey === lastDxfEntitiesRef.current) return;
+    lastDxfEntitiesRef.current = dxfEntitiesKey;
+
+    const updateDxfEntitiesScript = `
+      (function() {
+        const data = ${dxfEntitiesKey};
+        window.currentDxfEntitiesGeoJson = data;
+        const src = map.getSource('dxf-entities');
+        if (src) src.setData(data);
+      })();
+      true;
+    `;
+
+    webViewRef.current.injectJavaScript(updateDxfEntitiesScript);
+  }, [dxfEntities, mapReady]);
+
+  useEffect(() => {
+    if (!mapReady || !webViewRef.current) return;
     if (lastWaypointsRef.current === '') return;
 
     const prev = lastSelectedRef.current;
@@ -1258,14 +1375,19 @@ export const PathPlanMap: React.FC<Props> = ({
   useEffect(() => {
     if (!isVisible) return;
     if (!mapReady || !webViewRef.current) return;
+    if (!roverPosition ||
+      !Number.isFinite(roverPosition.lat) || !Number.isFinite(roverPosition.lon)) return;
 
     const now = performance.now();
     if (now - lastUpdateRef.current < UPDATE_THROTTLE_MS) return;
     lastUpdateRef.current = now;
 
+    const roverLat = roverPosition.lat;
+    const roverLon = roverPosition.lon;
+
     const updateScript = `
       if (roverMarker && roverData.hasPosition) {
-        roverMarker.setLngLat([${roverPosition.lon}, ${roverPosition.lat}]);
+        roverMarker.setLngLat([${roverLon}, ${roverLat}]);
         const markerEl = roverMarker.getElement();
         if (markerEl && ${heading !== null}) {
           const svg = markerEl.querySelector('svg');
@@ -1279,7 +1401,7 @@ export const PathPlanMap: React.FC<Props> = ({
     `;
 
     webViewRef.current.injectJavaScript(updateScript);
-  }, [roverPosition.lat, roverPosition.lon, heading, mapReady]);
+  }, [roverPosition?.lat, roverPosition?.lon, heading, mapReady]);
 
   useEffect(() => {
     if (!mapReady || !webViewRef.current) return;
@@ -1439,6 +1561,44 @@ export const PathPlanMap: React.FC<Props> = ({
     saveMeasurePosition();
   }, [measureOverlayPos]);
 
+  const widgetMenuItems = [
+    {
+      key: 'drawingTools',
+      label: 'Drawing Tools',
+      icon: 'gesture-tap-button' as const,
+      selected: isDrawingToolsVisible,
+      onToggle: () => setIsDrawingToolsVisible?.(!isDrawingToolsVisible),
+    },
+    {
+      key: 'missionOps',
+      label: 'Mission Control',
+      icon: 'rocket-launch' as const,
+      selected: isMissionOpsVisible,
+      onToggle: () => setIsMissionOpsVisible?.(!isMissionOpsVisible),
+    },
+    {
+      key: 'statistics',
+      label: 'Mission Stats',
+      icon: 'chart-bar' as const,
+      selected: isStatisticsVisible,
+      onToggle: () => setIsStatisticsVisible?.(!isStatisticsVisible),
+    },
+    {
+      key: 'bottomTable',
+      label: 'Waypoints Table',
+      icon: 'table-large' as const,
+      selected: isBottomTableVisible,
+      onToggle: () => setIsBottomTableVisible?.(!isBottomTableVisible),
+    },
+    {
+      key: 'robotPosition',
+      label: 'Robot Position',
+      icon: 'robot' as const,
+      selected: isRobotPositionVisible,
+      onToggle: () => setIsRobotPositionVisible?.(!isRobotPositionVisible),
+    },
+  ];
+
   return (
     <View style={styles.container}>
       <WebView
@@ -1564,119 +1724,76 @@ export const PathPlanMap: React.FC<Props> = ({
 
       {/* Vis Menu Dropdown near Drawing Tools panel (Settings button lives there now) */}
       {isVisMenuOpen && visualization && (
-        <View style={[styles.visDropdownMenu, { left: 80, top: 80 }]}>
+        <View style={styles.visDropdownMenu}>
           <Text style={styles.visDropdownTitle}>MAP SETTINGS</Text>
-          {[
-            { key: 'distanceLabel' as const, label: 'Distance Label', icon: 'ruler' as const },
-            { key: 'angleLabel' as const, label: 'Angle Label', icon: 'angle-acute' as const },
-            { key: 'snapFeature' as const, label: 'Snap Feature', icon: 'magnet' as const },
-            { key: 'roverIcon' as const, label: 'Rover Icon', icon: 'robot' as const },
-            { key: 'waypointPreview' as const, label: 'Waypoint Preview', icon: 'map-marker' as const },
-          ].map((option) => (
-            <TouchableOpacity
-              key={option.key}
-              style={styles.visMenuItem}
-              onPress={() => onVisualizationToggle?.(option.key)}
-              activeOpacity={0.7}
-            >
-              <View style={styles.visMenuItemContent}>
-                <MaterialCommunityIcons name={option.icon} size={13} color="#67E8F9" style={{ marginRight: 8 }} />
-                <Text style={styles.visMenuItemLabel}>{option.label}</Text>
-              </View>
-              <MaterialCommunityIcons 
-                name={visualization[option.key] ? "checkbox-marked" : "checkbox-blank-outline"} 
-                size={14} 
-                color={visualization[option.key] ? '#67E8F9' : '#94A3B8'} 
-              />
-            </TouchableOpacity>
-          ))}
+          <View style={styles.visMenuList}>
+            {MAP_SETTINGS_ITEMS.map((option) => {
+              const isSelected = visualization[option.key];
+              return (
+                <TouchableOpacity
+                  key={option.key}
+                  style={[
+                    styles.visMenuItem,
+                    isSelected && styles.visMenuItemSelected,
+                  ]}
+                  onPress={() => onVisualizationToggle?.(option.key)}
+                  activeOpacity={0.7}
+                >
+                  <MaterialCommunityIcons
+                    name={option.icon}
+                    size={18}
+                    color={isSelected ? '#67E8F9' : '#94A3B8'}
+                    style={styles.visMenuItemIcon}
+                  />
+                  <Text
+                    style={[
+                      styles.visMenuItemLabel,
+                      isSelected && styles.visMenuItemLabelSelected,
+                    ]}
+                    numberOfLines={1}
+                  >
+                    {option.label}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
         </View>
       )}
 
       {/* Widget Menu Dropdown near Drawing Tools panel (Widget button lives there now) */}
       {isWidgetMenuOpen && (
-        <View style={[styles.visDropdownMenu, { left: 80, top: 145 }]}>
+        <View style={styles.visDropdownMenu}>
           <Text style={styles.visDropdownTitle}>WIDGET LAYERS</Text>
-          
-          <TouchableOpacity
-            style={styles.visMenuItem}
-            onPress={() => setIsDrawingToolsVisible?.(!isDrawingToolsVisible)}
-            activeOpacity={0.7}
-          >
-            <View style={styles.visMenuItemContent}>
-              <MaterialCommunityIcons name="gesture-tap-button" size={13} color="#67E8F9" style={{ marginRight: 8 }} />
-              <Text style={styles.visMenuItemLabel}>Drawing Tools</Text>
-            </View>
-            <MaterialCommunityIcons 
-              name={isDrawingToolsVisible ? "checkbox-marked" : "checkbox-blank-outline"} 
-              size={14} 
-              color={isDrawingToolsVisible ? '#67E8F9' : '#94A3B8'} 
-            />
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={styles.visMenuItem}
-            onPress={() => setIsMissionOpsVisible?.(!isMissionOpsVisible)}
-            activeOpacity={0.7}
-          >
-            <View style={styles.visMenuItemContent}>
-              <MaterialCommunityIcons name="rocket-launch" size={13} color="#67E8F9" style={{ marginRight: 8 }} />
-              <Text style={styles.visMenuItemLabel}>Mission Control</Text>
-            </View>
-            <MaterialCommunityIcons 
-              name={isMissionOpsVisible ? "checkbox-marked" : "checkbox-blank-outline"} 
-              size={14} 
-              color={isMissionOpsVisible ? '#67E8F9' : '#94A3B8'} 
-            />
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={styles.visMenuItem}
-            onPress={() => setIsStatisticsVisible?.(!isStatisticsVisible)}
-            activeOpacity={0.7}
-          >
-            <View style={styles.visMenuItemContent}>
-              <MaterialCommunityIcons name="chart-bar" size={13} color="#67E8F9" style={{ marginRight: 8 }} />
-              <Text style={styles.visMenuItemLabel}>Mission Stats</Text>
-            </View>
-            <MaterialCommunityIcons 
-              name={isStatisticsVisible ? "checkbox-marked" : "checkbox-blank-outline"} 
-              size={14} 
-              color={isStatisticsVisible ? '#67E8F9' : '#94A3B8'} 
-            />
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={styles.visMenuItem}
-            onPress={() => setIsBottomTableVisible?.(!isBottomTableVisible)}
-            activeOpacity={0.7}
-          >
-            <View style={styles.visMenuItemContent}>
-              <MaterialCommunityIcons name="table-large" size={13} color="#67E8F9" style={{ marginRight: 8 }} />
-              <Text style={styles.visMenuItemLabel}>Waypoints Table</Text>
-            </View>
-            <MaterialCommunityIcons
-              name={isBottomTableVisible ? "checkbox-marked" : "checkbox-blank-outline"}
-              size={14}
-              color={isBottomTableVisible ? '#67E8F9' : '#94A3B8'}
-            />
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={styles.visMenuItem}
-            onPress={() => setIsRobotPositionVisible?.(!isRobotPositionVisible)}
-            activeOpacity={0.7}
-          >
-            <View style={styles.visMenuItemContent}>
-              <MaterialCommunityIcons name="robot" size={13} color="#67E8F9" style={{ marginRight: 8 }} />
-              <Text style={styles.visMenuItemLabel}>Robot Position</Text>
-            </View>
-            <MaterialCommunityIcons
-              name={isRobotPositionVisible ? "checkbox-marked" : "checkbox-blank-outline"}
-              size={14}
-              color={isRobotPositionVisible ? '#67E8F9' : '#94A3B8'}
-            />
-          </TouchableOpacity>
+          <View style={styles.visMenuList}>
+            {widgetMenuItems.map((option) => (
+              <TouchableOpacity
+                key={option.key}
+                style={[
+                  styles.visMenuItem,
+                  option.selected && styles.visMenuItemSelected,
+                ]}
+                onPress={option.onToggle}
+                activeOpacity={0.7}
+              >
+                <MaterialCommunityIcons
+                  name={option.icon}
+                  size={18}
+                  color={option.selected ? '#67E8F9' : '#94A3B8'}
+                  style={styles.visMenuItemIcon}
+                />
+                <Text
+                  style={[
+                    styles.visMenuItemLabel,
+                    option.selected && styles.visMenuItemLabelSelected,
+                  ]}
+                  numberOfLines={1}
+                >
+                  {option.label}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </View>
         </View>
       )}
 
@@ -1733,7 +1850,8 @@ export const PathPlanMap: React.FC<Props> = ({
               </Text>
             </TouchableOpacity>
           )}
-          {onInsertWaypoint && (
+          {onInsertWaypoint && roverPosition &&
+            Number.isFinite(roverPosition.lat) && Number.isFinite(roverPosition.lon) && (
             <TouchableOpacity
               onPress={() => {
                 onInsertWaypoint(contextMenu.waypointId, {
@@ -1984,39 +2102,56 @@ const styles = StyleSheet.create({
   },
   visDropdownMenu: {
     position: 'absolute',
-    width: 190,
+    left: PATH_PLAN_WIDGET_MENU_LEFT,
+    top: PATH_PLAN_WIDGET_MENU_TOP,
+    width: PATH_PLAN_WIDGET_MENU_WIDTH,
+    height: PATH_PLAN_WIDGET_MENU_HEIGHT,
     backgroundColor: '#07111be6',
     borderWidth: 1,
     borderColor: 'rgba(103, 232, 249, 0.15)',
-    borderRadius: 8,
-    padding: 10,
-    gap: 6,
+    borderRadius: 12,
+    padding: 16,
     elevation: 8,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.35,
-    shadowRadius: 6,
+    shadowRadius: 8,
   },
   visDropdownTitle: {
     color: '#67E8F9',
-    fontSize: 8,
+    fontSize: 9,
     fontWeight: '700',
-    letterSpacing: 1,
-    marginBottom: 4,
+    letterSpacing: 0.5,
+    paddingBottom: 10,
+  },
+  visMenuList: {
+    flex: 1,
+    gap: 8,
   },
   visMenuItem: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingVertical: 5,
+    minHeight: 42,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(103, 232, 249, 0.1)',
+    backgroundColor: 'rgba(8, 16, 26, 0.9)',
+    paddingHorizontal: 12,
   },
-  visMenuItemContent: {
-    flexDirection: 'row',
-    alignItems: 'center',
+  visMenuItemSelected: {
+    borderColor: 'rgba(103, 232, 249, 0.55)',
+    backgroundColor: 'rgba(103, 232, 249, 0.14)',
+  },
+  visMenuItemIcon: {
+    marginRight: 10,
   },
   visMenuItemLabel: {
-    color: '#E5F1FF',
-    fontSize: 10,
-    fontWeight: '500',
+    flex: 1,
+    color: '#94A3B8',
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  visMenuItemLabelSelected: {
+    color: '#67E8F9',
   },
 });

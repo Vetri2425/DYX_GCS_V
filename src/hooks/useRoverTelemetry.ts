@@ -35,6 +35,7 @@ import { AUTH_ENABLED, isPx4DxpEnabled } from '../config/featureFlags';
 import { isPx4Payload, toRoverTelemetry, mergeMissionStatus } from '../adapters/px4TelemetryAdapter';
 import { toNetworkData } from '../adapters/px4NetworkAdapter';
 import { rtkStatusToEnvelope } from '../adapters/px4RtkStatusAdapter';
+import { toRtkUiState } from '../adapters/px4RtkUiStateAdapter';
 import { normalizePx4Mode } from '../adapters/px4ModeAdapter';
 import { PX4_SYSTEM, PX4_TELEMETRY, PX4_RTK } from '../config/px4Endpoints';
 import type { Px4HealthzResponse } from '../types/px4/telemetry';
@@ -953,6 +954,33 @@ export function useRoverTelemetry(): UseRoverTelemetryResult {
     if (envelope.rtk_stream_active !== undefined) {
       next.rtk_stream_active = envelope.rtk_stream_active;
     }
+    if (envelope.rtk_ui_state !== undefined) {
+      next.rtk_ui_state = envelope.rtk_ui_state;
+    }
+    if (envelope.measured_speed_m_s !== undefined) {
+      next.measured_speed_m_s = envelope.measured_speed_m_s;
+    }
+    if (envelope.along_track_speed_mps !== undefined) {
+      next.along_track_speed_mps = envelope.along_track_speed_mps;
+    }
+    if (envelope.cross_track_speed_mps !== undefined) {
+      next.cross_track_speed_mps = envelope.cross_track_speed_mps;
+    }
+    if (envelope.joystick_state !== undefined) {
+      next.joystick_state = envelope.joystick_state;
+    }
+    if (envelope.joystick_active !== undefined) {
+      next.joystick_active = envelope.joystick_active;
+    }
+    if (envelope.joystick_last_valid_cmd_age_ms !== undefined) {
+      next.joystick_last_valid_cmd_age_ms = envelope.joystick_last_valid_cmd_age_ms;
+    }
+    if (envelope.joystick_stop_reason !== undefined) {
+      next.joystick_stop_reason = envelope.joystick_stop_reason;
+    }
+    if (envelope.control_owner !== undefined) {
+      next.control_owner = envelope.control_owner;
+    }
 
     next.lastMessageTs = envelope.timestamp ?? Date.now();
 
@@ -993,6 +1021,17 @@ export function useRoverTelemetry(): UseRoverTelemetryResult {
     if (envelope.mission_state !== undefined) changed = changed || prev.mission_state !== next.mission_state;
     if (envelope.rpp_state_name !== undefined) changed = changed || prev.rpp_state_name !== next.rpp_state_name;
     if (envelope.rtk_stream_active !== undefined) changed = changed || prev.rtk_stream_active !== next.rtk_stream_active;
+    if (envelope.rtk_ui_state !== undefined) changed = changed || prev.rtk_ui_state !== next.rtk_ui_state;
+    if (envelope.measured_speed_m_s !== undefined) changed = changed || prev.measured_speed_m_s !== next.measured_speed_m_s;
+    if (envelope.along_track_speed_mps !== undefined) changed = changed || prev.along_track_speed_mps !== next.along_track_speed_mps;
+    if (envelope.cross_track_speed_mps !== undefined) changed = changed || prev.cross_track_speed_mps !== next.cross_track_speed_mps;
+    if (envelope.joystick_state !== undefined) changed = changed || prev.joystick_state !== next.joystick_state;
+    if (envelope.joystick_active !== undefined) changed = changed || prev.joystick_active !== next.joystick_active;
+    if (envelope.joystick_last_valid_cmd_age_ms !== undefined) {
+      changed = changed || prev.joystick_last_valid_cmd_age_ms !== next.joystick_last_valid_cmd_age_ms;
+    }
+    if (envelope.joystick_stop_reason !== undefined) changed = changed || prev.joystick_stop_reason !== next.joystick_stop_reason;
+    if (envelope.control_owner !== undefined) changed = changed || prev.control_owner !== next.control_owner;
 
     if (!changed) {
       // No meaningful change; update timestamps but skip dispatch to prevent loops
@@ -1070,6 +1109,8 @@ export function useRoverTelemetry(): UseRoverTelemetryResult {
         if (rtkEnv.rtk_stream_active !== undefined) {
           envelope.rtk_stream_active = rtkEnv.rtk_stream_active;
         }
+        // Derive the discrete RTK UI state (off/starting/streaming/float/fixed/error).
+        envelope.rtk_ui_state = toRtkUiState(rtkRaw);
       }
       if (healthRaw) {
         envelope.fcu_connected = Boolean(healthRaw.fcu_connected);
@@ -1129,6 +1170,14 @@ export function useRoverTelemetry(): UseRoverTelemetryResult {
         fcu_connected: adapted.fcu_connected,
         gps_fix_name: adapted.gps_fix_name,
         rpp_state_name: adapted.rpp_state_name,
+        measured_speed_m_s: adapted.measured_speed_m_s,
+        along_track_speed_mps: adapted.along_track_speed_mps,
+        cross_track_speed_mps: adapted.cross_track_speed_mps,
+        joystick_state: adapted.joystick_state,
+        joystick_active: adapted.joystick_active,
+        joystick_last_valid_cmd_age_ms: adapted.joystick_last_valid_cmd_age_ms,
+        joystick_stop_reason: adapted.joystick_stop_reason,
+        control_owner: adapted.control_owner,
       });
       patchRobotStatusDebug({
         lastSource: 'rest_telemetry',
@@ -1476,6 +1525,14 @@ export function useRoverTelemetry(): UseRoverTelemetryResult {
             fcu_connected: adapted.fcu_connected,
             gps_fix_name: adapted.gps_fix_name,
             rpp_state_name: adapted.rpp_state_name,
+            measured_speed_m_s: adapted.measured_speed_m_s,
+            along_track_speed_mps: adapted.along_track_speed_mps,
+            cross_track_speed_mps: adapted.cross_track_speed_mps,
+            joystick_state: adapted.joystick_state,
+            joystick_active: adapted.joystick_active,
+            joystick_last_valid_cmd_age_ms: adapted.joystick_last_valid_cmd_age_ms,
+            joystick_stop_reason: adapted.joystick_stop_reason,
+            control_owner: adapted.control_owner,
           };
           applyEnvelopeRef.current(envelope);
 

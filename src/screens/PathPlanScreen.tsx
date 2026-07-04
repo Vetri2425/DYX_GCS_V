@@ -3,7 +3,7 @@ import { View, StyleSheet, SafeAreaView, StatusBar, Alert, Modal, ScrollView, To
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { LegendList } from '@legendapp/list';
 import { colors } from '../theme/colors';
-import { PathPlanWaypoint } from '../types/pathplan';
+import { DxfMapEntity, PathPlanWaypoint } from '../types/pathplan';
 import { useRover } from '../context/RoverContext';
 import { PathSequenceSidebar } from '../components/pathplan/PathSequenceSidebar';
 import MissionOpsPanel from '../components/pathplan/MissionOpsPanel';
@@ -16,9 +16,10 @@ import { EditWaypointDialog } from '../components/pathplan/EditWaypointDialog';
 import { CircleGeneratorDialog } from '../components/pathplan/CircleGeneratorDialog';
 import { SurveyGridDialog } from '../components/pathplan/SurveyGridDialog';
 import { TextAnnotationDialog } from '../components/pathplan/TextAnnotationDialog';
-import { CADDrawingCanvas } from '../components/pathplan/CADDrawingCanvas';
+import { CADDrawingCanvas as CADDrawingCanvasNew } from '../components/cad/CADDrawingCanvas';
+import type { CADEntity } from '../core/cad';
+import { entitiesToDXF } from '../core/cad';
 import { ManualPathConnectionCanvas } from '../components/pathplan/ManualPathConnectionCanvas';
-import { ReverseWaypointsDialog } from '../components/pathplan/ReverseWaypointsDialog';
 import { CornerExtensionDialog } from '../components/pathplan/CornerExtensionDialog';
 import { SolarTableDialog } from '../components/pathplan/SolarTableDialog';
 import { TemplateManagerDialog } from '../components/pathplan/TemplateManagerDialog';
@@ -30,6 +31,7 @@ import { FailsafeModeSelector } from '../components/pathplan/FailsafeModeSelecto
 import { FailsafeStrictPopup } from '../components/pathplan/FailsafeStrictPopup';
 import { FailsafeRelaxNotification } from '../components/pathplan/FailsafeRelaxNotification';
 import { MapVisualizationControls, MapVisualization } from '../components/pathplan/MapVisualizationControls';
+import { Toast, ToastType } from '../components/shared/Toast';
 import { vincentyDistance, haversineDistance, recalculateWaypointDistances, calcBearing } from '../utils/missionCalculator';
 import { textToWaypointPath } from '../utils/textToPath';
 import * as DocumentPicker from 'expo-document-picker';
@@ -48,13 +50,19 @@ import {
 } from '../utils/waypointValidator';
 import { CADAlignmentCanvas } from '../components/pathplan/CADAlignmentCanvas';
 import { useCADAlignment } from '../application/hooks/useCADAlignment';
-import { GeoPoint, Point2D } from '../core/geometry/types';
+import { GeoPoint } from '../core/geometry/types';
 import { parseCSVChunked } from '../utils/chunkedParser';
 import { parseKML as coreParseKML } from '../core/parsers/kmlParser';
 import { convertToPathPlanWaypoints } from '../core/parsers/adapter';
 import { useWaypointHistory } from '../hooks/pathplan/useWaypointHistory';
 import { useVerifiedMissionUpload } from '../hooks/useVerifiedMissionUpload';
 import { buildValidationErrorMessage } from '../utils/pathplanToVerifiedWaypoints';
+import {
+  importDXFAsEntities,
+  importDXFAsWaypoints,
+  prepareDXFImport,
+  PreparedDXFImport,
+} from '../application/services/dxfImportService';
 
 // ─── Virtualized preview row (memoized for LegendList recycling) ────────────
 const PreviewRow = memo(({ item }: { item: PathPlanWaypoint }) => (
@@ -184,6 +192,7 @@ export default function PathPlanScreen({
   const exportInProgressRef = useRef(false);
   // Cleanup timers
   const timersRef = useRef<Set<ReturnType<typeof setTimeout>>>(new Set());
+  const pathPlanToastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Cleanup helper for timers
   const addTimer = (timer: ReturnType<typeof setTimeout>) => {
@@ -336,6 +345,12 @@ export default function PathPlanScreen({
   const [activePanel, setActivePanel] = useState<ActivePanel>(null);
   const isVisMenuOpen    = activePanel === 'settings';
   const isWidgetMenuOpen = activePanel === 'widget';
+  const [pathPlanToast, setPathPlanToast] = useState<{
+    visible: boolean;
+    type: ToastType;
+    title?: string;
+    message?: string;
+  }>({ visible: false, type: 'info' });
   // Setters kept for compatibility with PathPlanMap which receives them as props
   const setIsVisMenuOpen    = (v: boolean) => setActivePanel(v ? 'settings' : null);
   const setIsWidgetMenuOpen = (v: boolean) => setActivePanel(v ? 'widget'   : null);
@@ -388,6 +403,9 @@ export default function PathPlanScreen({
   const [showSurveyGridDialog, setShowSurveyGridDialog] = useState(false);
   const [showTextDialog, setShowTextDialog] = useState(false);
   const [showCADCanvas, setShowCADCanvas] = useState(false);
+  const [cadEntities, setCadEntities] = useState<CADEntity[]>([]);
+  const [dxfMapEntities, setDxfMapEntities] = useState<DxfMapEntity[]>([]);
+  const [pendingDXFImport, setPendingDXFImport] = useState<PreparedDXFImport | null>(null);
   const [showPrecisePathDialog, setShowPrecisePathDialog] = useState(false);
   const [precisePathPreview, setPrecisePathPreview] = useState<PathPlanWaypoint[] | null>(null);
 
@@ -423,7 +441,6 @@ export default function PathPlanScreen({
 
   const [gpsInputA, setGpsInputA] = useState<{ lat: string; lon: string }>({ lat: '', lon: '' });
   const [gpsInputB, setGpsInputB] = useState<{ lat: string; lon: string }>({ lat: '', lon: '' });
-  const [showReverseDialog, setShowReverseDialog] = useState(false);
   const [showCornerExtensionDialog, setShowCornerExtensionDialog] = useState(false);
   const [showSolarTableDialog, setShowSolarTableDialog] = useState(false);
   const [showTemplateManager, setShowTemplateManager] = useState(false);
@@ -717,7 +734,7 @@ export default function PathPlanScreen({
 
     // Check if waypoint is already in the connection list
     if (manualPathConnections.includes(id)) {
-      Alert.alert('Already Connected', `Marking point #${id} is already in your path.`);
+      showPathPlanToast('info', 'Already Connected', `Marking point #${id} is already in your path.`);
       return;
     }
 
@@ -727,7 +744,7 @@ export default function PathPlanScreen({
 
   const openManualConnection = useCallback(() => {
     if (waypoints.length < 2) {
-      Alert.alert('Manual Connect', 'Add at least 2 marking points before connecting a path.');
+      showPathPlanToast('error', 'Manual Connect', 'Add at least 2 marking points before connecting a path.');
       return;
     }
     setActiveDrawingTool(null);
@@ -743,7 +760,7 @@ export default function PathPlanScreen({
       .filter(Boolean) as PathPlanWaypoint[];
 
     if (orderedWaypoints.length < 2) {
-      Alert.alert('Connection Required', 'Please connect at least 2 marking points.');
+      showPathPlanToast('error', 'Connection Required', 'Please connect at least 2 marking points.');
       return;
     }
 
@@ -759,7 +776,7 @@ export default function PathPlanScreen({
     setManualPathConnections([]);
     setIsConnectingPath(false);
     setShowManualConnectionCanvas(false);
-    Alert.alert('Manual Connect Complete', `Connected ${reordered.length} marking points.`);
+    showPathPlanToast('success', 'Manual Connect Complete', `Connected ${reordered.length} marking points.`);
   }, [recordAndApply, setShowManualConnectionCanvas, waypoints]);
 
   const handleManualConnectionCancel = useCallback(() => {
@@ -841,7 +858,7 @@ export default function PathPlanScreen({
     }
 
     if (coords.length === 0) {
-      Alert.alert('No Marking Points', 'No coordinates to add.');
+      showPathPlanToast('error', 'No Marking Points', 'No coordinates to add.');
       return;
     }
 
@@ -873,7 +890,7 @@ export default function PathPlanScreen({
     recordAndApply([...waypoints, ...newWaypoints]);
     setActiveDrawingTool(null); // Clear active tool after adding waypoints
 
-    Alert.alert('Marking Points Added', `✓ ${newWaypoints.length} marking points added to mission`);
+    showPathPlanToast('success', 'Marking Points Added', `${newWaypoints.length} marking points added to mission`);
   };
 
   const handleTextAnnotation = (text: string, alignment: 'left' | 'center' | 'right', letterWidth: number, letterHeight: number, letterSpacing: number) => {
@@ -891,7 +908,7 @@ export default function PathPlanScreen({
     });
 
     if (textCoords.length === 0) {
-      Alert.alert('No Marking Points', 'Unable to generate marking points for the given text.');
+      showPathPlanToast('error', 'No Marking Points', 'Unable to generate marking points for the given text.');
       return;
     }
 
@@ -932,7 +949,7 @@ export default function PathPlanScreen({
     }
 
     recordAndApply([...waypoints, ...newWaypoints]);
-    Alert.alert('Text Path Created', `${newWaypoints.length} marking points generated for "${text}"`);
+    showPathPlanToast('success', 'Text Path Created', `${newWaypoints.length} marking points generated for "${text}"`);
   };
 
   // Handle freehand drawing completion from DrawingCanvas
@@ -989,9 +1006,9 @@ export default function PathPlanScreen({
     if (newWaypoints.length > 0) {
       if (DEBUG_LOG) console.log('[PathPlan] Adding', newWaypoints.length, 'waypoints from drawing');
       recordAndApply([...waypoints, ...newWaypoints]);
-      Alert.alert('Drawing Complete', `✓ ${newWaypoints.length} marking points created from your drawing`);
+      showPathPlanToast('success', 'Drawing Complete', `${newWaypoints.length} marking points created from your drawing`);
     } else {
-      Alert.alert('No Marking Points', 'Drawing did not generate any marking points. Try drawing a longer path.');
+      showPathPlanToast('error', 'No Marking Points', 'Drawing did not generate any marking points. Try drawing a longer path.');
     }
 
     setIsDrawingMode(false);
@@ -1018,6 +1035,39 @@ export default function PathPlanScreen({
     }));
   };
 
+  const showPathPlanToast = (
+    type: ToastType,
+    title: string,
+    message?: string,
+    duration = 3000,
+  ) => {
+    if (pathPlanToastTimerRef.current) {
+      clearTimer(pathPlanToastTimerRef.current);
+      pathPlanToastTimerRef.current = null;
+    }
+
+    setPathPlanToast({ visible: true, type, title, message });
+    const timer = setTimeout(() => {
+      if (mountedRef.current) {
+        setPathPlanToast(prev => ({ ...prev, visible: false }));
+      }
+      if (pathPlanToastTimerRef.current) {
+        timersRef.current.delete(pathPlanToastTimerRef.current);
+        pathPlanToastTimerRef.current = null;
+      }
+    }, duration);
+    pathPlanToastTimerRef.current = timer;
+    addTimer(timer);
+  };
+
+  const dismissPathPlanToast = () => {
+    if (pathPlanToastTimerRef.current) {
+      clearTimer(pathPlanToastTimerRef.current);
+      pathPlanToastTimerRef.current = null;
+    }
+    setPathPlanToast(prev => ({ ...prev, visible: false }));
+  };
+
   const reverseWaypointOrder = useCallback((inputWaypoints: PathPlanWaypoint[]): PathPlanWaypoint[] => {
     const reversed = [...inputWaypoints].reverse().map((wp, index) => ({
       ...wp,
@@ -1032,9 +1082,15 @@ export default function PathPlanScreen({
   }, [reverseWaypointOrder]);
 
   const handleReverseAllWaypoints = useCallback(() => {
+    if (waypoints.length < 2) {
+      showPathPlanToast('error', 'Reverse Path', 'At least 2 waypoints are required.');
+      return;
+    }
+
     const reversed = reverseWaypointOrder(waypoints);
     recordAndApply(reversed);
-  }, [reverseWaypointOrder, waypoints, updateWaypoints]);
+    showPathPlanToast('success', 'Path Reversed', `${waypoints.length} waypoint coordinates reversed.`);
+  }, [reverseWaypointOrder, waypoints, recordAndApply, showPathPlanToast]);
 
   // Corner extension preview
   const [cornerExtensionOptions, setCornerExtensionOptions] = useState<CornerExtensionOptions>(DEFAULT_EXTENSION_OPTIONS);
@@ -1050,17 +1106,18 @@ export default function PathPlanScreen({
 
   const handleApplyCornerExtension = useCallback((options: CornerExtensionOptions) => {
     if (waypoints.length < 3) {
-      Alert.alert('Not Enough Waypoints', 'At least 3 waypoints are required for corner extension.');
+      showPathPlanToast('error', 'Not Enough Waypoints', 'At least 3 waypoints are required for corner extension.');
       return;
     }
     const extended = generateCornerExtensionWaypoints(waypoints, options);
     if (extended.length === waypoints.length) {
-      Alert.alert('No Corners Detected', 'No corners above the threshold were found. No extension points added.');
+      showPathPlanToast('info', 'No Corners Detected', 'No corners above the threshold were found. No extension points added.');
       return;
     }
     recordAndApply(extended);
     setShowCornerExtensionDialog(false);
-    Alert.alert(
+    showPathPlanToast(
+      'success',
       'Corner Extension Applied',
       `${extended.length - waypoints.length} extension point(s) added. Total: ${extended.length} waypoints.`
     );
@@ -1260,23 +1317,21 @@ export default function PathPlanScreen({
     return waypoints;
   };
 
-  // ── DXF import is now handled via CAD Mode workflow ──────
-  // The old parseDXF function that directly converted DXF
-  // coordinates to GPS waypoints has been REMOVED.
-  //
-  // New flow:
-  //   1. DXF → parseDXF() → CADModel (CAD space only)
-  //   2. User selects 2 CAD points on canvas
-  //   3. User enters 2 GPS points
-  //   4. georeferenceCAD() → GeoEntity[] (lat/lon)
-  //   5. geoEntitiesToWaypoints() → PathPlanWaypoint[]
-  //
-  // See: useCADAlignment hook, CADAlignmentCanvas component
-
   const handleDXFUpload = (content: string, fileName: string) => {
-    if (DEBUG_LOG) console.log('[PathPlan] DXF file selected:', fileName, '— entering CAD mode');
-    cadAlignment.loadDXF(content);
-    setIsCADMode(true);
+    try {
+      if (DEBUG_LOG) console.log('[PathPlan] DXF file selected:', fileName, '— preparing import choices');
+      const prepared = prepareDXFImport(content, fileName);
+      setPendingDXFImport(prepared);
+      setIsCADMode(false);
+    } catch (error) {
+      console.error('[PathPlan] DXF parse failed:', error);
+      showPathPlanToast(
+        'error',
+        'DXF Import Failed',
+        error instanceof Error ? error.message : 'Unable to parse this DXF file.',
+        5000
+      );
+    }
   };
 
   const calculateDistances = (waypoints: PathPlanWaypoint[], useFast = true): PathPlanWaypoint[] => {
@@ -1294,6 +1349,71 @@ export default function PathPlanScreen({
       );
       return { ...wp, distance: dist };
     });
+  };
+
+  const getDXFPlacementOrigin = (): GeoPoint | null => {
+    const lat = roverPosition?.lat ?? telemetry?.global?.lat;
+    const lon = roverPosition?.lng ?? telemetry?.global?.lon;
+
+    if (Number.isFinite(lat) && Number.isFinite(lon)) {
+      return {
+        lat: Number(lat),
+        lon: Number(lon),
+        alt: telemetry?.global?.alt_rel ?? 0,
+      };
+    }
+
+    return null;
+  };
+
+  const applyPreparedDXFAsWaypoints = (prepared: PreparedDXFImport) => {
+    const imported = importDXFAsWaypoints(prepared, getDXFPlacementOrigin());
+    if (imported.length === 0) {
+      showPathPlanToast('error', 'No Waypoints', 'No waypoint-capable geometry was found in this DXF.');
+      return;
+    }
+
+    const withDistances = calculateDistances(
+      imported.map(wp => ({
+        ...wp,
+        mark: globalServoEnabled,
+      }))
+    );
+
+    setPendingDXFImport(null);
+    setDxfMapEntities([]);
+
+    if (pathAssignmentMode === 'manual') {
+      recordAndApply(withDistances);
+      setManualPathConnections([]);
+      setShowManualConnectionCanvas(true);
+      showPathPlanToast('info', 'DXF Waypoints Imported', `${withDistances.length} marking points imported. Connect them on the canvas.`, 5000);
+    } else {
+      recordAndApply(withDistances);
+      showPathPlanToast('success', 'DXF Waypoints Imported', `${withDistances.length} marking points placed near the rover.`);
+    }
+  };
+
+  const handleImportDXFAsWaypoints = () => {
+    if (!pendingDXFImport) return;
+    applyPreparedDXFAsWaypoints(pendingDXFImport);
+  };
+
+  const applyPreparedDXFAsEntities = (prepared: PreparedDXFImport) => {
+    const importedEntities = importDXFAsEntities(prepared, getDXFPlacementOrigin());
+    if (importedEntities.length === 0) {
+      showPathPlanToast('error', 'No Entities', 'No renderable DXF entities were found.');
+      return;
+    }
+
+    setDxfMapEntities(importedEntities);
+    setPendingDXFImport(null);
+    showPathPlanToast('success', 'DXF Entities Imported', `${importedEntities.length} shapes placed near the rover.`);
+  };
+
+  const handleImportDXFAsEntities = () => {
+    if (!pendingDXFImport) return;
+    applyPreparedDXFAsEntities(pendingDXFImport);
   };
 
   // Helper function to get MIME type for each export format
@@ -1320,7 +1440,7 @@ export default function PathPlanScreen({
     // Prevent re-entrant exports
     if (exportInProgressRef.current) {
       console.log('[PathPlan] Export already in progress, ignoring request');
-      Alert.alert('Export In Progress', 'Please wait for the current export to complete.');
+      showPathPlanToast('info', 'Export In Progress', 'Please wait for the current export to complete.');
       return;
     }
 
@@ -1409,7 +1529,7 @@ export default function PathPlanScreen({
 
       if (saved) {
         if (DEBUG_LOG) console.log('[PathPlan] File saved/shared successfully');
-        Alert.alert('Export Successful', `Mission exported as ${filename}`);
+        showPathPlanToast('success', 'Export Successful', `Mission exported as ${filename}`);
       } else {
         // User cancelled - no action needed
         if (DEBUG_LOG) console.log('[PathPlan] User cancelled save operation');
@@ -1476,10 +1596,11 @@ export default function PathPlanScreen({
       }
 
       if (wps.length === 0) {
-        Alert.alert(
+        showPathPlanToast(
+          'info',
           'No Mission',
-          'No marking points available on controller.\n\nPlease upload a mission first or create marking points manually.',
-          [{ text: 'OK' }]
+          'No marking points available on controller. Upload a mission first or create marking points manually.',
+          5000
         );
         return;
       }
@@ -1536,10 +1657,11 @@ export default function PathPlanScreen({
       recordAndApply(withDistances);
 
       const warningMsg = errors.length > 0 ? `\n\nWarning: ${errors.length} waypoints had errors and were skipped.` : '';
-      Alert.alert(
+      showPathPlanToast(
+        errors.length > 0 ? 'info' : 'success',
         'Mission Loaded',
         `Successfully loaded ${withDistances.length} marking points from controller.${warningMsg}`,
-        [{ text: 'OK' }]
+        errors.length > 0 ? 5000 : 3000
       );
 
       console.log(`[PathPlan] Loaded ${withDistances.length} waypoints from controller`);
@@ -1581,10 +1703,11 @@ export default function PathPlanScreen({
 
     try {
       if (waypoints.length === 0) {
-        Alert.alert(
+        showPathPlanToast(
+          'error',
           'No Marking Points',
-          'No marking points to load to controller.\n\nPlease add marking points first by clicking on the map, importing a file, or using drawing tools.',
-          [{ text: 'OK' }]
+          'Add marking points first by clicking the map, importing a file, or using drawing tools.',
+          5000
         );
         return;
       }
@@ -1638,10 +1761,10 @@ export default function PathPlanScreen({
           }
 
           // PersistentStorage clearing is handled inside useVerifiedMissionUpload.
-          Alert.alert(
+          showPathPlanToast(
+            'success',
             'Upload Successful',
-            `Mission loaded successfully!\n\n${result.total_targets} marking points sent to controller.`,
-            [{ text: 'OK' }]
+            `${result.total_targets} marking points sent to controller.`
           );
         } else {
           // Validation or server rejection — show the specific error message.
@@ -1740,7 +1863,7 @@ export default function PathPlanScreen({
         if (DEBUG_LOG) console.log('[PathPlan] Using old DocumentPicker format:', { uri, name });
       } else {
         if (DEBUG_LOG) console.log('[PathPlan] Unexpected DocumentPicker response format');
-        Alert.alert('Upload Error', 'Unable to read file selection. Please try again.');
+        showPathPlanToast('error', 'Upload Error', 'Unable to read file selection. Please try again.');
         return;
       }
 
@@ -1748,9 +1871,11 @@ export default function PathPlanScreen({
 
       // Validate file extension
       if (!validateFileExtension(name)) {
-        Alert.alert(
+        showPathPlanToast(
+          'error',
           'Unsupported File Type',
-          `Please select a valid file type: ${ACCEPTED_EXTENSIONS.join(', ')}`
+          `Select a valid file type: ${ACCEPTED_EXTENSIONS.join(', ')}`,
+          5000
         );
         return;
       }
@@ -1770,16 +1895,18 @@ export default function PathPlanScreen({
         if (DEBUG_LOG) console.log('[PathPlan] File content length:', content?.length ?? 0);
       } catch (readError) {
         console.error('[PathPlan] Failed to read file:', readError);
-        Alert.alert(
+        showPathPlanToast(
+          'error',
           'File Read Error',
-          `Could not read file: ${readError instanceof Error ? readError.message : String(readError)}\n\nPlease try selecting the file again.`
+          `Could not read file: ${readError instanceof Error ? readError.message : String(readError)}`,
+          5000
         );
         return;
       }
 
       // Validate content before parsing
       if (!content || content.length === 0) {
-        Alert.alert('Empty File', 'The selected file appears to be empty.');
+        showPathPlanToast('error', 'Empty File', 'The selected file appears to be empty.');
         return;
       }
 
@@ -1821,7 +1948,7 @@ export default function PathPlanScreen({
       if (DEBUG_LOG) console.log('[PathPlan] Parsed waypoints:', parsed.length, parsed.slice(0, 3));
 
       if (!parsed || parsed.length === 0) {
-        Alert.alert('Import Failed', 'No valid marking points were found in the file.');
+        showPathPlanToast('error', 'Import Failed', 'No valid marking points were found in the file.');
         return;
       }
 
@@ -1903,7 +2030,7 @@ export default function PathPlanScreen({
     const lonB = parseFloat(gpsInputB.lon);
 
     if (isNaN(latA) || isNaN(lonA) || isNaN(latB) || isNaN(lonB)) {
-      Alert.alert('Invalid GPS', 'Please enter valid latitude and longitude values for both points.');
+      showPathPlanToast('error', 'Invalid GPS', 'Enter valid latitude and longitude values for both points.');
       return;
     }
 
@@ -1921,7 +2048,7 @@ export default function PathPlanScreen({
     const waypoints = cadAlignment.computedWaypoints;
 
     if (waypoints.length === 0) {
-      Alert.alert('No Waypoints', 'No convertible entities found. The DXF may contain only unsupported entity types.');
+      showPathPlanToast('error', 'No Waypoints', 'No convertible entities found. The DXF may contain only unsupported entity types.');
       return;
     }
 
@@ -1929,14 +2056,15 @@ export default function PathPlanScreen({
       recordAndApply(waypoints);
       setManualPathConnections([]);
       setShowManualConnectionCanvas(true);
-      Alert.alert(
+      showPathPlanToast(
+        'info',
         '✏️ Manual Path Mode',
         `${waypoints.length} marking points imported from CAD. Connect them on the canvas.`,
-        [{ text: 'OK' }]
+        5000
       );
     } else {
       recordAndApply(waypoints);
-      Alert.alert('✓ CAD Import Complete', `Successfully georeferenced ${waypoints.length} marking points.`);
+      showPathPlanToast('success', 'CAD Import Complete', `Successfully georeferenced ${waypoints.length} marking points.`);
     }
 
     // Exit CAD mode
@@ -2236,6 +2364,7 @@ export default function PathPlanScreen({
           <View style={styles.fullscreenMap}>
             <PathPlanMap
               waypoints={displayedWaypoints}
+              dxfEntities={dxfMapEntities}
               onMapPress={showPrecisePathDialog ? undefined : handleMapPress}
               onWaypointDrag={showPrecisePathDialog ? undefined : handleWaypointDrag}
               onWaypointClick={showPrecisePathDialog ? undefined : handleWaypointClick}
@@ -2278,6 +2407,7 @@ export default function PathPlanScreen({
             <View style={styles.absoluteMapContainer}>
               <PathPlanMap
                 waypoints={displayedWaypoints}
+                dxfEntities={dxfMapEntities}
                 onMapPress={showPrecisePathDialog ? undefined : handleMapPress}
                 onWaypointDrag={showPrecisePathDialog ? undefined : handleWaypointDrag}
                 onWaypointClick={showPrecisePathDialog ? undefined : handleWaypointClick}
@@ -2339,7 +2469,7 @@ export default function PathPlanScreen({
                   onShowTextTool={() => setShowTextDialog(true)}
                   onShowCADDrawing={() => setShowCADCanvas(true)}
                   onShowManualConnection={openManualConnection}
-                  onShowReverseTool={() => setShowReverseDialog(true)}
+                  onShowReverseTool={handleReverseAllWaypoints}
                   onShowCornerExtension={() => setShowCornerExtensionDialog(true)}
                   onShowSurveyGrid={() => setShowSurveyGridDialog(true)}
                   onShowSolarTableTool={() => setShowSolarTableDialog(true)}
@@ -2615,10 +2745,11 @@ export default function PathPlanScreen({
                                 setManualPathConnections([]);
                                 setShowManualConnectionCanvas(true);
                               });
-                              Alert.alert(
+                              showPathPlanToast(
+                                'info',
                                 '✏️ Manual Path Mode',
                                 `${sanitized.length} marking points imported. Connect them on the canvas.`,
-                                [{ text: 'OK' }]
+                                5000
                               );
                             } else {
                               // Auto mode: Sequential import as usual
@@ -2626,7 +2757,7 @@ export default function PathPlanScreen({
                               requestAnimationFrame(() => {
                                 recordAndApply(sanitized);
                               });
-                              Alert.alert('✓ Import Complete', `Successfully imported ${sanitized.length} marking points.`);
+                              showPathPlanToast('success', 'Import Complete', `Successfully imported ${sanitized.length} marking points.`);
                             }
                           }
                         }
@@ -2646,10 +2777,11 @@ export default function PathPlanScreen({
                         setManualPathConnections([]);
                         setShowManualConnectionCanvas(true);
                       });
-                      Alert.alert(
+                      showPathPlanToast(
+                        'info',
                         '✏️ Manual Path Mode',
                         `${sanitized.length} marking points imported. Connect them on the canvas.`,
-                        [{ text: 'OK' }]
+                        5000
                       );
                     } else {
                       // Auto mode: Sequential import as usual
@@ -2658,7 +2790,7 @@ export default function PathPlanScreen({
                       requestAnimationFrame(() => {
                         recordAndApply(sanitized);
                       });
-                      Alert.alert('✓ Import Complete', `Successfully imported ${sanitized.length} marking points.`);
+                      showPathPlanToast('success', 'Import Complete', `Successfully imported ${sanitized.length} marking points.`);
                     }
                   }
                 }
@@ -2754,34 +2886,81 @@ export default function PathPlanScreen({
         }
       />
 
-      {/* CAD Drawing Canvas */}
-      <CADDrawingCanvas
+      <Modal
+        visible={pendingDXFImport != null}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setPendingDXFImport(null)}
+      >
+        <TouchableOpacity
+          style={styles.dxfChoiceOverlay}
+          activeOpacity={1}
+          onPress={() => setPendingDXFImport(null)}
+        >
+          <View style={styles.dxfChoiceCard} onStartShouldSetResponder={() => true}>
+            <View style={styles.dxfChoiceHeader}>
+              <View style={styles.dxfChoiceIcon}>
+                <MaterialCommunityIcons name="file-cad" size={20} color="#67E8F9" />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.dxfChoiceTitle}>DXF Import</Text>
+                <Text style={styles.dxfChoiceSubtitle} numberOfLines={1}>
+                  {pendingDXFImport?.fileName ?? 'drawing.dxf'} · {pendingDXFImport?.model.entities.length ?? 0} entities
+                </Text>
+              </View>
+              <TouchableOpacity style={styles.dxfChoiceClose} onPress={() => setPendingDXFImport(null)} activeOpacity={0.7}>
+                <MaterialCommunityIcons name="close" size={16} color="#94A3B8" />
+              </TouchableOpacity>
+            </View>
+
+            <TouchableOpacity style={styles.dxfChoiceOption} onPress={handleImportDXFAsWaypoints} activeOpacity={0.78}>
+              <MaterialCommunityIcons name="map-marker-path" size={22} color="#67E8F9" />
+              <View style={styles.dxfChoiceOptionText}>
+                <Text style={styles.dxfChoiceOptionTitle}>Import Waypoints</Text>
+                <Text style={styles.dxfChoiceOptionSub}>Convert DXF vertices into mission points near rover.</Text>
+              </View>
+              <MaterialCommunityIcons name="chevron-right" size={20} color="#64748B" />
+            </TouchableOpacity>
+
+            <TouchableOpacity style={styles.dxfChoiceOption} onPress={handleImportDXFAsEntities} activeOpacity={0.78}>
+              <MaterialCommunityIcons name="vector-polyline" size={22} color="#67E8F9" />
+              <View style={styles.dxfChoiceOptionText}>
+                <Text style={styles.dxfChoiceOptionTitle}>Import Entities</Text>
+                <Text style={styles.dxfChoiceOptionSub}>Render DXF lines, arcs, points, and labels as shapes.</Text>
+              </View>
+              <MaterialCommunityIcons name="chevron-right" size={20} color="#64748B" />
+            </TouchableOpacity>
+          </View>
+        </TouchableOpacity>
+      </Modal>
+
+      {/* CAD Drawing Canvas — new world-coordinate SVG engine */}
+      <CADDrawingCanvasNew
         visible={showCADCanvas}
         onClose={() => setShowCADCanvas(false)}
-        onSaveWaypoints={(cadWaypoints) => {
-          // Add waypoints to the mission using PathPlanWaypoint type
-          const newWaypoints: PathPlanWaypoint[] = cadWaypoints.map((wp, index) => ({
-            id: Date.now() + index,
-            lat: wp.lat,
-            lon: wp.lng,
-            alt: 0,
-            distance: 0,
-            block: '',
-            row: '',
-            pile: String(index + 1),
-          }));
-          recordAndApply([...waypoints, ...newWaypoints]);
+        initialEntities={cadEntities}
+        onSaveDXF={(dxfContent, ents, importMode) => {
+          setCadEntities(ents);
+          try {
+            const prepared = prepareDXFImport(dxfContent, 'cad-drawing.dxf');
+            if (importMode === 'waypoints') {
+              applyPreparedDXFAsWaypoints(prepared);
+            } else if (importMode === 'entities') {
+              applyPreparedDXFAsEntities(prepared);
+            } else {
+              setPendingDXFImport(prepared);
+            }
+            console.log('[PathPlan] CAD drawing imported from DXF save', importMode ?? 'pending', ents.length, 'entities,', dxfContent.length, 'chars');
+          } catch (error) {
+            console.error('[PathPlan] CAD drawing DXF preparation failed:', error);
+            showPathPlanToast(
+              'error',
+              'CAD Save Failed',
+              error instanceof Error ? error.message : 'Unable to prepare the drawing for import.',
+              5000
+            );
+          }
         }}
-        currentPosition={roverPosition || { lat: 13.0827, lng: 80.2707 }}
-        onShowSurveyGrid={() => setShowSurveyGridDialog(true)}
-      />
-
-      {/* Reverse Waypoints Dialog */}
-      <ReverseWaypointsDialog
-        visible={showReverseDialog}
-        waypointCount={waypoints.length}
-        onReverse={handleReverseAllWaypoints}
-        onClose={() => setShowReverseDialog(false)}
       />
 
       {/* Corner Extension Dialog */}
@@ -2896,6 +3075,17 @@ export default function PathPlanScreen({
           </View>
         </View>
       )}
+
+      <Toast
+        visible={pathPlanToast.visible}
+        type={pathPlanToast.type}
+        title={pathPlanToast.title}
+        message={pathPlanToast.message}
+        position="bottom-right"
+        style={styles.pathPlanToast}
+        onDismiss={dismissPathPlanToast}
+        showCloseButton
+      />
 
       {/* ── CAD Georeferencing Mode Overlay ─────────────────── */}
       {isCADMode && renderCADModeUI()}
@@ -3209,6 +3399,101 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '500',
     color: '#333',
+  },
+  pathPlanToast: {
+    backgroundColor: '#07111be6',
+    borderColor: 'rgba(103, 232, 249, 0.45)',
+    borderRadius: 12,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    alignItems: 'center',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.35,
+    shadowRadius: 8,
+    elevation: 9,
+  },
+  dxfChoiceOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.24)',
+    justifyContent: 'flex-start',
+    alignItems: 'flex-start',
+    paddingLeft: 84,
+    paddingTop: 221,
+  },
+  dxfChoiceCard: {
+    width: 320,
+    backgroundColor: 'rgba(7, 17, 27, 0.94)',
+    borderWidth: 1,
+    borderColor: 'rgba(103, 232, 249, 0.32)',
+    borderRadius: 12,
+    padding: 12,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.35,
+    shadowRadius: 12,
+    elevation: 12,
+  },
+  dxfChoiceHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginBottom: 10,
+  },
+  dxfChoiceIcon: {
+    width: 34,
+    height: 34,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(103, 232, 249, 0.12)',
+    borderWidth: 1,
+    borderColor: 'rgba(103, 232, 249, 0.24)',
+  },
+  dxfChoiceTitle: {
+    color: '#E5F1FF',
+    fontSize: 13,
+    fontWeight: '800',
+    letterSpacing: 0.4,
+  },
+  dxfChoiceSubtitle: {
+    color: '#94A3B8',
+    fontSize: 10,
+    marginTop: 2,
+  },
+  dxfChoiceClose: {
+    width: 30,
+    height: 30,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(148, 163, 184, 0.08)',
+  },
+  dxfChoiceOption: {
+    minHeight: 68,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingVertical: 10,
+    paddingHorizontal: 10,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(103, 232, 249, 0.16)',
+    backgroundColor: 'rgba(15, 23, 42, 0.72)',
+    marginTop: 8,
+  },
+  dxfChoiceOptionText: {
+    flex: 1,
+  },
+  dxfChoiceOptionTitle: {
+    color: '#E5F1FF',
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  dxfChoiceOptionSub: {
+    color: '#94A3B8',
+    fontSize: 10,
+    lineHeight: 14,
+    marginTop: 3,
   },
 });
 
