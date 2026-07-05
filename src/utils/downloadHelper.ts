@@ -254,7 +254,58 @@ export const getMimeType = (filename: string): string => {
       return 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
     case 'csv':
       return 'text/csv';
+    case 'dxf':
+      return 'application/dxf';
     default:
       return 'application/octet-stream';
+  }
+};
+
+/**
+ * Saves text content as a DXF file to device storage
+ * @param content - The DXF file content as text
+ * @param filename - The filename to save as (should end in .dxf)
+ * @returns Promise<boolean> - true if successful, false otherwise
+ */
+export const saveDxfFileToDevice = async (
+  content: string,
+  filename: string = 'drawing.dxf'
+): Promise<boolean> => {
+  try {
+    console.log('[DownloadHelper] Saving DXF file:', filename);
+
+    // Ensure filename has .dxf extension
+    const finalFilename = filename.endsWith('.dxf') ? filename : `${filename}.dxf`;
+    const mimeType = 'application/dxf';
+
+    // Create a temporary file
+    const tempFileUri = `${FileSystem.cacheDirectory}${finalFilename}`;
+
+    try {
+      console.log('[DownloadHelper] Writing temporary file:', tempFileUri);
+      await FileSystem.writeAsStringAsync(tempFileUri, content, {
+        encoding: FileSystem.EncodingType.UTF8,
+      });
+      console.log('[DownloadHelper] Temporary file created successfully');
+    } catch (writeError) {
+      console.error('[DownloadHelper] Failed to write temporary file:', writeError);
+      throw new Error(`Failed to create temporary file: ${writeError instanceof Error ? writeError.message : String(writeError)}`);
+    }
+
+    // Use the downloadFileToDevice function to save it
+    const success = await downloadFileToDevice(tempFileUri, finalFilename, mimeType);
+
+    // Clean up temporary file
+    try {
+      await FileSystem.deleteAsync(tempFileUri, { idempotent: true });
+      console.log('[DownloadHelper] Temporary file cleaned up');
+    } catch (cleanupError) {
+      console.warn('[DownloadHelper] Failed to clean up temporary file:', cleanupError);
+    }
+
+    return success;
+  } catch (error) {
+    console.error('[DownloadHelper] DXF save error:', error);
+    throw error;
   }
 };

@@ -62,6 +62,7 @@ import {
   createText,
   createPolyline,
 } from '../../core/cad';
+import { saveDxfFileToDevice } from '../../utils/downloadHelper';
 import { CADGrid } from './CADGrid';
 import { CADEntityRenderer } from './CADEntityRenderer';
 import { CADCursorOverlay } from './CADCursorOverlay';
@@ -165,6 +166,8 @@ export const CADDrawingCanvas: React.FC<CADDrawingCanvasProps> = ({
     dxfContent: string;
     entities: CADEntity[];
   } | null>(null);
+  const [showFilenameInput, setShowFilenameInput] = useState(false);
+  const [filenameInput, setFilenameInput] = useState('');
 
   // ── Drafting settings ──
   const [orthoEnabled, setOrthoEnabled] = useState(false);
@@ -843,6 +846,44 @@ export const CADDrawingCanvas: React.FC<CADDrawingCanvasProps> = ({
     onClose();
   }, [pendingSaveDXF, onSaveDXF, onClose]);
 
+  const handleSaveDxfFile = useCallback(() => {
+    if (!pendingSaveDXF) return;
+
+    // Generate default filename based on timestamp
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    const defaultFilename = `cad-drawing-${timestamp}`;
+
+    setFilenameInput(defaultFilename);
+    setShowFilenameInput(true);
+  }, [pendingSaveDXF]);
+
+  const handleFilenameSubmit = useCallback(async () => {
+    if (!pendingSaveDXF || !filenameInput.trim()) {
+      setShowFilenameInput(false);
+      return;
+    }
+
+    try {
+      const filename = filenameInput.trim() || 'cad-drawing';
+      const success = await saveDxfFileToDevice(pendingSaveDXF.dxfContent, filename);
+
+      if (success) {
+        console.log('[CADDrawingCanvas] DXF file saved successfully');
+        setPendingSaveDXF(null);
+        setShowFilenameInput(false);
+        onClose();
+      }
+    } catch (error) {
+      console.error('[CADDrawingCanvas] Failed to save DXF file:', error);
+      // Don't close the dialog on error, let user try again
+    }
+  }, [pendingSaveDXF, filenameInput, onClose]);
+
+  const handleFilenameCancel = useCallback(() => {
+    setShowFilenameInput(false);
+    setFilenameInput('');
+  }, []);
+
   const handleClose = useCallback(() => {
     setPendingSaveDXF(null);
     onClose();
@@ -1165,6 +1206,34 @@ export const CADDrawingCanvas: React.FC<CADDrawingCanvasProps> = ({
             </View>
           )}
 
+          {/* Filename input dialog */}
+          {showFilenameInput && (
+            <View style={styles.textDialog}>
+              <View style={styles.textCard}>
+                <Text style={styles.textTitle}>Save DXF File</Text>
+                <Text style={styles.textSubtitle}>Enter filename (without .dxf extension)</Text>
+                <TextInput
+                  style={styles.textInput}
+                  value={filenameInput}
+                  onChangeText={setFilenameInput}
+                  placeholder="drawing-name"
+                  placeholderTextColor={colors.textMuted}
+                  autoFocus
+                  returnKeyType="done"
+                  onSubmitEditing={handleFilenameSubmit}
+                />
+                <View style={styles.textActions}>
+                  <TouchableOpacity onPress={handleFilenameCancel}>
+                    <Text style={styles.textCancel}>Cancel</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity onPress={handleFilenameSubmit}>
+                    <Text style={styles.textConfirm}>Save</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            </View>
+          )}
+
           {pendingSaveDXF && (
             <View style={styles.saveChoiceOverlay} pointerEvents="box-none">
               <View style={styles.saveChoiceCard}>
@@ -1173,15 +1242,24 @@ export const CADDrawingCanvas: React.FC<CADDrawingCanvasProps> = ({
                     <MaterialCommunityIcons name="file-cad" size={20} color="#67E8F9" />
                   </View>
                   <View style={styles.saveChoiceTitleWrap}>
-                    <Text style={styles.saveChoiceTitle}>Import Drawing</Text>
+                    <Text style={styles.saveChoiceTitle}>Save Drawing</Text>
                     <Text style={styles.saveChoiceSubtitle}>
-                      Choose how to place this DXF near the rover.
+                      Choose how to save this DXF drawing.
                     </Text>
                   </View>
                   <TouchableOpacity style={styles.saveChoiceClose} onPress={() => setPendingSaveDXF(null)} activeOpacity={0.7}>
                     <MaterialCommunityIcons name="close" size={16} color="#94A3B8" />
                   </TouchableOpacity>
                 </View>
+
+                <TouchableOpacity style={styles.saveChoiceOption} onPress={handleSaveDxfFile} activeOpacity={0.78}>
+                  <MaterialCommunityIcons name="download" size={22} color="#67E8F9" />
+                  <View style={styles.saveChoiceOptionText}>
+                    <Text style={styles.saveChoiceOptionTitle}>Save as DXF File</Text>
+                    <Text style={styles.saveChoiceOptionSub}>Download the drawing to your device storage.</Text>
+                  </View>
+                  <MaterialCommunityIcons name="chevron-right" size={20} color="#64748B" />
+                </TouchableOpacity>
 
                 <TouchableOpacity style={styles.saveChoiceOption} onPress={() => handleSaveChoice('waypoints')} activeOpacity={0.78}>
                   <MaterialCommunityIcons name="map-marker-path" size={22} color="#67E8F9" />
@@ -1545,6 +1623,11 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: colors.accent,
     marginBottom: 10,
+  },
+  textSubtitle: {
+    fontSize: 11,
+    color: colors.textSecondary,
+    marginBottom: 8,
   },
   textInput: {
     backgroundColor: '#252830',

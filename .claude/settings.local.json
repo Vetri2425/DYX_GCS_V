@@ -118,7 +118,10 @@
       "Bash(mv temp/templates/*.dwg temp/templates/DWG/)",
       "Bash(mv temp/templates/*.dxf temp/templates/DXF/)",
       "Bash(Test-Path *)",
-      "Bash(npx tsc *)"
+      "Bash(npx tsc *)",
+      "Bash(adb logcat *)",
+      "Bash(adb shell *)",
+      "Bash(curl -s http://localhost:8081/status)"
     ],
     "deny": [],
     "ask": []
