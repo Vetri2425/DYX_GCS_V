@@ -7,7 +7,7 @@
 //
 // This replaces the legacy pixel-based CADDrawingCanvas.
 
-import React, { useState, useCallback, useRef, useMemo } from 'react';
+import React, { useState, useCallback, useRef, useMemo, useEffect } from 'react';
 import {
   View,
   Text,
@@ -63,11 +63,20 @@ import {
   createPolyline,
 } from '../../core/cad';
 import { saveDxfFileToDevice } from '../../utils/downloadHelper';
+import { useSelectionManager } from '../../hooks/cad/useSelectionManager';
+import { extractSelectablePoints, findClosestSelectablePoint, updateMarkerSelectionState } from '../../utils/cadPointUtils';
+import { detectDimensionsForSelection } from '../../utils/cadDimensionUtils';
+import { applyDimensionChange } from '../../utils/cadGeometryUpdates';
+import { PointMarker } from './types/selection';
+import { DimensionAnnotation } from './types/dimension';
 import { CADGrid } from './CADGrid';
 import { CADEntityRenderer } from './CADEntityRenderer';
 import { CADCursorOverlay } from './CADCursorOverlay';
 import { CADUCSIcon } from './CADUCSIcon';
 import { CADCommandBar } from './CADCommandBar';
+import { CADPointMarkers } from './CADPointMarker';
+import { CADimensionAnnotation } from './CADimensionAnnotation';
+import { CADimensionEditor } from './CADimensionEditor';
 
 // ============================================================
 // Types
@@ -150,6 +159,11 @@ export const CADDrawingCanvas: React.FC<CADDrawingCanvasProps> = ({
   const [undoStack, setUndoStack] = useState<CADEntity[][]>([]);
   const [redoStack, setRedoStack] = useState<CADEntity[][]>([]);
 
+  const pushUndo = useCallback((ents: CADEntity[]) => {
+    setUndoStack(prev => [...prev.slice(-49), ents]);
+    setRedoStack([]);
+  }, []);
+
   // ── Viewport — mutate ref during gestures, commit to state on rAF ──
   const viewportRef = useRef<Viewport>(createDefaultViewport(canvasSize));
 
@@ -174,6 +188,134 @@ export const CADDrawingCanvas: React.FC<CADDrawingCanvasProps> = ({
   const [polarEnabled, setPolarEnabled] = useState(true);
   const [snapEnabled, setSnapEnabled] = useState(true);
   const [gridEnabled, setGridEnabled] = useState(true);
+
+  // ── Enhanced Selection System for Smart Dimensions ──
+  const {
+    mode: selectionMode,
+    selectedEntities: selectedEntitiesSet,
+    selectedPoints,
+    isComplete: selectionComplete,
+    switchMode,
+    selectEntity,
+    clearEntitySelectionOnly,
+    selectPointForSmartDimension,
+    toggleEntity,
+    togglePoint,
+    clearSelection,
+  } = useSelectionManager({
+    initialMode: 'entity',
+    onSelectionChange: (state) => {
+      console.log('[CADDrawingCanvas] Selection changed:', state);
+    },
+  });
+
+  // ── Smart Dimension Mode (SolidWorks-style) ──
+  const [smartDimensionActive, setSmartDimensionActive] = useState(false);
+  const smartDimensionActiveRef = useRef(false);
+  smartDimensionActiveRef.current = smartDimensionActive;
+
+  // ── Point Markers for Selection ──
+  const [pointMarkers, setPointMarkers] = useState<PointMarker[]>([]);
+  const [hoveredMarker, setHoveredMarker] = useState<string | null>(null);
+
+  // Update point markers when entities or selection changes
+  useEffect(() => {
+    const showMarkers = smartDimensionActive
+      || selectionMode === 'point'
+      || selectionMode === 'point-pair';
+
+    if (showMarkers) {
+      const allMarkers: PointMarker[] = [];
+      entities.forEach(entity => {
+        const points = extractSelectablePoints(entity, viewportRef.current);
+        points.forEach(({ marker }) => {
+          allMarkers.push(marker);
+        });
+      });
+      setPointMarkers(updateMarkerSelectionState(allMarkers, selectedPoints));
+    } else {
+      setPointMarkers([]);
+    }
+  }, [entities, smartDimensionActive, selectionMode, selectedPoints]);
+
+  // ── Dimension Detection State ──
+  const [detectedDimensions, setDetectedDimensions] = useState<DimensionAnnotation[]>([]);
+  const [dimensionEditorVisible, setDimensionEditorVisible] = useState(false);
+  const [editingDimension, setEditingDimension] = useState<DimensionAnnotation | null>(null);
+
+  // Update dimensions when selection is complete
+  useEffect(() => {
+    const shouldDetect = smartDimensionActive
+      ? (selectedEntitiesSet.size > 0 || selectedPoints.length === 2)
+      : (selectionComplete && (selectedPoints.length === 2 || selectedEntitiesSet.size > 0));
+
+    if (shouldDetect) {
+      const dimensions = detectDimensionsForSelection(
+        selectedPoints,
+        selectedEntitiesSet,
+        entities
+      );
+      setDetectedDimensions(dimensions);
+    } else {
+      setDetectedDimensions([]);
+    }
+  }, [smartDimensionActive, selectionComplete, selectedPoints, selectedEntitiesSet, entities]);
+
+  // ── Dimension Editing Handlers ──
+  const handleDimensionPress = useCallback((dimension: DimensionAnnotation) => {
+    console.log('[CADDrawingCanvas] Opening dimension editor for:', dimension.label);
+    setEditingDimension(dimension);
+    setDimensionEditorVisible(true);
+  }, []);
+
+  const handleDimensionEditApply = useCallback((newValue: number) => {
+    if (!editingDimension) return;
+
+    const updatedEntities = applyDimensionChange(
+      entities,
+      editingDimension,
+      newValue,
+      selectedPoints
+    );
+
+    pushUndo(entities);
+    setEntities(updatedEntities);
+
+    const newDimensions = detectDimensionsForSelection(
+      selectedPoints,
+      selectedEntitiesSet,
+      updatedEntities
+    );
+    setDetectedDimensions(newDimensions);
+
+    setDimensionEditorVisible(false);
+    setEditingDimension(null);
+  }, [editingDimension, entities, selectedPoints, selectedEntitiesSet, pushUndo]);
+
+  const handleDimensionEditCancel = useCallback(() => {
+    console.log('[CADDrawingCanvas] Dimension edit cancelled');
+    setDimensionEditorVisible(false);
+    setEditingDimension(null);
+  }, []);
+
+  // ── Point Marker Interaction Handlers ──
+  const handleMarkerPress = useCallback((marker: PointMarker) => {
+    // Find the corresponding selected point data
+    entities.forEach(entity => {
+      const points = extractSelectablePoints(entity, viewportRef.current);
+      const foundPoint = points.find(p => p.marker.pointId === marker.pointId);
+      if (foundPoint) {
+        togglePoint(foundPoint.point);
+      }
+    });
+  }, [entities, togglePoint]);
+
+  const handleMarkerHover = useCallback((marker: PointMarker, isHovered: boolean) => {
+    setHoveredMarker(isHovered ? marker.pointId : null);
+    setPointMarkers(prev =>
+      prev.map(m => m.pointId === marker.pointId ? { ...m, isHovered } : m)
+    );
+  }, []);
 
   // ── Refs ──
   const entitiesRef = useRef(entities);
@@ -309,11 +451,6 @@ export const CADDrawingCanvas: React.FC<CADDrawingCanvasProps> = ({
   }, [commitViewport, screenWidth, screenHeight]);
 
   // ── Entity operations ──
-  const pushUndo = useCallback((ents: CADEntity[]) => {
-    setUndoStack(prev => [...prev.slice(-49), ents]);
-    setRedoStack([]);
-  }, []);
-
   const addEntity = useCallback((e: CADEntity) => {
     setEntities(prev => {
       pushUndo(prev);
@@ -321,9 +458,28 @@ export const CADDrawingCanvas: React.FC<CADDrawingCanvasProps> = ({
     });
   }, [pushUndo]);
 
-  const clearSelection = useCallback(() => {
+  const clearEntitySelection = useCallback(() => {
     setSelectedIds(new Set());
   }, []);
+
+  const toggleSmartDimension = useCallback(() => {
+    setSmartDimensionActive(prev => {
+      const next = !prev;
+      if (next) {
+        setActiveTool('select');
+        switchMode('entity');
+        clearSelection();
+        clearEntitySelection();
+        setPickedPoints([]);
+        setDetectedDimensions([]);
+      } else {
+        clearSelection();
+        clearEntitySelection();
+        setDetectedDimensions([]);
+      }
+      return next;
+    });
+  }, [switchMode, clearSelection, clearEntitySelection]);
 
   const toggleSelectId = useCallback((id: string) => {
     setSelectedIds(prev => {
@@ -513,7 +669,7 @@ export const CADDrawingCanvas: React.FC<CADDrawingCanvasProps> = ({
         isMarqueeRef.current = false;
         pinchStartViewportRef.current = null;
         // Select tool: drag on empty = marquee; two-finger = pan/zoom
-        marqueeStartRef.current = activeToolRef.current === 'select' ? pt : null;
+        marqueeStartRef.current = activeToolRef.current === 'select' && !smartDimensionActiveRef.current ? pt : null;
       }
     },
 
@@ -596,7 +752,7 @@ export const CADDrawingCanvas: React.FC<CADDrawingCanvasProps> = ({
       const { locationX, locationY } = evt.nativeEvent;
 
       // Finish marquee selection before reset clears state
-      if (wasMarquee && marqueeStart && activeToolRef.current === 'select') {
+      if (wasMarquee && marqueeStart && activeToolRef.current === 'select' && !smartDimensionActiveRef.current) {
         const crossing = locationX < marqueeStart.x; // R→L = crossing (AutoCAD)
         const ids = entitiesInMarquee(
           entitiesRef.current,
@@ -617,6 +773,42 @@ export const CADDrawingCanvas: React.FC<CADDrawingCanvasProps> = ({
       const tool = activeToolRef.current;
       const tapScreen = { x: locationX, y: locationY };
 
+      if (smartDimensionActiveRef.current) {
+        const closestPoint = findClosestSelectablePoint(
+          tapScreen,
+          entitiesRef.current,
+          viewportRef.current,
+        );
+
+        if (closestPoint) {
+          selectPointForSmartDimension(closestPoint.point);
+          setSelectedIds(new Set());
+          lastTapRef.current = null;
+          return;
+        }
+
+        const world = screenToWorld(tapScreen, viewportRef.current);
+        let closestId: string | null = null;
+        let closestDist = 20 / viewportRef.current.scale;
+        for (const e of entitiesRef.current) {
+          const d = distEntityToPoint(e, world);
+          if (d != null && d < closestDist) {
+            closestDist = d;
+            closestId = e.id;
+          }
+        }
+
+        if (closestId) {
+          selectEntity(closestId);
+          setSelectedIds(new Set([closestId]));
+        } else {
+          clearSelection();
+          clearEntitySelection();
+        }
+        lastTapRef.current = null;
+        return;
+      }
+
       if (tool === 'select') {
         const world = screenToWorld(tapScreen, viewportRef.current);
         let closestId: string | null = null;
@@ -631,7 +823,7 @@ export const CADDrawingCanvas: React.FC<CADDrawingCanvasProps> = ({
         if (closestId) {
           toggleSelectId(closestId);
         } else {
-          clearSelection();
+          clearEntitySelection();
         }
         lastTapRef.current = null;
         return;
@@ -674,7 +866,7 @@ export const CADDrawingCanvas: React.FC<CADDrawingCanvasProps> = ({
       commitViewport();
       resetGesture();
     },
-  }), [beginPinch, clearSelection, commitViewport, flushPendingPick, resetGesture, resolvePick, scheduleViewportFlush, toggleSelectId, updateCursor]);
+  }), [beginPinch, clearEntitySelection, clearSelection, commitViewport, flushPendingPick, resetGesture, resolvePick, scheduleViewportFlush, selectEntity, selectPointForSmartDimension, toggleSelectId, updateCursor]);
 
   // ── Handle tool point pick ──
   const handleToolPick = useCallback((tool: CADTool, point: WorldPoint, screen: ScreenPoint) => {
@@ -891,6 +1083,40 @@ export const CADDrawingCanvas: React.FC<CADDrawingCanvasProps> = ({
 
   // ── Prompt text ──
   const prompt = useMemo(() => {
+    if (smartDimensionActive) {
+      if (selectedPoints.length === 0 && selectedEntitiesSet.size === 0) {
+        return 'Smart Dimension: tap entity for size, or tap two points for distance';
+      }
+      if (selectedPoints.length === 1) {
+        return 'Smart Dimension: tap second point for distance constraint';
+      }
+      if (selectedPoints.length === 2 && detectedDimensions.length > 0) {
+        return `${detectedDimensions.length} dimension(s) — tap label to edit value`;
+      }
+      if (selectedEntitiesSet.size > 0 && detectedDimensions.length > 0) {
+        return `${detectedDimensions.length} dimension(s) — tap label to edit; connected geometry updates`;
+      }
+      return 'Smart Dimension active — tap entity or points';
+    }
+
+    // Selection mode prompts take priority
+    if (selectionMode === 'point-pair') {
+      if (selectedPoints.length === 0) {
+        return 'Point-Pair Mode: Select first point — tap any vertex/center/endpoint';
+      } else if (selectedPoints.length === 1) {
+        return 'Point-Pair Mode: Select second point — tap any vertex/center/endpoint';
+      } else if (detectedDimensions.length > 0) {
+        return `${detectedDimensions.length} dimensions detected — tap dimension to edit`;
+      }
+    } else if (selectionMode === 'point') {
+      if (selectedPoints.length === 0) {
+        return 'Point Mode: Select points — tap any vertex/center/endpoint';
+      } else {
+        return `${selectedPoints.length} point(s) selected — tap dimension to edit`;
+      }
+    }
+
+    // Tool-specific prompts
     switch (activeTool) {
       case 'line': return pickedPoints.length === 0 ? 'LINE: first point — double-tap to exit' : 'LINE: next point — double-tap to exit';
       case 'polyline': return pickedPoints.length === 0 ? 'PLINE: start point — double-tap to exit' : `PLINE: next (${pickedPoints.length} pts) — Finish or double-tap to exit`;
@@ -906,7 +1132,7 @@ export const CADDrawingCanvas: React.FC<CADDrawingCanvasProps> = ({
       }
       default: return '';
     }
-  }, [activeTool, pickedPoints, selectedIds]);
+  }, [activeTool, pickedPoints, selectedIds, smartDimensionActive, selectionMode, selectedPoints, selectedEntitiesSet, detectedDimensions]);
 
   // ── Preview entity during drawing ──
   const previewEntity = useMemo((): CADEntity | null => {
@@ -972,11 +1198,25 @@ export const CADDrawingCanvas: React.FC<CADDrawingCanvasProps> = ({
             ))}
           </View>
           <View style={styles.toolbarRight}>
+            <TouchableOpacity
+              style={[styles.smartDimBtn, smartDimensionActive && styles.smartDimBtnActive]}
+              onPress={toggleSmartDimension}
+              activeOpacity={0.7}
+            >
+              <MaterialCommunityIcons
+                name="ruler-square"
+                size={18}
+                color={smartDimensionActive ? '#0B1220' : colors.accent}
+              />
+              <Text style={[styles.smartDimBtnText, smartDimensionActive && styles.smartDimBtnTextActive]}>
+                Smart Dim
+              </Text>
+            </TouchableOpacity>
             {activeTool === 'select' && entities.length > 0 && (
               <TouchableOpacity
                 style={styles.iconBtn}
                 onPress={() => {
-                  if (selectedIds.size === entities.length) clearSelection();
+                  if (selectedIds.size === entities.length) clearEntitySelection();
                   else selectAll();
                 }}
                 activeOpacity={0.7}
@@ -1064,6 +1304,28 @@ export const CADDrawingCanvas: React.FC<CADDrawingCanvasProps> = ({
           >
             <Text style={[styles.draftBtnText, polarEnabled && styles.draftBtnTextActive]}>POLAR</Text>
           </TouchableOpacity>
+          {!smartDimensionActive && (
+          <View style={styles.selectionModeGroup}>
+            <TouchableOpacity
+              style={[styles.draftBtn, selectionMode === 'entity' && styles.draftBtnActive]}
+              onPress={() => switchMode('entity')}
+            >
+              <Text style={[styles.draftBtnText, selectionMode === 'entity' && styles.draftBtnTextActive]}>Entity</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.draftBtn, selectionMode === 'point' && styles.draftBtnActive]}
+              onPress={() => switchMode('point')}
+            >
+              <Text style={[styles.draftBtnText, selectionMode === 'point' && styles.draftBtnTextActive]}>Point</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.draftBtn, selectionMode === 'point-pair' && styles.draftBtnActive]}
+              onPress={() => switchMode('point-pair')}
+            >
+              <Text style={[styles.draftBtnText, selectionMode === 'point-pair' && styles.draftBtnTextActive]}>Pair</Text>
+            </TouchableOpacity>
+          </View>
+          )}
           {dynamicInfo && (
             <View style={styles.dynamicInfo}>
               <Text style={styles.dynamicInfoText}>
@@ -1100,7 +1362,7 @@ export const CADDrawingCanvas: React.FC<CADDrawingCanvasProps> = ({
                     entity={e}
                     viewport={viewport}
                     layers={CANVAS_LAYERS}
-                    isSelected={selectedIds.has(e.id)}
+                    isSelected={selectedIds.has(e.id) || selectedEntitiesSet.has(e.id)}
                   />
                 ))}
                 {previewEntity && (
@@ -1138,6 +1400,27 @@ export const CADDrawingCanvas: React.FC<CADDrawingCanvasProps> = ({
                   );
                 })}
               </G>
+
+              {/* Point Markers for Selection */}
+              {(smartDimensionActive || selectionMode === 'point' || selectionMode === 'point-pair') && (
+                <CADPointMarkers
+                  markers={pointMarkers}
+                  viewport={viewport}
+                  onMarkerPress={handleMarkerPress}
+                  onMarkerHover={handleMarkerHover}
+                />
+              )}
+
+              {/* Dimension Annotations */}
+              {detectedDimensions.map(dimension => (
+                <CADimensionAnnotation
+                  key={dimension.id}
+                  dimension={dimension}
+                  viewport={viewport}
+                  canvasSize={canvasSize}
+                  onPress={handleDimensionPress}
+                />
+              ))}
 
               <CADCursorOverlay
                 cursorScreen={cursorScreen}
@@ -1281,6 +1564,15 @@ export const CADDrawingCanvas: React.FC<CADDrawingCanvasProps> = ({
               </View>
             </View>
           )}
+
+          {/* Dimension Editor Dialog */}
+          <CADimensionEditor
+            visible={dimensionEditorVisible}
+            dimension={editingDimension}
+            entities={entities}
+            onApply={handleDimensionEditApply}
+            onCancel={handleDimensionEditCancel}
+          />
         </View>
 
         {/* Command Bar */}
@@ -1467,6 +1759,30 @@ const styles = StyleSheet.create({
   },
   toolBtnDisabled: {
     opacity: 0.4,
+  },
+  smartDimBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(103, 232, 249, 0.35)',
+    backgroundColor: 'rgba(103, 232, 249, 0.08)',
+    marginRight: 4,
+  },
+  smartDimBtnActive: {
+    backgroundColor: colors.accent,
+    borderColor: colors.accent,
+  },
+  smartDimBtnText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: colors.accent,
+  },
+  smartDimBtnTextActive: {
+    color: '#0B1220',
   },
   iconBtn: {
     width: 34,
@@ -1739,5 +2055,11 @@ const styles = StyleSheet.create({
     fontSize: 10,
     lineHeight: 14,
     marginTop: 3,
+  },
+  selectionModeGroup: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 2,
+    marginLeft: 'auto',
   },
 });
